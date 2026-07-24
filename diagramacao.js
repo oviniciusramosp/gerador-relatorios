@@ -556,11 +556,15 @@ function assemblePages(container) {
   const toc = buildToc(content);
   const cov = state.doc.cover, bk = state.doc.back, idx = state.doc.index;
   const coverN = cov && cov.on ? 1 : 0;
-  const idxN = idx && idx.on ? 1 : 0;                       // v1: índice ocupa 1 página
+  // a página existe se Índice OU Resumo estiver ligado (são switchers independentes agora) —
+  // desligar só o Índice não pode levar o Resumo junto. idxN entra na conta de qualquer forma:
+  // a página ocupa espaço físico mesmo mostrando só o Resumo, então o miolo tem que numerar depois dela.
+  const idxPageOn = idx && (idx.on || idx.resumoOn);
+  const idxN = idxPageOn ? 1 : 0;                           // v1: índice+resumo ocupam 1 página
   const contentStart = state.doc.firstPage + coverN + idxN; // nº impresso da 1ª pág. do miolo
   let n = state.doc.firstPage;
   if (cov && cov.on) { container.appendChild(renderCoverPage('cover', cov)); n++; }
-  if (idx && idx.on) { container.appendChild(renderIndexPage(toc, contentStart, n)); n++; }
+  if (idxPageOn) { container.appendChild(renderIndexPage(toc, contentStart, n)); n++; }
   content.forEach((pg, ci) => { container.appendChild(renderContentPage(pg, ci, n, ci < content.length - 1)); n++; });
   if (bk && bk.on) { container.appendChild(renderCoverPage('back', bk)); n++; }
 }
@@ -640,24 +644,25 @@ function buildToc(content) {
 function renderIndexPage(toc, contentStart, number) {
   const page = pageShell(number);
   const wrap = document.createElement('div'); wrap.className = 'idx-content';
-  const h1 = document.createElement('div'); h1.className = 'idx-title'; h1.textContent = 'Índice'; wrap.appendChild(h1);
-  const list = document.createElement('div'); list.className = 'toc';
-  if (!toc.length) {
-    const empty = document.createElement('div'); empty.className = 'toc-empty';
-    empty.textContent = 'O índice aparece aqui conforme você adiciona títulos (H1/H2/H3) ao miolo.';
-    list.appendChild(empty);
+  // t2.11 (bug): a página existe se Índice OU Resumo estiver ligado (ver assemblePages) — os
+  // dois blocos agora precisam de gate PRÓPRIO aqui dentro, senão desligar só o Índice também
+  // apaga o título+lista mas o Resumo continuava vindo "de graça" sem checar seu próprio .on.
+  if (state.doc.index.on) {
+    const h1 = document.createElement('div'); h1.className = 'idx-title'; h1.textContent = 'Índice'; wrap.appendChild(h1);
+    const list = document.createElement('div'); list.className = 'toc';
+    if (!toc.length) {
+      const empty = document.createElement('div'); empty.className = 'toc-empty';
+      empty.textContent = 'O índice aparece aqui conforme você adiciona títulos (H1/H2/H3) ao miolo.';
+      list.appendChild(empty);
+    }
+    for (const r of toc) {
+      const row = document.createElement('div'); row.className = 'toc-row lvl' + r.level;
+      row.innerHTML = `<span class="toc-label"><span class="toc-num">${r.num}</span><span class="toc-txt">${escapeHtml(r.text)}</span></span>`
+        + `<span class="toc-pg">${String(contentStart + r.pageIdx).padStart(2, '0')}</span>`;
+      list.appendChild(row);
+    }
+    wrap.appendChild(list);
   }
-  for (const r of toc) {
-    const row = document.createElement('div'); row.className = 'toc-row lvl' + r.level;
-    row.innerHTML = `<span class="toc-label"><span class="toc-num">${r.num}</span><span class="toc-txt">${escapeHtml(r.text)}</span></span>`
-      + `<span class="toc-pg">${String(contentStart + r.pageIdx).padStart(2, '0')}</span>`;
-    list.appendChild(row);
-  }
-  wrap.appendChild(list);
-  // t2.11: resumoOn é independente de on (que já gateia a página inteira em
-  // assemblePages — só chega até aqui se index.on for true); aqui dentro, resumoOn
-  // decide só se o BLOCO de resumo aparece (a lista de títulos acima é sempre a
-  // "índice", sem gate próprio dentro da página já existente).
   if (state.doc.index.resumoOn) {
     const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo'; wrap.appendChild(h2);
     const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
