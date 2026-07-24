@@ -286,8 +286,17 @@
   #fmtbar button:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); color: var(--ink); }
   #fmtbar button.on { color: var(--ink); background: color-mix(in srgb, var(--violet) 34%, transparent); }
   #fmtbar .sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--hair-strong); }
+  /* dropdown de tipo de bloco — mesma "moldura" visual dos botões (transparente + hover),
+     mas sem appearance:none: a setinha nativa do <select> já é affordance suficiente aqui,
+     e ficar com o combo nativo do SO é mais simples/acessível que desenhar um custom. */
+  #fmtbar select.typeselect {
+    border: 0; background: transparent; color: var(--ink);
+    font: inherit; font-size: .78rem; font-weight: 600;
+    padding: .28rem .3rem; border-radius: 5px; cursor: pointer;
+  }
+  #fmtbar select.typeselect:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
   /* em legenda/título de imagem não faz sentido trocar tipo de bloco */
-  #fmtbar.caption-mode .typebtn, #fmtbar.caption-mode .sep { display: none; }
+  #fmtbar.caption-mode .typeselect, #fmtbar.caption-mode .sep { display: none; }
 
   /* menus flutuantes: adicionar imagem (clique na coluna direita) + editar imagem selecionada */
   #addImgMenu, #imgPanel, #coverPanel {
@@ -750,25 +759,29 @@
 </div>
 
 <div id="fmtbar" hidden>
-  <button class="typebtn" data-t="h1" title="H1">H1</button>
-  <button class="typebtn" data-t="h2" title="H2" style="font-size:.7rem">H2</button>
-  <button class="typebtn" data-t="h3" title="H3" style="font-size:.64rem">H3</button>
-  <button class="typebtn" data-t="p" title="Parágrafo">¶</button>
-  <button class="typebtn" data-t="li" title="Lista de Pontos">•</button>
-  <button class="typebtn" data-t="ol" title="Lista Numérica" style="font-size:.7rem">1.</button>
-  <button class="typebtn" data-t="check" title="Checklist" style="font-size:.72rem">☑</button>
-  <button class="typebtn" data-t="quote" title="Citação">❝</button>
+  <!-- dropdown nativo no lugar da lista de 8 botões — mesmos tipos/rótulos de antes -->
+  <select class="typeselect" title="Tipo de bloco">
+    <option value="h1">H1</option>
+    <option value="h2">H2</option>
+    <option value="h3">H3</option>
+    <option value="p">Parágrafo</option>
+    <option value="li">Lista de Pontos</option>
+    <option value="ol">Lista Numérica</option>
+    <option value="check">Checklist</option>
+    <option value="quote">Citação</option>
+  </select>
   <span class="sep"></span>
   <button class="markbtn" data-cmd="bold" title="Negrito (⌘B)" style="font-weight:700">B</button>
   <button class="markbtn" data-cmd="italic" title="Itálico (⌘I)" style="font-style:italic">I</button>
   <button class="markbtn" data-cmd="underline" title="Sublinhado (⌘U)" style="text-decoration:underline">U</button>
   <button class="markbtn" data-cmd="strikeThrough" title="Tachado" style="text-decoration:line-through">S</button>
   <span class="sep"></span>
+  <!-- trilha A (t2): editor de link -->
+  <button class="linkbtn" data-cmd="link" title="Link">🔗</button>
+  <span class="sep"></span>
   <!-- trilha A (t5): cor do texto (foreColor) e destaque/fundo (hiliteColor) via swatch -->
   <button class="colorbtn cb-fore" data-cmd="foreColor" title="Cor do texto">A</button>
   <button class="colorbtn cb-back" data-cmd="hiliteColor" title="Destaque (cor de fundo)">A</button>
-  <!-- trilha A (t2): editor de link -->
-  <button class="linkbtn" data-cmd="link" title="Link">🔗</button>
 </div>
 
 <!-- trilha A (t2): mini-editor de URL inline (abre ancorado na seleção) -->

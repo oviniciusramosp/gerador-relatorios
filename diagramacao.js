@@ -2009,17 +2009,21 @@ addEventListener('resize', () => { if (state.zoom === 'fit') applyZoom(); });
 
 // ──────────────── barra flutuante de formatação (estilo Notion) ─────────────
 const fmtbar = document.getElementById('fmtbar');
-// mousedown na barra NÃO pode roubar o foco/seleção do texto
-fmtbar.addEventListener('mousedown', (e) => e.preventDefault());
+const typeSelect = fmtbar.querySelector('.typeselect');
+// mousedown na barra NÃO pode roubar o foco/seleção do texto — EXCETO no <select> de
+// tipo: um <select> nativo abre a lista de opções respondendo ao mousedown; dar
+// preventDefault nele trava o dropdown fechado (não abre no clique). Como setActiveType
+// usa state.activeId (não a Selection ao vivo), perder a seleção visível aqui não quebra nada.
+fmtbar.addEventListener('mousedown', (e) => { if (e.target !== typeSelect) e.preventDefault(); });
 
 fmtbar.querySelectorAll('.markbtn').forEach(btn => btn.addEventListener('click', () => {
   document.execCommand(btn.dataset.cmd);   // dispara 'input' → sincroniza o bloco
   updateFmtbar();
 }));
-fmtbar.querySelectorAll('.typebtn').forEach(btn => btn.addEventListener('click', () => {
-  setActiveType(btn.dataset.t);
+typeSelect.addEventListener('change', () => {
+  setActiveType(typeSelect.value);
   updateFmtbar();
-}));
+});
 
 // trilha A (t5): cor do texto / destaque. ARMADILHA — o swatch (openSwatchPop) vive no
 // <body>, FORA do fmtbar, então NÃO herda o preventDefault do mousedown da barra. Clicar
@@ -2075,8 +2079,9 @@ function updateFmtbar() {
   // trilha A (t2): reflete se a seleção está sobre um link existente
   fmtbar.querySelector('.linkbtn').classList.toggle('on', !!anchorInSelection(sel));
   const blk = isMiolo ? blockOf(host.dataset.id) : null;
-  fmtbar.querySelectorAll('.typebtn').forEach(b =>
-    b.classList.toggle('on', !!blk && blk.type === b.dataset.t));
+  // só troca o valor do <select> se o tipo do bloco estiver entre as opções (ex.: callout
+  // não está na lista — mantém o dropdown como estava em vez de ficar num estado inválido)
+  if (blk && [...typeSelect.options].some(o => o.value === blk.type)) typeSelect.value = blk.type;
   // acima da seleção, centrada; se não couber, abaixo
   fmtbar.hidden = false;
   const rect = r.getBoundingClientRect();
