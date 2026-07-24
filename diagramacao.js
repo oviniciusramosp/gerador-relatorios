@@ -63,13 +63,14 @@ function gapBefore(b, prev) {
   if (b.type === 'h3') return (pt === 'h1' || pt === 'h2') ? PARA_LH : 24;
   // itens consecutivos da MESMA lista (pontos/numérica/checklist) ficam compactos
   if ((b.type === 'li' && pt === 'li') || (b.type === 'ol' && pt === 'ol') || (b.type === 'check' && pt === 'check')) return LIST_GAP;
-  return PARA_LH;                                                       // demais blocos: 1 linha
+  return PARA_LH;                     // demais blocos (inclui 'callout', trilha G): folga de 1 linha, sem regra especial
 }
 
 const HEAD_TYPES = new Set(['h1', 'h2', 'h3', 'h4']);
-// 'check' (checklist, trilha B t7) é editável e reusa buildText; 'table' NÃO é text (célula própria)
-const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'ol', 'quote', 'check']);  // blocos editáveis
-const PH = { h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4', p: 'Escreva…', li: 'Item', ol: 'Item', quote: 'Citação', check: 'Item' };
+// 'check' (checklist, trilha B t7) e 'callout' (trilha G) são editáveis e reusam buildText;
+// 'table' NÃO é text (célula própria)
+const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'ol', 'quote', 'check', 'callout']);  // blocos editáveis
+const PH = { h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4', p: 'Escreva…', li: 'Item', ol: 'Item', quote: 'Citação', check: 'Item', callout: 'Escreva…' };
 const URL_RE = /^(https?:\/\/|www\.)[^\s]+$/i;
 
 // ─────────────────────────── estado ─────────────────────────────────────────
@@ -226,11 +227,12 @@ function measure(b) {
 // ─────────────────────────── construção de elementos ────────────────────────
 function buildText(b, editing) {
   const isCheck = b.type === 'check';                                   // trilha B (t7)
+  const isCallout = b.type === 'callout';                                // trilha G: envelope [emoji][texto], como o checklist
   const tag = HEAD_TYPES.has(b.type) ? b.type
-    : b.type === 'quote' ? 'blockquote' : (b.type === 'li' || b.type === 'ol' || isCheck) ? 'div' : 'p';
+    : b.type === 'quote' ? 'blockquote' : (b.type === 'li' || b.type === 'ol' || isCheck || isCallout) ? 'div' : 'p';
   const el = document.createElement(tag);
-  // o texto do checklist é '.ck-txt' (SEM a classe 'b' — a moldura/hover/outline vai no envelope)
-  el.className = isCheck ? 'ck-txt' : 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
+  // o texto do checklist/callout é '.ck-txt'/'.co-txt' (SEM a classe 'b' — a moldura/hover/outline vai no envelope)
+  el.className = isCheck ? 'ck-txt' : isCallout ? 'co-txt' : 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
   el.dataset.id = b.id;
   el.dataset.ph = PH[b.type] || '';
   if (b.type === 'ol') el.dataset.num = (b._num || 1) + '.';   // número calculado por numberLists()
@@ -239,19 +241,60 @@ function buildText(b, editing) {
     el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR';  // corretor nativo PT-BR
     if (b.id === state.activeId) el.classList.add('active-block');
   }
-  if (!isCheck) return el;
+  if (!isCheck && !isCallout) return el;
+  if (isCallout) {
+    // trilha G: callout = envelope [emoji][texto]. O emoji é irmão do texto (fora do .co-txt),
+    // então b.html do texto fica limpo — mesmo desenho do checkbox do checklist abaixo.
+    const wrap = document.createElement('div');
+    wrap.className = 'b callout';
+    wrap.dataset.id = b.id;                      // mesmo esquema do check: alça/drag acham o envelope por [data-id]
+    const icon = document.createElement('div');
+    icon.className = 'co-icon';
+    icon.textContent = b.icon || '💡';
+    if (editing) {
+      icon.contentEditable = 'true'; icon.spellcheck = false;
+      // Enter só confirma (não cria bloco/linha) — mesmo tratamento do título/legenda de imagem
+      icon.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); icon.blur(); } });
+      // ponytail: sem picker de emoji — "trocar" é digitar por cima; fica só o ÚLTIMO caractere
+      // (spread cobre par substituto/emoji fora do BMP; sequência ZWJ composta não é tratada).
+      icon.addEventListener('input', () => {
+        const chars = [...icon.textContent];
+        if (chars.length > 1) {
+          icon.textContent = chars[chars.length - 1];
+          const r = document.createRange(); r.selectNodeContents(icon); r.collapse(false);
+          const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+        }
+        if (icon.textContent) { b.icon = icon.textContent; save(); scheduleCommit(); }
+      });
+      icon.addEventListener('blur', () => { if (!icon.textContent) icon.textContent = b.icon || '💡'; });
+    }
+    wrap.append(icon, el);
+    return wrap;
+  }
   // trilha B (t7): checklist = envelope [checkbox][texto]. O checkbox é irmão NÃO-editável
   // (contentEditable=false, FORA do .ck-txt), então b.html continua sendo só o texto — o
   // sync do input, o toMarkdown e o measure ficam limpos, sem o markup do <input> no html.
   const wrap = document.createElement('div');
   wrap.className = 'b check' + (b.checked ? ' checked' : '');
   wrap.dataset.id = b.id;                        // '.col-left > [data-id]' (alça/drag) acha o envelope
-  const box = document.createElement('input');
-  box.type = 'checkbox'; box.className = 'ck-box'; box.checked = !!b.checked;
-  box.contentEditable = 'false'; box.tabIndex = -1;
-  if (editing) box.addEventListener('change', () => {   // togglar só a classe — sem rebuild no meio do clique
-    b.checked = box.checked; wrap.classList.toggle('checked', box.checked); save(); scheduleCommit();
-  });
+  // trilha G: <span>+SVG no lugar do <input type=checkbox> nativo — vazio, o nativo renderiza
+  // borda/preenchimento PRETO do SO em vários browsers/impressão. SVG com fill/stroke puro
+  // imprime igual em tela e PDF sem precisar de print-color-adjust (ver CSS .ck-box).
+  const box = document.createElement('span');
+  box.className = 'ck-box'; box.tabIndex = -1;
+  box.setAttribute('role', 'checkbox'); box.setAttribute('aria-checked', String(!!b.checked));
+  box.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true">'
+    + '<rect class="ck-empty" x=".75" y=".75" width="10.5" height="10.5" rx="2.4" fill="none" stroke="#B0B0B0" stroke-width="1.3"/>'
+    + '<g class="ck-filled"><rect width="12" height="12" rx="2.6" fill="#29E899"/>'
+    + '<path d="M3 6.3l2.1 2.1 4-4.6" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></g>'
+    + '</svg>';
+  if (editing) {
+    box.addEventListener('mousedown', (e) => e.preventDefault());   // não rouba o caret do texto adjacente
+    box.addEventListener('click', () => {   // span não tem 'change' — togla no click (mesmo resultado de antes)
+      b.checked = !b.checked; box.setAttribute('aria-checked', String(b.checked));
+      wrap.classList.toggle('checked', b.checked); save(); scheduleCommit();
+    });
+  }
   wrap.append(box, el);
   return wrap;
 }
@@ -789,6 +832,10 @@ const slash = initSlashMenu({
     if (def.type === 'pagebreak' || def.type === 'divider' || def.type === 'image') {
       render({ id: b.id, role: 'block', offset: 0 });   // limpa o DOM e devolve o caret ao bloco vazio
       if (def.type === 'image') addImageViaPalette(); else insertSeparatorButton(def.type);
+    } else if (def.type === 'table') {
+      // trilha G (bug): mesma correção do clique na paleta — tabela é estrutural, nunca
+      // converte o bloco ("/table" já foi limpo de b.html acima; insertBlockAfter faz o resto).
+      insertBlockAfter('table');
     } else {
       setActiveType(def.type);                  // reusa a troca de tipo (já renderiza + foca)
     }
@@ -1364,6 +1411,16 @@ function inlineHtmlOf(node) {
       const s = (color ? 'color:' + color + ';' : '') + (bg ? 'background-color:' + bg + ';' : '');
       inner = '<span style="' + s + '">' + inner + '</span>';
     }
+    // trilha G: preserva o link ao colar do Figma/Docs — o texto sobrevivia, o href sumia.
+    // Mesma normalização de URL do resto do app (applyLink, trilha A t2): sem esquema (e não
+    // âncora/relativo/mailto) → prefixa https:// pra não virar link relativo quebrado no PDF.
+    if (tag === 'a') {
+      const href = (n.getAttribute('href') || '').trim();
+      if (href) {
+        const url = /^([a-z][a-z0-9+.-]*:|\/|#)/i.test(href) ? href : 'https://' + href;
+        inner = '<a href="' + escapeHtml(url).replace(/"/g, '&quot;') + '">' + inner + '</a>';
+      }
+    }
     out += inner;
   }
   return out;
@@ -1464,6 +1521,9 @@ function toMarkdown() {
       case 'check': return (b.checked ? '- [x] ' : '- [ ] ') + strip(b.html);   // trilha B (t7)
       case 'table': return tableMd(b.rows, strip);                              // trilha B (t6)
       case 'quote': return '> ' + strip(b.html);
+      // trilha G: sem sintaxe md própria pra callout — reusa blockquote (">") com o emoji na
+      // frente; ao reimportar via parseMarkdown volta como 'quote' simples (perda aceitável em v1).
+      case 'callout': return `> ${b.icon || '💡'} ` + strip(b.html);
       case 'divider': return '\n---\n';
       case 'pagebreak': return '\n<!-- quebra de página -->\n';
       case 'image': return `![${strip(b.title) || ''}](imagem)` + (b.caption ? `\n*${strip(b.caption)}*` : '');
@@ -1597,6 +1657,9 @@ document.querySelectorAll('#blocktypes button').forEach(btn => {
     if (t === 'pagebreak') return insertSeparatorButton('pagebreak');
     if (t === 'divider') return insertSeparatorButton('divider');
     if (t === 'image') return addImageViaPalette();
+    // trilha G (bug): tabela é ESTRUTURAL — clicar com um parágrafo/título selecionado NÃO
+    // pode converter (destruiria o texto). Sempre insere depois, igual imagem/divisor/quebra.
+    if (t === 'table') return insertBlockAfter('table');
     setActiveType(t);
   });
 });
@@ -1619,6 +1682,21 @@ function insertSeparatorButton(sepType) {
   const b = id && blockOf(id);
   if (host && b) breakAtCaret(host, b, sepType);
   else { state.doc.blocks.push(mkBlock(sepType, ''), mkBlock('p', '')); render(); }
+}
+// trilha G: caminho pros tipos ESTRUTURAIS (hoje só 'table' — image/divider/pagebreak já
+// inserem-depois pelas próprias funções acima). NUNCA converte o bloco ativo: sempre insere
+// um bloco novo LOGO DEPOIS dele (ou no fim, se não houver bloco ativo) e foca nele. `mkBlock`
+// com html vazio basta pra tabela — buildTableEl semeia b.rows sozinha no primeiro render.
+function insertBlockAfter(t) {
+  const nb = mkBlock(t, '');
+  const i = state.activeId ? idxOf(state.activeId) : -1;
+  if (i >= 0) state.doc.blocks.splice(i + 1, 0, nb);
+  else state.doc.blocks.push(nb);
+  state.activeId = nb.id;
+  render({ id: nb.id, role: 'block', offset: 0 });
+  // ponytail: foco automático na 1ª célula da tabela seria bônus (render() só foca um
+  // [data-role=block][contenteditable], que a tabela não tem) — o bloco fica inserido e
+  // visível/selecionado, que é o requisito; focar a célula fica de próximo passo se pedirem.
 }
 
 document.getElementById('btnFile').addEventListener('click', pickFile);
