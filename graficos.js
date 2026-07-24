@@ -4,6 +4,7 @@ import { parseTable, toTable } from './tabela.js';
 import { parseChartHtml } from './importar-html.js';
 import { buildSpecFromImage } from './converter.js';
 import { openSwatchPop } from './swatch.js';   // componente de cor compartilhado
+import { logoPickSvg } from './logos.js';      // SVG do logo pro picker (Fase 0.3, trilha B)
 
 const $ = (id) => document.getElementById(id);
 const out = $('out');
@@ -93,11 +94,21 @@ $('wmPicker').addEventListener('click', (e) => {
   if (wasOff && b.dataset.logo !== 'none') patch.opacity = wmDefaultOpacity(spec.watermark?.pos ?? 'footer');
   setWm(patch);
 });
+// troca o rótulo de texto ("Ícone"/"Completo"/"Nome") pelo SVG real do logo — uma vez, no
+// load (o desenho não depende do spec). "Nenhum" fica como texto: não há logo pra desenhar.
+// currentColor do path herda o color do próprio botão (.typepick button), então acompanha
+// --muted/hover/[aria-pressed] de graça, sem CSS extra.
+['icone', 'full', 'nome'].forEach((kind) => {
+  const b = $('wmPicker').querySelector(`button[data-logo="${kind}"]`);
+  if (b) b.innerHTML = logoPickSvg(kind);
+});
 // trocar de posição reseta a opacidade pro padrão da nova (centro faded/canto opaco)
 $('wmPos').addEventListener('change', (e) => setWm({ pos: e.target.value, opacity: wmDefaultOpacity(e.target.value) }));
 $('wmRegion').addEventListener('change', (e) => setWm({ region: e.target.value }));
 $('wmAlign').addEventListener('change', (e) => setWm({ align: e.target.value }));
-$('wmColor').addEventListener('click', () => openSwatchPop($('wmColor'), (hex) => setWm({ color: hex }), { ...DEFAULTS.watermark, ...spec.watermark }.color));
+// { opacity:false }: esse logo já tem slider de opacidade próprio (wmOpacity, abaixo) — o
+// swatch não deve mostrar o dele, senão duplica o controle (opt-out coordenado c/ trilha F).
+$('wmColor').addEventListener('click', () => openSwatchPop($('wmColor'), (hex) => setWm({ color: hex }), { ...DEFAULTS.watermark, ...spec.watermark }.color, { opacity: false }));
 $('wmOpacity').addEventListener('input', (e) => setWm({ opacity: +e.target.value / 100 }));
 $('wmScale').addEventListener('input', (e) => setWm({ size: +e.target.value / 100 }));
 function paintWatermark() {
