@@ -1694,7 +1694,9 @@ function addImageFile(file, placementOverride) {
       // roda no ADD (antes do painel existir p/ esta imagem); o checkbox do painel
       // controla o PADRÃO da PRÓXIMA imagem — comportamento aceito pelo plano.
       let src = reader.result, nw = img.naturalWidth, nh = img.naturalHeight;
-      if (state.autocrop !== false) {
+      // SVG é vetor: rasterizar em canvas pra recortar a margem branca destruiria a
+      // qualidade (vira PNG de baixa resolução, feio no PDF). Mantém o dado original.
+      if (state.autocrop !== false && file.type !== 'image/svg+xml') {
         const cropped = autocropWhite(img);
         if (cropped) { src = cropped.dataUrl; nw = cropped.w; nh = cropped.h; }
       }
