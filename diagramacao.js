@@ -23,6 +23,7 @@ import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser p
 import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
 import { serializeDoc, deserializeDoc } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.json)
+import { IONICONS, ioniconSvg } from './ionicons.js';   // conjunto curado de Ionicons pro ícone do Callout
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
@@ -233,6 +234,10 @@ function measure(b) {
   return h;
 }
 
+// tom padrão do callout: equivalente estático do antigo color-mix(lilac 14%, #fff) — vira o
+// seed de b.color; a partir daí quem manda é o valor salvo no bloco (picker via swatch.js).
+const DEFAULT_CALLOUT_COLOR = '#F5F4FF';
+
 // ─────────────────────────── construção de elementos ────────────────────────
 function buildText(b, editing) {
   const isCheck = b.type === 'check';                                   // trilha B (t7)
@@ -252,32 +257,46 @@ function buildText(b, editing) {
   }
   if (!isCheck && !isCallout) return el;
   if (isCallout) {
-    // trilha G: callout = envelope [emoji][texto]. O emoji é irmão do texto (fora do .co-txt),
-    // então b.html do texto fica limpo — mesmo desenho do checkbox do checklist abaixo.
+    // callout = [.callout-row: ícone+texto] + [.callout-bar: trocar ícone / cor — só em edição,
+    // some do PDF de graça igual à barra da tabela]. Ícone tem dois modos: 'emoji' (padrão, digita
+    // por cima do caractere, como sempre foi) ou 'ionicon' (SVG fixo do conjunto curado em
+    // ionicons.js — só troca pelo popover, não é mais editável por digitação nesse modo).
     const wrap = document.createElement('div');
     wrap.className = 'b callout';
     wrap.dataset.id = b.id;                      // mesmo esquema do check: alça/drag acham o envelope por [data-id]
+    wrap.style.background = b.color || DEFAULT_CALLOUT_COLOR;
+
+    const row = document.createElement('div');
+    row.className = 'callout-row';
     const icon = document.createElement('div');
     icon.className = 'co-icon';
-    icon.textContent = b.icon || '💡';
-    if (editing) {
-      icon.contentEditable = 'true'; icon.spellcheck = false;
-      // Enter só confirma (não cria bloco/linha) — mesmo tratamento do título/legenda de imagem
-      icon.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); icon.blur(); } });
-      // ponytail: sem picker de emoji — "trocar" é digitar por cima; fica só o ÚLTIMO caractere
-      // (spread cobre par substituto/emoji fora do BMP; sequência ZWJ composta não é tratada).
-      icon.addEventListener('input', () => {
-        const chars = [...icon.textContent];
-        if (chars.length > 1) {
-          icon.textContent = chars[chars.length - 1];
-          const r = document.createRange(); r.selectNodeContents(icon); r.collapse(false);
-          const s = getSelection(); s.removeAllRanges(); s.addRange(r);
-        }
-        if (icon.textContent) { b.icon = icon.textContent; save(); scheduleCommit(); }
-      });
-      icon.addEventListener('blur', () => { if (!icon.textContent) icon.textContent = b.icon || '💡'; });
+    const isIonicon = b.iconSet === 'ionicon' && IONICONS[b.icon];
+    if (isIonicon) {
+      icon.innerHTML = ioniconSvg(b.icon, 14);
+    } else {
+      icon.textContent = b.icon || '💡';
+      if (editing) {
+        icon.contentEditable = 'true'; icon.spellcheck = false;
+        // Enter só confirma (não cria bloco/linha) — mesmo tratamento do título/legenda de imagem
+        icon.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); icon.blur(); } });
+        // ponytail: sem picker de emoji — "trocar" é digitar por cima; fica só o ÚLTIMO caractere
+        // (spread cobre par substituto/emoji fora do BMP; sequência ZWJ composta não é tratada).
+        icon.addEventListener('input', () => {
+          const chars = [...icon.textContent];
+          if (chars.length > 1) {
+            icon.textContent = chars[chars.length - 1];
+            const r = document.createRange(); r.selectNodeContents(icon); r.collapse(false);
+            const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+          }
+          if (icon.textContent) { b.icon = icon.textContent; save(); scheduleCommit(); }
+        });
+        icon.addEventListener('blur', () => { if (!icon.textContent) icon.textContent = b.icon || '💡'; });
+      }
     }
-    wrap.append(icon, el);
+    row.append(icon, el);
+    wrap.append(row);
+    // trocar ícone/cor não vive mais AQUI dentro — é a #calloutBar flutuante (like fmtbar),
+    // que ancora no bloco ATIVO via state.activeId; ver updateCalloutBar() mais abaixo.
     return wrap;
   }
   // trilha B (t7): checklist = envelope [checkbox][texto]. O checkbox é irmão NÃO-editável
@@ -306,6 +325,96 @@ function buildText(b, editing) {
   }
   wrap.append(box, el);
   return wrap;
+}
+
+// popover de ícone do Callout — "Emoji personalizado" (volta a digitar por cima) + grade dos
+// Ionicons curados (ionicons.js). Mesmo padrão de popover ancorado do swatch/slash (fixed,
+// fecha ao clicar fora); troca de modo é grande o bastante (emoji editável ⇄ SVG fixo) pra
+// justificar um render() completo em vez de patch manual do DOM.
+let calloutIconPop = null;
+function openCalloutIconPicker(anchor, b) {
+  closeCalloutIconPicker();
+  calloutIconPop = document.createElement('div');
+  calloutIconPop.className = 'ico-pop';
+
+  const emojiBtn = document.createElement('button');
+  emojiBtn.type = 'button'; emojiBtn.className = 'ico-pop-emoji';
+  emojiBtn.textContent = 'Emoji personalizado';
+  if (b.iconSet !== 'ionicon') emojiBtn.classList.add('on');
+  emojiBtn.onclick = () => {
+    b.iconSet = 'emoji';
+    if (!b.icon || IONICONS[b.icon]) b.icon = '💡';   // vinha de um ionicon (chave, não emoji) → default
+    closeCalloutIconPicker(); save(); scheduleCommit();
+    render({ id: b.id, role: 'block', offset: 0 });
+  };
+  calloutIconPop.append(emojiBtn);
+
+  const grid = document.createElement('div'); grid.className = 'ico-pop-grid';
+  Object.entries(IONICONS).forEach(([key, def]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.title = def.label;
+    btn.innerHTML = ioniconSvg(key, 18);
+    if (b.iconSet === 'ionicon' && b.icon === key) btn.classList.add('on');
+    btn.onclick = () => {
+      b.iconSet = 'ionicon'; b.icon = key;
+      closeCalloutIconPicker(); save(); scheduleCommit();
+      render({ id: b.id, role: 'block', offset: 0 });
+    };
+    grid.append(btn);
+  });
+  calloutIconPop.append(grid);
+
+  document.body.append(calloutIconPop);
+  const r = anchor.getBoundingClientRect(), pw = calloutIconPop.offsetWidth, ph = calloutIconPop.offsetHeight;
+  calloutIconPop.style.left = Math.max(6, Math.min(r.left, innerWidth - pw - 6)) + 'px';
+  calloutIconPop.style.top = (r.bottom + 4 + ph > innerHeight ? Math.max(6, r.top - 4 - ph) : r.bottom + 4) + 'px';
+  setTimeout(() => addEventListener('pointerdown', outsideCalloutIconPicker), 0);
+}
+function outsideCalloutIconPicker(e) { if (calloutIconPop && !calloutIconPop.contains(e.target)) closeCalloutIconPicker(); }
+function closeCalloutIconPicker() {
+  if (!calloutIconPop) return;
+  removeEventListener('pointerdown', outsideCalloutIconPicker);
+  calloutIconPop.remove(); calloutIconPop = null;
+}
+
+// #calloutBar — barra FLUTUANTE de controles do callout ativo (trocar ícone / cor), mesmo
+// padrão do #fmtbar: elemento único no HTML, reposicionado via getBoundingClientRect() do alvo
+// (aqui o bloco ATIVO — state.activeId — em vez de uma seleção de texto). mousedown→preventDefault
+// pra não roubar o foco do texto ao clicar nos botões (igual ao fmtbar/typebtns).
+const calloutBar = document.getElementById('calloutBar');
+calloutBar.addEventListener('mousedown', (e) => e.preventDefault());
+const calloutBarIconBtn = calloutBar.querySelector('.co-iconbtn');
+const calloutBarColorBtn = calloutBar.querySelector('.swatch');
+calloutBarIconBtn.addEventListener('click', () => {
+  const b = state.activeId && blockOf(state.activeId);
+  if (b && b.type === 'callout') openCalloutIconPicker(calloutBarIconBtn, b);
+});
+calloutBarColorBtn.addEventListener('click', () => {
+  const b = state.activeId && blockOf(state.activeId);
+  if (!b || b.type !== 'callout') return;
+  openSwatchPop(calloutBarColorBtn, (color) => {
+    b.color = color; save(); scheduleCommit();
+    const el = pagesEl.querySelector(`.callout[data-id="${b.id}"]`);
+    if (el) el.style.background = color;
+    calloutBarColorBtn.style.background = color;
+  }, b.color || DEFAULT_CALLOUT_COLOR);
+});
+// mostra/esconde e reposiciona a barra sobre o bloco callout ATIVO — chamada no focusin
+// (qualquer bloco ganhando foco, callout ou não) e no scroll do palco (reflow de posição).
+function updateCalloutBar() {
+  const b = state.activeId && blockOf(state.activeId);
+  const host = b && b.type === 'callout' && pagesEl.querySelector(`.callout[data-id="${b.id}"]`);
+  if (!host) { calloutBar.hidden = true; return; }
+  const isIonicon = b.iconSet === 'ionicon' && IONICONS[b.icon];
+  calloutBarIconBtn.innerHTML = isIonicon ? ioniconSvg(b.icon, 13) : (b.icon || '💡');
+  calloutBarColorBtn.style.background = b.color || DEFAULT_CALLOUT_COLOR;
+  calloutBar.hidden = false;
+  // acima do callout, centrada; se não couber, abaixo — mesma heurística do updateFmtbar()
+  const rect = host.getBoundingClientRect();
+  const bw = calloutBar.offsetWidth, bh = calloutBar.offsetHeight;
+  const x = Math.max(8, Math.min(rect.left + rect.width / 2 - bw / 2, innerWidth - bw - 8));
+  const y = rect.top - bh - 8 >= 8 ? rect.top - bh - 8 : rect.bottom + 8;
+  calloutBar.style.left = x + 'px'; calloutBar.style.top = y + 'px';
 }
 
 function imgHeight(b, colW) { return b.nw ? colW * (b.nh / b.nw) : colW * 0.6; }
@@ -868,6 +977,7 @@ pagesEl.addEventListener('focusin', (e) => {
       pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
       host.classList.add('active-block');
       showHandleAtFocused();                   // alça fica acessível enquanto o bloco está em foco
+      updateCalloutBar();                      // barra flutuante do callout — só aparece se b.type==='callout'
     }
   }
 });
@@ -1566,7 +1676,8 @@ function toMarkdown() {
       case 'quote': return '> ' + strip(b.html);
       // trilha G: sem sintaxe md própria pra callout — reusa blockquote (">") com o emoji na
       // frente; ao reimportar via parseMarkdown volta como 'quote' simples (perda aceitável em v1).
-      case 'callout': return `> ${b.icon || '💡'} ` + strip(b.html);
+      // ícone em modo 'ionicon' não tem glifo de texto → usa o emoji equivalente do registro.
+      case 'callout': return `> ${(b.iconSet === 'ionicon' ? IONICONS[b.icon]?.emoji : b.icon) || '💡'} ` + strip(b.html);
       case 'divider': return '\n---\n';
       case 'pagebreak': return '\n<!-- quebra de página -->\n';
       case 'image': return `![${strip(b.title) || ''}](imagem)` + (b.caption ? `\n*${strip(b.caption)}*` : '');
@@ -2158,6 +2269,7 @@ document.addEventListener('selectionchange', () => {
 });
 stage.addEventListener('scroll', () => {
   if (!fmtbar.hidden) updateFmtbar();
+  if (!calloutBar.hidden) updateCalloutBar();   // reposiciona (não esconde) — mesmo tratamento do fmtbar
   if (imgPanel && !imgPanel.hidden) positionImgPanel();
   if (coverPanel && !coverPanel.hidden) positionCoverPanel();
   bhandle.hidden = true;                        // alça é fixed → esconde ao rolar

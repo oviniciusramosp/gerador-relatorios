@@ -41,20 +41,7 @@
   .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
 
-  /* segment control (Documento / Conteúdo) */
-  .segment {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px;
-    background: color-mix(in srgb, var(--lilac) 8%, transparent);
-    border: 1px solid var(--hair); border-radius: 9px;
-  }
-  .segment button {
-    border: 0; background: transparent; color: var(--muted); padding: .45rem;
-    border-radius: 6px; font-size: .78rem; font-weight: 600; font-stretch: 85%; cursor: pointer;
-  }
-  .segment button:hover { background: color-mix(in srgb, var(--lilac) 12%, transparent); color: var(--ink); }
-  .segment button[aria-selected="true"] { background: var(--violet); color: #fff; }
-  .pane[hidden] { display: none; }
-  .pane { display: grid; gap: .9rem; align-content: start; }
+  /* segment control (Documento / Conteúdo) — .segment/.pane agora em paradigma.css */
 
   /* switch (páginas especiais) */
   .swrow { display: flex; align-items: center; justify-content: space-between; gap: .5rem; font-size: .82rem; }
@@ -473,26 +460,67 @@
   }
   #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover { color: var(--ink); }
 
-  /* trilha G: bloco Callout (estilo Notion) — caixa arredondada com fundo tingido sutil (cor
-     FIXA v1, sem picker — ver ponytail em buildText/diagramacao.js) + ícone (emoji editável)
-     à esquerda + texto à direita. É material impresso → nada de cor escura do tema do app
-     (--ground/--violet/--lilac são tokens de marca, mas aqui viram um tom CLARO sobre o fundo
-     branco do miolo — não as cores escuras do CHROME do editor). O fundo tingido é
-     background-color de verdade (não SVG) → PRECISA de print-color-adjust, senão o Chrome
-     omite "gráficos de segundo plano" no PDF por padrão. */
+  /* bloco Callout (estilo Notion) — caixa arredondada com fundo tingido (cor ESCOLHIDA pelo
+     usuário via swatch, b.color — DEFAULT_CALLOUT_COLOR se nunca escolheu) + ícone (emoji
+     editável OU Ionicon fixo, ver .co-iconbtn/.ico-pop abaixo) à esquerda + texto à direita.
+     É material impresso → nada de cor escura do tema do app (--ground/--violet/--lilac são
+     tokens de marca, mas aqui só emprestam TOM, não o chroma escuro do CHROME do editor). O
+     fundo tingido é background-color de verdade (não SVG) → PRECISA de print-color-adjust,
+     senão o Chrome omite "gráficos de segundo plano" no PDF por padrão. */
   .page .callout {
-    display: flex; align-items: flex-start; gap: 8px;
+    display: flex; flex-direction: column; gap: 6px;
     padding: 8px 10px; border-radius: 6px;
-    background: color-mix(in srgb, var(--lilac) 14%, #fff);
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  .page .callout .co-icon { flex: none; width: 14px; font-size: 11px; line-height: 14px; text-align: center; outline: none; }
+  .page .callout .callout-row { display: flex; align-items: flex-start; gap: 8px; }
+  .page .callout .co-icon { flex: none; width: 14px; font-size: 11px; line-height: 14px; text-align: center; outline: none; color: #4E4E4E; }
+  .page .callout .co-icon svg { display: block; }
   .page .callout .co-txt {
     flex: 1; min-width: 0; font-weight: 400; font-size: 10px; line-height: 14px;
     color: #4E4E4E; text-align: justify; outline: none;
   }
   .page .callout .co-txt:empty { min-height: 1lh; }
   .page.editing .callout .co-txt:empty:focus::before { content: attr(data-ph); color: #bbb; }
+
+  /* #calloutBar — barra FLUTUANTE de controles do callout (trocar ícone / cor), mesmo padrão
+     visual/posicionamento do #fmtbar: fixed, ancorada no bloco ATIVO (não em seleção de texto —
+     ver updateCalloutBar() em diagramacao.js), hidden por padrão. Nunca é filha de .page, então
+     nem precisa de regra de print pra sumir do PDF (diferente da antiga .callout-bar inline). */
+  #calloutBar {
+    position: fixed; z-index: 30; display: flex; gap: 6px; align-items: center;
+    padding: 4px; border: 1px solid var(--hair-strong); border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+    box-shadow: 0 12px 40px -12px #000;
+  }
+  #calloutBar[hidden] { display: none; }
+  #calloutBar .co-iconbtn {
+    display: grid; place-items: center; width: 24px; height: 24px; padding: 0;
+    border: 0; border-radius: 5px; background: transparent; color: var(--ink); font-size: 13px; cursor: pointer;
+  }
+  #calloutBar .co-iconbtn:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
+  #calloutBar .swatch { width: 24px; height: 24px; border-radius: 5px; }
+
+  /* popover do ícone do callout — "Emoji personalizado" + grade dos Ionicons curados */
+  .ico-pop {
+    position: fixed; z-index: 71; width: 12.5rem;
+    display: flex; flex-direction: column; gap: .3rem;
+    padding: .5rem; border: 1px solid var(--hair-strong); border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground)); box-shadow: 0 16px 50px -16px #000;
+  }
+  .ico-pop-emoji {
+    padding: .4rem .5rem; border: 1px solid var(--hair); border-radius: 6px;
+    background: transparent; color: var(--muted); cursor: pointer; font-size: .78rem; text-align: left;
+  }
+  .ico-pop-emoji:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .ico-pop-emoji.on { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
+  .ico-pop-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: .3rem; }
+  .ico-pop-grid button {
+    display: grid; place-items: center; aspect-ratio: 1; padding: 0;
+    border: 1px solid var(--hair); border-radius: 5px;
+    background: transparent; color: var(--lilac); cursor: pointer;
+  }
+  .ico-pop-grid button:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .ico-pop-grid button.on { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
 
   /* trilha E: zoom migrou pra dentro do <nav> do header — herda o estilo genérico de
      input/select/button (paradigma.css); header e aside usam o MESMO fundo escuro (--ground,
@@ -778,11 +806,20 @@
   <button class="markbtn" data-cmd="strikeThrough" title="Tachado" style="text-decoration:line-through">S</button>
   <span class="sep"></span>
   <!-- trilha A (t2): editor de link -->
-  <button class="linkbtn" data-cmd="link" title="Link"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"><circle cx="6" cy="6.3" r="3"/><circle cx="9.6" cy="9.4" r="3"/></svg></button>
+  <!-- ícone "link" do Ionicons (outline, MIT) — path verbatim de ionic-team/ionicons,
+       só a cor trocada pra currentColor; ver ionicons.js pro resto do conjunto (Callout) -->
+  <button class="linkbtn" data-cmd="link" title="Link"><svg viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"><path d="M208,352H144a96,96,0,0,1,0-192h64"/><path d="M304,160h64a96,96,0,0,1,0,192H304"/><line x1="163.29" y1="256" x2="350.71" y2="256"/></svg></button>
   <span class="sep"></span>
   <!-- trilha A (t5): cor do texto (foreColor) e destaque/fundo (hiliteColor) via swatch -->
   <button class="colorbtn cb-fore" data-cmd="foreColor" title="Cor do texto">A</button>
   <button class="colorbtn cb-back" data-cmd="hiliteColor" title="Destaque (cor de fundo)">A</button>
+</div>
+
+<!-- barra flutuante do Callout (mesmo padrão do #fmtbar) — ancora no bloco ATIVO
+     (state.activeId), não em seleção de texto; ver updateCalloutBar() em diagramacao.js -->
+<div id="calloutBar" hidden>
+  <button type="button" class="co-iconbtn" title="Trocar ícone"></button>
+  <button type="button" class="swatch" title="Cor do fundo"></button>
 </div>
 
 <!-- trilha A (t2): mini-editor de URL inline (abre ancorado na seleção) -->
