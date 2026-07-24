@@ -1084,6 +1084,11 @@ function currentZoom() {
 }
 
 // ─────────────────────────── painel flutuante da imagem selecionada ─────────
+// ícones +/− dos botões Título/Legenda (16×16, currentColor — mesmo padrão fino
+// dos SVGs de #blocktypes): "+" quando ainda não existe, "−" quando já existe
+// (o botão vira "remover"). Texto do label fica só "Título"/"Legenda" (t1).
+const PLUS_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>';
+const MINUS_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 8h10"/></svg>';
 let imgPanel;
 function openImgPanel() {
   const b = blockOf(state.sel);
@@ -1093,15 +1098,16 @@ function openImgPanel() {
     imgPanel.id = 'imgPanel';
     document.body.appendChild(imgPanel);
   }
+  const radius = b.radius ?? 4;
   imgPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Imagem</div>
     <div class="row" style="gap:.4rem">
-      <button data-a="title">${b.title != null ? '− Título' : '+ Título'}</button>
-      <button data-a="caption">${b.caption != null ? '− Legenda' : '+ Legenda'}</button>
+      <button type="button" class="fieldbtn" data-a="title">${b.title != null ? MINUS_SVG : PLUS_SVG}<span>Título</span></button>
+      <button type="button" class="fieldbtn" data-a="caption">${b.caption != null ? MINUS_SVG : PLUS_SVG}<span>Legenda</span></button>
     </div>
     <div class="field">Posição<div data-slot="col"></div></div>
-    <label class="field">Cantos (raio) <span data-role="radv" style="color:var(--muted)">${b.radius ?? 4}px</span>
-      <input type="range" data-a="radius" min="0" max="24" step="1" value="${b.radius ?? 4}">
+    <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv">${radius}px</span><button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
+      <input type="range" data-a="radius" min="0" max="24" step="1" value="${radius}">
     </label>
     <label class="checkrow"><input type="checkbox" data-a="autocrop" ${state.autocrop !== false ? 'checked' : ''}>Cortar margem branca <span style="color:var(--muted)">(próxima imagem)</span></label>
     <button data-a="del" style="color:#CE5249">Remover imagem</button>`;
@@ -1112,14 +1118,17 @@ function openImgPanel() {
       b.placement = v; if (v === 'right' && b.y == null) b.y = 0;
       render(); if (state.sel) openImgPanel();
     }));
+  // reset (t4) não pode roubar foco/seleção no mousedown — mesmo padrão do resto do app (ex. fmtbar)
+  imgPanel.querySelector('[data-a="radiusreset"]').addEventListener('mousedown', (e) => e.preventDefault());
   positionImgPanel();
 
   imgPanel.querySelectorAll('button[data-a],select[data-a],input[data-a]').forEach(el => {
     const ev = el.tagName === 'SELECT' ? 'change' : el.type === 'range' ? 'input' : 'click';
     el.addEventListener(ev, () => {
       const a = el.dataset.a;
-      if (a === 'radius') {                    // sem re-render: mantém o arraste do slider fluido
-        b.radius = +el.value;
+      if (a === 'radius' || a === 'radiusreset') {   // sem re-render: mantém o arraste do slider fluido
+        b.radius = a === 'radiusreset' ? 4 : +el.value;   // 4 = mesmo default de `b.radius ?? 4` (t4)
+        if (a === 'radiusreset') imgPanel.querySelector('input[data-a="radius"]').value = b.radius;
         const img = pagesEl.querySelector(`figure[data-id="${b.id}"] img`);
         if (img) img.style.borderRadius = b.radius + 'px';
         imgPanel.querySelector('[data-role="radv"]').textContent = b.radius + 'px';
@@ -1227,7 +1236,7 @@ function openCoverPanel() {
   if (!coverPanel) { coverPanel = document.createElement('div'); coverPanel.id = 'coverPanel'; document.body.appendChild(coverPanel); }
   coverPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Texto</div>
-    <label class="field">Tamanho <span data-role="szv" style="color:var(--muted)">${it.size}px</span>
+    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${it.size}px</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir para 18px">↺</button></span></span>
       <input type="range" data-a="size" min="8" max="120" step="1" value="${it.size}"></label>
     <label class="field">Cor <button type="button" class="colorfield" data-cf style="background:${it.color || '#000000'}"></button></label>
     <div class="field">Coluna<div data-slot="col"></div></div>
@@ -1254,15 +1263,18 @@ function openCoverPanel() {
     if (node) node.style.color = hex;
     save(); scheduleCommit();
   }, it.color || '#000000'));
+  // reset (t4) não pode roubar foco/seleção no mousedown — mesmo padrão do resto do app (ex. fmtbar)
+  coverPanel.querySelector('[data-a="sizereset"]').addEventListener('mousedown', (e) => e.preventDefault());
   positionCoverPanel();
   coverPanel.querySelectorAll('[data-a]').forEach(el => {
     const ev = el.tagName === 'SELECT' ? 'change' : el.type === 'range' ? 'input' : 'click';
     el.addEventListener(ev, () => {
       const cur = findCoverItem(state.sel); if (!cur) return;
       const a = el.dataset.a, node = pagesEl.querySelector(`.cover-item[data-cid="${cur.item.id}"]`);
-      if (a === 'size') {                          // sem re-render: slider fluido + push/pull
+      if (a === 'size' || a === 'sizereset') {      // sem re-render: slider fluido + push/pull
         const oldH = node ? node.offsetHeight : 0;
-        cur.item.size = +el.value;
+        cur.item.size = a === 'sizereset' ? 18 : +el.value;   // 18 = mesmo default de addCoverText() (t4)
+        if (a === 'sizereset') coverPanel.querySelector('input[data-a="size"]').value = cur.item.size;
         if (node) node.style.fontSize = cur.item.size + 'px';
         coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);   // empurra/puxa os de baixo
         coverPanel.querySelector('[data-role="szv"]').textContent = cur.item.size + 'px';
