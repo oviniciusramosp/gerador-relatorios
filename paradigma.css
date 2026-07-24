@@ -76,3 +76,19 @@ button.primary:hover { background: color-mix(in srgb, var(--violet) 84%, white);
   border: 1px solid var(--hair); border-radius: var(--r);
   padding: .9rem; background: color-mix(in srgb, var(--lilac) 4%, transparent);
 }
+
+/* segment control (abas) — 2 opções por padrão; .cols-3 pra três */
+.segment {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px;
+  background: color-mix(in srgb, var(--lilac) 8%, transparent);
+  border: 1px solid var(--hair); border-radius: 9px;
+}
+.segment.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.segment button {
+  border: 0; background: transparent; color: var(--muted); padding: .45rem;
+  border-radius: 6px; font-size: .78rem; font-weight: 600; font-stretch: 85%; cursor: pointer;
+}
+.segment button:hover { background: color-mix(in srgb, var(--lilac) 12%, transparent); color: var(--ink); }
+.segment button[aria-selected="true"] { background: var(--violet); color: #fff; }
+.pane[hidden] { display: none; }
+.pane { display: grid; gap: .9rem; align-content: start; }
