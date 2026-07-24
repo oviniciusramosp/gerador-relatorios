@@ -435,6 +435,11 @@
   .page .check.b.checked .ck-txt { text-decoration: line-through; color: #9A9A9A; }
   .page .ck-txt:empty { min-height: 1lh; }
   .page.editing .ck-txt:empty:focus::before { content: attr(data-ph); color: #bbb; }
+
+  /* trilha D: sem backend (GitHub Pages), o gate esconde a opção "Gráfico" do
+     menu de Adicionar Imagem (ver gateChartByBackend em diagramacao.js) — sem
+     isso a grade de 2 colunas deixa um buraco vazio no lugar do botão escondido */
+  #addImgMenu .am-choices:has(button[data-opt="chart"][hidden]) { grid-template-columns: 1fr; }
 </style>
 </head>
 <body>

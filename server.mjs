@@ -135,23 +135,6 @@ async function handleRefine(req, res) {
   }
 }
 
-// Proxy do Google Docs (a Diagramação sincroniza texto de um doc compartilhado).
-// O browser não consegue baixar direto (CORS); aqui é um fetch server-side do
-// export HTML. Exige o doc compartilhado como "qualquer pessoa com o link".
-async function handleGdoc(req, res) {
-  const id = new URL(req.url, 'http://x').searchParams.get('id') || '';
-  if (!/^[\w-]{10,}$/.test(id)) return json(res, 400, { error: 'id do documento inválido' });
-  try {
-    const r = await fetch(`https://docs.google.com/document/d/${id}/export?format=html`, { redirect: 'follow' });
-    // doc privado → Google redireciona pro login (vem 200 de accounts.google.com)
-    if (!r.ok || r.url.includes('accounts.google.com'))
-      return json(res, 502, { error: `Google não liberou o doc (HTTP ${r.status}) — ele está compartilhado como "qualquer pessoa com o link pode ver"?` });
-    const html = await r.text();
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(html);
-  } catch (e) { json(res, 502, { error: String(e.message || e) }); }
-}
-
 // Candles por API pública (sem chave): Binance klines ou Hyperliquid info.
 // Proxy no server evita CORS e mantém o browser sem rede externa.
 async function handleCandles(req, res) {
@@ -276,8 +259,11 @@ createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/convert') return handleConvert(req, res);
   if (req.method === 'POST' && req.url === '/api/pdf') return handlePdf(req, res);
   if (req.method === 'POST' && req.url === '/api/refine') return handleRefine(req, res);
-  if (req.method === 'GET' && req.url.startsWith('/api/gdoc')) return handleGdoc(req, res);
   if (req.method === 'GET' && req.url.startsWith('/api/candles')) return handleCandles(req, res);
+  // trilha D: o client faz um GET rápido (timeout curto) nessa rota pra decidir se
+  // esconde o import de gráfico (que depende de /api/convert + /api/refine, só
+  // existem com este server rodando — no GitHub Pages estático não existe).
+  if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { ok: true });
   if (req.method === 'GET') return serveStatic(req, res);
   json(res, 405, { error: 'método' });
 }).listen(PORT, () => console.log(`Gerador em http://localhost:${PORT}  (IA via CLI do Claude)`));

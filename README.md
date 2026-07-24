@@ -14,6 +14,38 @@ fonte, o export PNG e o **Converter com IA** dependem de `fetch` de mesma origem
 > (`python3 -m http.server 5180 --directory gerador-relatorios`). O botão
 > **Converter com IA** só funciona com o `server.mjs`, que roda o CLI do Claude.
 
+## Deploy no GitHub Pages
+
+O app é **100% estático** — HTML + módulos ES, sem build. O `server.mjs` é
+**opcional**: só serve pra rodar local e ganhar o import de gráfico com IA
+(`/api/convert`, `/api/refine`) e o PDF pelo Chrome headless do server
+(`/api/pdf`, mantido como referência — o fluxo principal do botão **Baixar
+PDF** agora usa o `window.print()` do próprio navegador, sem depender de
+servidor nenhum; ver `printPdf()` em `diagramacao.js`).
+
+**Passo a passo:**
+1. Push do repo `gerador-relatorios` pro GitHub.
+2. No repo: **Settings → Pages**.
+3. **Source: Deploy from a branch** → branch `main`, pasta **/ (root)** → Save.
+4. A URL fica em `https://<usuário-ou-org>.github.io/<repo>/` (leva uns
+   minutos pra propagar na primeira vez; cada push depois já republica
+   sozinho, sem passo manual extra).
+
+Esse modo ("Deploy from a branch") já redeploya a cada push — não criei
+`.github/workflows/pages.yml` porque seria infra redundante com o passo 3
+acima; só faz sentido se um dia você trocar o Source pra **GitHub Actions**.
+
+O `.nojekyll` (vazio, na raiz) é necessário: sem ele o Pages roda Jekyll por
+padrão, que **ignora** qualquer pasta/arquivo começando com `_` (ex.: `_ia/`).
+
+**O que funciona sem servidor:** `diagramacao.html` e `graficos.html` abrem
+direto como estáticos — texto, blocos, capa/contracapa, imagem comum, tabela,
+checklist, callout, export/import `.pdgm.json` e **PDF** (Baixar PDF via
+print nativo). **O que exige o `server.mjs` local:** só o import de gráfico
+com IA — o botão "Gráfico" do menu de Adicionar Imagem some sozinho quando
+não detecta backend (`GET /api/health` com timeout curto; ver
+`gateChartByBackend()` em `diagramacao.js`), sem quebrar o resto do app.
+
 ## Converter com IA — usa o CLI, não a API
 
 O botão **Converter com IA…** manda a imagem pro `server.mjs`, que roda o **CLI
