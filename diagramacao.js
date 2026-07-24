@@ -278,6 +278,14 @@ function buildBlock(b, editing) {
     d.dataset.id = b.id;
     return d;
   }
+  if (b.type === 'pagebreak') {                    // trilha E: barra da quebra MANUAL
+    // data-id → cai no mesmo sistema de arrasto de blocos (bhandle/dropTargetAt/applyDrop):
+    // arrastar a barra move o pagebreak no array e reposiciona onde a página corta.
+    const d = document.createElement('div');
+    d.className = 'e-pbreak b'; d.dataset.id = b.id;
+    d.innerHTML = '<span class="e-pbreak-lbl">— quebra de página · arraste —</span>';
+    return d;
+  }
   return buildText(b, editing);
 }
 
@@ -299,7 +307,13 @@ function paginate() {
   const rights = state.doc.blocks.filter(b => b.type === 'image' && b.placement === 'right');
 
   for (const b of stream) {
-    if (b.type === 'pagebreak') { pages.push({ left: [], right: [] }); used = 0; continue; }
+    if (b.type === 'pagebreak') {
+      // trilha E: no editor a quebra MANUAL vira uma barra arrastável no fim da página que
+      // ela corta — só quando editing. No PDF (exportPagesHtml roda editing=false) a barra
+      // some sozinha, mas a QUEBRA continua: empurramos a página nova nos dois modos.
+      if (editing) { b._gap = 8; pages[pages.length - 1].left.push(b); }
+      pages.push({ left: [], right: [] }); used = 0; continue;
+    }
     const cur = pages[pages.length - 1];
     const h = measure(b);
     const prev = cur.left.length ? cur.left[cur.left.length - 1] : null;
@@ -337,7 +351,7 @@ function assemblePages(container) {
   let n = state.doc.firstPage;
   if (cov && cov.on) { container.appendChild(renderCoverPage('cover', cov)); n++; }
   if (idx && idx.on) { container.appendChild(renderIndexPage(toc, contentStart, n)); n++; }
-  content.forEach((pg, ci) => { container.appendChild(renderContentPage(pg, ci, n)); n++; });
+  content.forEach((pg, ci) => { container.appendChild(renderContentPage(pg, ci, n, ci < content.length - 1)); n++; });
   if (bk && bk.on) { container.appendChild(renderCoverPage('back', bk)); n++; }
 }
 
@@ -372,7 +386,7 @@ function pageShell(number) {
   return page;
 }
 
-function renderContentPage(pg, contentIdx, number) {
+function renderContentPage(pg, contentIdx, number, moreAfter) {
   const page = pageShell(number);
   page.dataset.page = contentIdx;                 // índice DENTRO do miolo (âncora de imagem da direita)
   const content = document.createElement('div'); content.className = 'content';
@@ -385,6 +399,14 @@ function renderContentPage(pg, contentIdx, number) {
   }
   for (const r of pg.right) colR.appendChild(buildRight(r));
   content.append(colL, colR);
+  // trilha E: no editor, marca o fim de página por TRANSBORDO (quebra AUTOMÁTICA, só informa).
+  // Se a página já termina numa quebra MANUAL (barra arrastável), não duplica a marca.
+  const endsInBreak = pg.left.length && pg.left[pg.left.length - 1].type === 'pagebreak';
+  if (editing && moreAfter && !endsInBreak) {
+    const mk = document.createElement('div'); mk.className = 'e-autobreak';
+    mk.dataset.label = 'fim da página ' + String(number).padStart(2, '0');
+    content.appendChild(mk);
+  }
   page.appendChild(content);
   return page;
 }
@@ -895,6 +917,15 @@ bhandle.addEventListener('pointerdown', (e) => {
   } else {
     bdrag = { id: handleFor.id, target: null };
   }
+});
+// trilha E: a própria barra de quebra inicia o MESMO bdrag do #bhandle — mirar a alça ⠿
+// fininha numa barra larga é ruim. O pointermove/pointerup globais já cuidam do resto.
+pagesEl.addEventListener('pointerdown', (e) => {
+  const bar = e.target.closest && e.target.closest('.e-pbreak');
+  if (!bar || !bar.dataset.id) return;
+  e.preventDefault();
+  document.body.classList.add('grabbing');
+  bdrag = { id: bar.dataset.id, target: null };
 });
 const COVER_AREA_H = PAGE_H - 40 - 40;            // capa: área com padding vertical 40px
 document.addEventListener('pointermove', (e) => {
@@ -1867,6 +1898,25 @@ document.addEventListener('keydown', (e) => {
   state.doc.blocks.splice(idxOf(b.id), 1);
   state.sel = null; closeImgPanel(); render();
 });
+// trilha E: ⌘↑/⌘↓ (Ctrl no Win/Linux) move o bloco em foco uma posição no fluxo.
+// No macOS esse atalho em contenteditable é "ir pro início/fim do documento" → preventDefault.
+// Só age com um bloco de MIOLO em foco (contenteditable, role=block); não colide com o
+// undo/redo (Cmd+Z/Y) nem com o Backspace/Delete de imagem — cada um filtra outras teclas.
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  const host = document.activeElement;
+  if (!host || !host.isContentEditable || !host.dataset.id) return;
+  if ((host.dataset.role || 'block') !== 'block') return;   // não move título/legenda de imagem
+  const i = idxOf(host.dataset.id);
+  const j = i + (e.key === 'ArrowUp' ? -1 : 1);
+  if (i < 0 || j < 0 || j >= state.doc.blocks.length) return;   // nas pontas: não faz nada
+  e.preventDefault();
+  const keep = captureCaret();                                  // guarda offset/seleção no bloco movido
+  const [moved] = state.doc.blocks.splice(i, 1);
+  state.doc.blocks.splice(j, 0, moved);
+  render(keep && keep.id === moved.id ? keep : { id: moved.id, role: 'block', offset: 0 });
+}, true);
 document.getElementById('btnUndo').addEventListener('click', undo);
 document.getElementById('btnRedo').addEventListener('click', redo);
 document.getElementById('btnUndo').addEventListener('mousedown', (e) => e.preventDefault()); // não rouba o foco do texto
