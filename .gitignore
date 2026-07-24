@@ -2,3 +2,4 @@
 _ia/cache/
 node_modules/
 .DS_Store
+.claude/worktrees/
