@@ -120,4 +120,5 @@ function demo() {
   eq(parseMatrix('a\tb\tc\n1\t2'), [['a', 'b', 'c'], ['1', '2', '']], 'retangulariza linha curta');
   console.log('bloco-tabela: todos os asserts passaram');
 }
-if (import.meta.url === `file://${process.argv[1]}`) demo();
+// self-check: `node bloco-tabela.js` (NÃO roda ao importar no browser — lá `process` não existe)
+if (typeof process !== 'undefined' && process.argv[1] && process.argv[1].endsWith('bloco-tabela.js')) demo();

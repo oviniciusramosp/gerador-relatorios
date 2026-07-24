@@ -1919,7 +1919,8 @@ function applyLink() {
   if (linkEl) { const r = document.createRange(); r.selectNode(linkEl); s.addRange(r); }
   else s.addRange(linkSavedRange);
   if (!raw) { if (linkEl) document.execCommand('unlink'); }          // apagou a URL editando → remove
-  else document.execCommand('createLink', false, /^www\./i.test(raw) ? 'https://' + raw : raw);
+  // sem esquema (e não âncora/relativo/mailto) → prefixa https:// pra não virar link relativo quebrado no PDF
+  else document.execCommand('createLink', false, /^([a-z][a-z0-9+.-]*:|\/|#)/i.test(raw) ? raw : 'https://' + raw);
   closeLinkEdit(); updateFmtbar();
 }
 function removeLink() {
