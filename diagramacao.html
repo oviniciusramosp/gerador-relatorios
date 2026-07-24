@@ -371,6 +371,28 @@
     .page.cover-page .cover-item.cover-sel { outline: none; }
     .breakmark, .drag-badge, #fmtbar, #addImgMenu, #imgPanel, #coverPanel, #chartModal, .snap-guide, #bhandle, #dropline { display: none !important; }
   }
+
+  /* trilha E: marcas de quebra de página (só existem com editing=true → somem do PDF de graça,
+     já que exportPagesHtml() renderiza com editing=false; o @media print abaixo é o cinto extra) */
+  .page .e-autobreak {                       /* quebra AUTOMÁTICA (transbordo): só informa, verde */
+    position: absolute; left: 0; right: 0; bottom: 0; height: 0;
+    border-top: 1px dashed #29E899; pointer-events: none;
+  }
+  .page .e-autobreak::after {
+    content: attr(data-label); position: absolute; right: 0; top: 2px;
+    font-size: 8px; font-weight: 700; letter-spacing: .02em; color: #29E899;
+  }
+  .page .e-pbreak {                          /* quebra MANUAL: barra arrastável, lilás = movível */
+    height: 14px; display: flex; align-items: center; justify-content: center;
+    border-radius: 3px; cursor: grab; user-select: none;
+    background: color-mix(in srgb, #4E39FF 12%, transparent);
+    border: 1px dashed color-mix(in srgb, #4E39FF 55%, transparent);
+  }
+  .page .e-pbreak .e-pbreak-lbl {
+    font-size: 7.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    color: #4E39FF; pointer-events: none;
+  }
+  @media print { .page .e-autobreak, .page .e-pbreak { display: none !important; } }
 </style>
 </head>
 <body>
