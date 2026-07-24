@@ -22,7 +22,7 @@ import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingív
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
-import { serializeDoc, deserializeDoc } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.json)
+import { deserializeDoc, serializeDocZip, deserializeDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
 import { IONICONS, ioniconSvg } from './ionicons.js';   // conjunto curado de Ionicons pro ícone do Callout
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
@@ -42,6 +42,7 @@ function columnField(cur, vals, onPick) {
     const b = document.createElement('button'); b.type = 'button';
     b.innerHTML = icon + `<span>${label}</span>`;
     if (cur === v) b.classList.add('on');
+    b.addEventListener('mousedown', (e) => e.preventDefault());   // não rouba o caret do bloco em edição
     b.onclick = () => onPick(v);
     wrap.append(b);
   };
@@ -52,6 +53,16 @@ function columnField(cur, vals, onPick) {
 }
 const COL_L = 258, GAP = 24, COL_R = 217;
 const COL_FULL = COL_L + GAP + COL_R;             // 499 — largura das 2 colunas
+
+// b.placement ('inline' | 'full' | 'right') vale pra QUALQUER bloco, não só imagem:
+// inline = coluna esquerda (fluxo), full = as duas colunas (fluxo), right = coluna
+// direita (fora do fluxo, Y livre/arrastável, ancorado a uma página — o mesmo
+// mecanismo que as imagens da direita sempre usaram).
+// Sem placement explícito o default vem do TIPO: títulos H1–H3 e tabela ocupam as duas
+// colunas; o resto fica na esquerda. Ler sempre por placementOf() — nunca b.placement
+// direto — senão documentos antigos (sem o campo) perdem o default do tipo.
+const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'table']);
+const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : 'inline');
 
 // Espaçamento vertical ANTES de um bloco — depende do tipo do bloco de cima (prev).
 // Calculado no JS (não em CSS) porque é contextual; a paginação e o render usam o
@@ -225,9 +236,9 @@ const mF = measurer.querySelector('.mcol.f');
 
 function measure(b) {
   const el = buildBlock(b, /*editing*/ false);
-  // tabela (trilha B t6) é full-width como a imagem 'full' → mede na coluna cheia, senão a
-  // altura (e a paginação) sai errada por medir num container estreito demais.
-  const col = ((b.type === 'image' && b.placement === 'full') || b.type === 'table') ? mF : mL;
+  // bloco 'full' (imagem, tabela, título…) mede na coluna cheia, senão a altura (e a
+  // paginação) sai errada por medir num container estreito demais.
+  const col = placementOf(b) === 'full' ? mF : mL;
   col.appendChild(el);
   const h = el.getBoundingClientRect().height;
   col.removeChild(el);
@@ -439,9 +450,10 @@ function imgHeight(b, colW) { return b.nw ? colW * (b.nh / b.nw) : colW * 0.6; }
 
 function buildFigure(b, colW, editing) {
   const fig = document.createElement('figure');
-  fig.className = 'fig b ' + (b.placement === 'full' ? 'fig-full' : b.placement === 'inline' ? 'fig-inline' : 'fig-right');
+  const place = placementOf(b);
+  fig.className = 'fig b ' + (place === 'full' ? 'fig-full' : place === 'inline' ? 'fig-inline' : 'fig-right');
   fig.dataset.id = b.id;
-  if (b.placement === 'full') fig.style.width = COL_FULL + 'px';
+  if (place === 'full') fig.style.width = COL_FULL + 'px';
   if (state.sel === b.id) fig.classList.add('imgsel');
 
   if (b.title != null) {
@@ -477,8 +489,16 @@ const tableCtx = {
 
 // bloco genérico (usado na medição e no fluxo da coluna esquerda / largura total)
 function buildBlock(b, editing) {
+  const el = buildBlockEl(b, editing);
+  // largura da faixa: só o 'full' escapa da coluna (as demais herdam a largura do
+  // container — .col-left 258px ou .rimg 217px). O '' zera larguras que o próprio
+  // builder cravou inline (a tabela nasce com 499px), pra tabela poder ir pra uma coluna.
+  el.style.width = placementOf(b) === 'full' ? COL_FULL + 'px' : '';
+  return el;
+}
+function buildBlockEl(b, editing) {
   if (b.type === 'image') {
-    const colW = b.placement === 'full' ? COL_FULL : COL_L;
+    const colW = placementOf(b) === 'full' ? COL_FULL : COL_L;
     return buildFigure(b, colW, editing);
   }
   if (b.type === 'divider') {
@@ -513,8 +533,11 @@ function paginate() {
   numberLists();
   const pages = [{ left: [], right: [] }];
   let used = 0;
-  const stream = state.doc.blocks.filter(b => !(b.type === 'image' && b.placement === 'right'));
-  const rights = state.doc.blocks.filter(b => b.type === 'image' && b.placement === 'right');
+  // qualquer bloco pode morar na coluna direita (antes só imagem); a quebra de página é
+  // estrutural do fluxo e nunca sai dele.
+  const isRight = (b) => b.type !== 'pagebreak' && placementOf(b) === 'right';
+  const stream = state.doc.blocks.filter(b => !isRight(b));
+  const rights = state.doc.blocks.filter(isRight);
 
   for (const b of stream) {
     if (b.type === 'pagebreak') {
@@ -736,15 +759,21 @@ function buildCoverItem(kind, it) {
   return el;
 }
 
-// imagem da coluna direita: wrapper absoluto arrastável no eixo Y
+// bloco da coluna direita (imagem, texto, tabela…): wrapper absoluto arrastável no eixo Y.
+// Só a imagem tem altura previsível ANTES de entrar no DOM (proporção nw/nh) → só ela ganha
+// o clamp exato; nos demais o clamp fino fica com o pointermove do arraste, que já usa
+// wrap.offsetHeight de verdade. Texto aqui continua contenteditable: o pointerdown do arraste
+// ignora alvos [contenteditable], então digitar funciona e o arraste vai pelo badge.
 function buildRight(b) {
   const wrap = document.createElement('div');
   wrap.className = 'rimg' + (state.sel === b.id ? ' imgsel' : '');
   wrap.dataset.id = b.id;
-  const maxY = CONTENT_H - imgHeight(b, COL_R) - (b.title != null ? 18 : 0) - (b.caption != null ? 22 : 0);
+  const maxY = b.type === 'image'
+    ? CONTENT_H - imgHeight(b, COL_R) - (b.title != null ? 18 : 0) - (b.caption != null ? 22 : 0)
+    : CONTENT_H;
   wrap.style.top = Math.min(Math.max(b.y | 0, 0), Math.max(0, maxY)) + 'px';
   const badge = document.createElement('span'); badge.className = 'drag-badge'; badge.textContent = '↕ arraste';
-  wrap.appendChild(buildFigure(b, COL_R, editing));
+  wrap.appendChild(b.type === 'image' ? buildFigure(b, COL_R, editing) : buildBlock(b, editing));
   wrap.appendChild(badge);
   return wrap;
 }
@@ -991,18 +1020,20 @@ const slash = initSlashMenu({
 
 pagesEl.addEventListener('focusin', (e) => {
   const host = e.target.closest && e.target.closest('[contenteditable]');
-  if (host && (host.dataset.role || 'block') === 'block') {
-    const b = blockOf(host.dataset.id);
-    if (b) {
-      state.activeId = b.id; syncTypeUI(b.type);
-      setSegment('conteudo');                  // clicar num bloco → aba Conteúdo
-      // borda no bloco ativo: mostra a quem o menu lateral se refere
-      pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
-      host.classList.add('active-block');
-      showHandleAtFocused();                   // alça fica acessível enquanto o bloco está em foco
-      updateCalloutBar();                      // barra flutuante do callout — só aparece se b.type==='callout'
-    }
-  }
+  if (!host || (host.dataset.role || 'block') !== 'block') return;
+  // a célula editável da tabela não carrega data-id (quem carrega é o envelope .tbl-wrap) →
+  // sobe até o bloco, senão a sidebar (tipo + coluna) continuaria falando do bloco ANTERIOR
+  // enquanto se digita dentro da tabela.
+  const holder = host.dataset.id ? host : (host.closest && host.closest('[data-id]'));
+  const b = holder && blockOf(holder.dataset.id);
+  if (!b) return;
+  state.activeId = b.id; syncTypeUI(b.type);
+  setSegment('conteudo');                  // clicar num bloco → aba Conteúdo
+  // borda no bloco ativo: mostra a quem o menu lateral se refere
+  pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
+  if (holder === host) host.classList.add('active-block');   // na tabela a borda ficaria numa célula só
+  showHandleAtFocused();                   // alça fica acessível enquanto o bloco está em foco
+  updateCalloutBar();                      // barra flutuante do callout — só aparece se b.type==='callout'
 });
 
 // seleciona/desseleciona imagem SEM re-render (um rebuild no meio do gesto de
@@ -1259,13 +1290,15 @@ function showDrop(t) {
 function applyDrop(id, t) {
   const b = blockOf(id); if (!b || !t) return;
   if (t.kind === 'right') {
-    if (b.type !== 'image') return;               // só imagem vai pra coluna direita
+    if (b.type === 'pagebreak') return;            // quebra de página é do fluxo, não tem coluna
     b.placement = 'right'; if (b.y == null) b.y = 0; b.page = t.page;
     render(); return;
   }
   if (t.refId === id) return;                      // soltou em si mesmo
   const from = idxOf(id);
-  if (b.type === 'image' && b.placement === 'right') { b.placement = 'inline'; delete b.y; delete b.page; }
+  // voltando pro fluxo: APAGA o placement em vez de cravar 'inline' — assim o bloco
+  // recupera o default do tipo (H1–H3/tabela voltam pra largura total, o resto pra esquerda).
+  if (placementOf(b) === 'right') { delete b.placement; delete b.y; delete b.page; }
   const [moved] = state.doc.blocks.splice(from, 1);
   const ri = idxOf(t.refId);
   const at = ri < 0 ? state.doc.blocks.length : (t.before ? ri : ri + 1);
@@ -1309,7 +1342,7 @@ function openImgPanel() {
   imgPanel.hidden = false;
   // seletor de coluna (MESMO componente da capa): imagem usa 'inline'/'full'/'right'
   imgPanel.querySelector('[data-slot="col"]').append(
-    columnField(b.placement, { left: 'inline', full: 'full', right: 'right' }, (v) => {
+    columnField(placementOf(b), { left: 'inline', full: 'full', right: 'right' }, (v) => {
       b.placement = v; if (v === 'right' && b.y == null) b.y = 0;
       render(); if (state.sel) openImgPanel();
     }));
@@ -1734,6 +1767,7 @@ function setBlocks(blocks) {
 // nome termina em .json (cobre ".pdgm.json" e um ".json" solto, caso alguém
 // renomeie o arquivo) → caminho de documento completo; senão → .md/.txt de sempre.
 const isDocJson = (name) => String(name).toLowerCase().endsWith('.json');
+const isDocZip = (name) => String(name).toLowerCase().endsWith('.zip');
 
 // MESMA migração que load() aplica em cfg.cover/cfg.back (capas salvas antes do
 // Y livre não têm item.y → empilha; antes do logo não têm cov.logo → default).
@@ -1767,11 +1801,18 @@ function applyDocFile(doc) {
 }
 
 // texto bruto de um .pdgm.json → parse + valida envelope + aplica. Compartilhado
-// entre pickFile() (File System Access API) e o listener de #file (fallback).
+// entre pickProjectFile() (File System Access API) e o listener de #fileProject (fallback).
 function openDocFile(text) {
   let doc;
   try { doc = deserializeDoc(JSON.parse(text)); } catch { doc = null; }
   if (!doc) { alert('Arquivo .pdgm.json inválido ou corrompido.'); return; }
+  applyDocFile(doc);
+}
+
+// ArrayBuffer de um .pdgm.zip (doc.json + media/*, ver doc-format.js) → parse + aplica.
+async function openDocZipFile(buf) {
+  const doc = await deserializeDocZip(buf);
+  if (!doc) { alert('Arquivo .pdgm.zip inválido ou corrompido.'); return; }
   applyDocFile(doc);
 }
 
@@ -1781,15 +1822,28 @@ async function pickFile() {
   try {
     [h] = await showOpenFilePicker({ types: [
       { description: 'Texto', accept: { 'text/plain': ['.md', '.markdown', '.txt'] } },
-      { description: 'Documento Paradigma', accept: { 'application/json': ['.pdgm.json', '.json'] } },
     ] });
   } catch { return; }                        // usuário cancelou
   const f = await h.getFile();
-  if (isDocJson(h.name)) { openDocFile(await f.text()); return; }
   fileHandle = h;
   state.doc.source = { kind: 'file', label: h.name };
   idb.set('fh', h);
   setBlocks(parseMarkdown(await f.text()));
+}
+
+// "Abrir" (peer de "Novo Documento"): reabre um projeto salvo — .pdgm.zip (formato
+// atual, com mídia separada) ou .pdgm.json (formato antigo, ainda lido por compat).
+async function pickProjectFile() {
+  if (!window.showOpenFilePicker) { document.getElementById('fileProject').click(); return; }
+  let h;
+  try {
+    [h] = await showOpenFilePicker({ types: [
+      { description: 'Documento Paradigma', accept: { 'application/zip': ['.pdgm.zip', '.zip'], 'application/json': ['.pdgm.json', '.json'] } },
+    ] });
+  } catch { return; }                        // usuário cancelou
+  const f = await h.getFile();
+  if (isDocZip(h.name)) { await openDocZipFile(await f.arrayBuffer()); return; }
+  openDocFile(await f.text());
 }
 
 // t2.1: Google Docs saiu (import + sincronização agora só por arquivo local). O ramo
@@ -1876,6 +1930,32 @@ document.querySelectorAll('#blocktypes button').forEach(btn => {
 });
 function syncTypeUI(type) {
   Object.entries(btByType).forEach(([t, b]) => b.setAttribute('aria-pressed', String(t === type)));
+  syncColUI();
+}
+
+// "Coluna" do bloco EM FOCO — a sidebar é o único lugar de onde texto/tabela alcançam o
+// placement (imagem tem o #imgPanel, item de capa tem o #coverPanel, ambos com o MESMO
+// componente). Reconstrói a cada troca de bloco porque columnField marca o botão ativo no
+// build (não tem setter) — é um <div> de 3 botões, rebuild é mais barato que um patch.
+const blockColEl = document.getElementById('blockcol');
+const blockColSlot = blockColEl.querySelector('[data-slot="col"]');
+function syncColUI() {
+  const b = state.activeId && blockOf(state.activeId);
+  // quebra de página e divisor não têm coluna (o divisor é selecionado, não focado — nunca
+  // chega aqui; a guarda é só pra não depender disso).
+  if (!b || b.type === 'pagebreak' || b.type === 'divider') { blockColEl.hidden = true; blockColSlot.replaceChildren(); return; }
+  blockColEl.hidden = false;
+  blockColSlot.replaceChildren(
+    columnField(placementOf(b), { left: 'inline', full: 'full', right: 'right' }, (v) => setBlockPlacement(b.id, v)));
+}
+function setBlockPlacement(id, v) {
+  const b = blockOf(id); if (!b) return;
+  const keep = captureCaret();
+  b.placement = v;
+  if (v === 'right') { if (b.y == null) b.y = 0; b.page = lastEditedPage(); }
+  else { delete b.y; delete b.page; }
+  render(keep && keep.id === id ? keep : { id, role: 'block', offset: 0 });
+  syncColUI();
 }
 function setActiveType(t) {
   const id = state.activeId;
@@ -1916,11 +1996,18 @@ document.getElementById('btnFile').addEventListener('click', pickFile);
 document.getElementById('file').addEventListener('change', (e) => {
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
-  r.onload = () => {
-    if (isDocJson(f.name)) { openDocFile(r.result); return; }   // .pdgm.json: documento completo, não é markdown
-    fileHandle = null; state.doc.source = { kind: 'file', label: f.name }; setBlocks(parseMarkdown(r.result));
-  };
+  r.onload = () => { fileHandle = null; state.doc.source = { kind: 'file', label: f.name }; setBlocks(parseMarkdown(r.result)); };
   r.readAsText(f); e.target.value = '';
+});
+document.getElementById('btnOpen').addEventListener('click', pickProjectFile);
+// fallback sem File System Access API: .pdgm.zip precisa de bytes crus (arrayBuffer),
+// .pdgm.json continua texto — mesma checagem de extensão do pickProjectFile acima
+document.getElementById('fileProject').addEventListener('change', (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { isDocZip(f.name) ? openDocZipFile(r.result) : openDocFile(r.result); };
+  isDocZip(f.name) ? r.readAsArrayBuffer(f) : r.readAsText(f);
+  e.target.value = '';
 });
 document.getElementById('imgfile').addEventListener('change', (e) => {
   const f = e.target.files[0]; if (f) addImageFile(f, pendingImgPlacement);
@@ -2127,14 +2214,14 @@ function downloadMd() {
   URL.revokeObjectURL(a.href);
 }
 // "Salvar" (trilha C t3.2): baixa o DOCUMENTO INTEIRO (blocos + capa/contracapa +
-// logo + índice/resumo + cabeçalho/rodapé + nº 1ª página + origem) como
-// .pdgm.json — sem perda, ao contrário do .md acima (só o texto). Reabre pelo
-// mesmo caminho de pickFile()/#file (ver openDocFile/applyDocFile acima).
-function saveDocFile() {
-  const blob = new Blob([JSON.stringify(serializeDoc(state.doc))], { type: 'application/json' });
+// logo + índice/resumo + cabeçalho/rodapé + nº 1ª página + origem) como .pdgm.zip
+// (doc.json + imagens como arquivo separado em media/, ver doc-format.js) — sem
+// perda, ao contrário do .md acima (só o texto). Reabre pelo botão "Abrir".
+async function saveDocFile() {
+  const blob = await serializeDocZip(state.doc);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (state.doc.source?.label || 'diagramacao').replace(/\.[^.]+$/, '') + '.pdgm.json';
+  a.download = (state.doc.source?.label || 'diagramacao').replace(/\.[^.]+$/, '') + '.pdgm.zip';
   a.click();
   URL.revokeObjectURL(a.href);
 }

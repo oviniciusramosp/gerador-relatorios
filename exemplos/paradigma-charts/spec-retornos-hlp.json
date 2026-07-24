@@ -1,0 +1,47 @@
+{
+  "type": "bar",
+  "title": "Retornos do HLP (por ano)",
+  "subtitle": "",
+  "source": "",
+  "labels": [
+    "2023",
+    "2024",
+    "2025",
+    "2026 (até julho)"
+  ],
+  "series": [
+    {
+      "name": "Retorno",
+      "data": [
+        100.6,
+        79.1,
+        19,
+        7.1
+      ]
+    }
+  ],
+  "y": {
+    "format": "pct"
+  },
+  "labelMode": "all",
+  "legend": "none",
+  "theme": "light",
+  "strokeWidth": 8,
+  "fontScale": 1.6,
+  "watermark": {
+    "logo": "icone",
+    "pos": "center",
+    "region": "externo",
+    "align": "right",
+    "color": "#94A3B8",
+    "opacity": 0.1,
+    "size": 0.7
+  },
+  "show": {
+    "title": false,
+    "subtitle": false,
+    "source": false
+  },
+  "width": 1200,
+  "height": 675
+}

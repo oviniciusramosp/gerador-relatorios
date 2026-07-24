@@ -58,16 +58,24 @@ export const DEFAULTS = {
   show: { title: false, subtitle: false, source: false },
   labels: [],
   series: [],            // [{ name, data:[…], color?, dashed?, area? }]
-  y: { format: 'num', prefix: '', suffix: '', title: '', min: null, max: null, ticks: 5, zero: true },
-  x: { title: '', every: 1 },   // every: mostra 1 a cada N rótulos
+  // side: lado do eixo de valor (left|right) — o y2, se houver, vai pro oposto
+  y: { format: 'num', prefix: '', suffix: '', title: '', min: null, max: null, ticks: 5, zero: true, side: 'left' },
+  x: { title: '', every: 1, hidden: [], offsets: {} },
+  // every: mostra 1 a cada N rótulos · hidden: índices sem TEXTO do rótulo
+  // (o ponto/barra continua no lugar, só o texto some) · offsets: {indice: dx}
+  // desloca só o TEXTO do rótulo, na HORIZONTAL — nunca o dado/posição real do
+  // ponto, e nunca na vertical (o rótulo sempre fica na mesma linha do eixo)
   grid: 'y',             // y | x | both | none
   legend: 'top',         // top | bottom | none
-  labelMode: 'ends',     // none | ends (primeiro+último) | max | all
+  labelMode: 'none',     // none | ends (primeiro+último) | max | all
   smooth: false,
-  strokeWidth: 2.5,
+  strokeWidth: 8,
   dotSize: 0,            // 0 = sem marcador; >=8 recomendado quando ligado
   barGap: 0.28,          // fração da banda usada como respiro entre grupos
-  fontScale: 1,
+  // candle: up/down null = usa o verde/coral do tema (acompanha claro↔escuro);
+  // um hex explícito fixa a cor. wick = espessura do pavio em px.
+  candle: { up: null, down: null, wick: 1.2 },
+  fontScale: 1.6,
   transparent: false,    // fundo transparente (pra colar sobre outra arte)
   annotations: [],       // [{ at: <índice ou label>, text: '' }]
   donutThickness: 0.42,  // fração do raio
@@ -75,7 +83,7 @@ export const DEFAULTS = {
   // pos center = marca d'água (grande, faded, atrás dos dados) · header|footer =
   // logo no canto, com region externo|interno (à área do plot) e align left|right ·
   // opacity null = resolve por pos · size (fator de escala)
-  watermark: { logo: 'none', pos: 'footer', region: 'externo', align: 'right', color: '#94A3B8', opacity: null, size: 1 },
+  watermark: { logo: 'icone', pos: 'center', region: 'externo', align: 'right', color: '#94A3B8', opacity: 0.08, size: 0.7 },
 };
 
 import { LOGOS } from './logos.js';
@@ -88,15 +96,19 @@ const yKey = (v) => String(+(+v).toFixed(6));
 // marca d'água: <svg> aninhado com o logo, tingido gravando a cor DIRETO nos
 // fills — currentColor não sobrevive à rasterização em canvas (PNG). Recebe a
 // caixa-alvo {x,y,w,h}; preserveAspectRatio encaixa mantendo a razão.
-function logoSvg(logo, box, color, opacity) {
+export function logoSvg(logo, box, color, opacity) {
   const L = LOGOS[logo];
   if (!L) return '';
   const inner = L.inner.replace(/currentColor/g, color);
   // toda caixa é montada com a proporção exata do logo, então centralizar dentro
   // dela (xMidYMid) não deixa sobra — o logo preenche a caixa.
-  return `<svg x="${n2(box.x)}" y="${n2(box.y)}" width="${n2(box.w)}" height="${n2(box.h)}"`
+  // opacity num <g> por fora, não no <svg> aninhado: opacity direto no <svg>
+  // renderiza certo embutido numa página (innerHTML), mas errado quando o
+  // arquivo .svg é aberto sozinho (documento SVG top-level) — <g> é consistente
+  // nos dois casos.
+  return `<g opacity="${opacity}"><svg x="${n2(box.x)}" y="${n2(box.y)}" width="${n2(box.w)}" height="${n2(box.h)}"`
     + ` viewBox="0 0 ${L.w} ${L.h}" preserveAspectRatio="xMidYMid meet"`
-    + ` opacity="${opacity}" aria-hidden="true">${inner}</svg>`;
+    + ` aria-hidden="true">${inner}</svg></g>`;
 }
 const n2 = (v) => Math.round(v * 100) / 100;
 const deepMerge = (base, over) => {
@@ -142,7 +154,10 @@ function niceTicks(min, max, count) {
 // Largura aproximada de texto. ponytail: heurística por caractere em vez de
 // medir no DOM — mantém o renderer puro (roda em Node, em worker, no build do
 // PDF). Erra ~5% em strings curtas, o suficiente pra dimensionar margens.
-const textW = (s, size) => String(s).length * size * 0.53;
+// × 0.9: todo chamador atual desenha com stretch:90 (rótulo de eixo, legenda,
+// fonte do dado) — sem isso a margem esquerda/inferior saía maior que as
+// outras (media 12-20px a mais nos 4 lados de padding da imagem).
+const textW = (s, size) => String(s).length * size * 0.53 * 0.9;
 
 const linePath = (pts) => pts.map((p, i) => (i ? 'L' : 'M') + n2(p[0]) + ' ' + n2(p[1])).join(' ');
 
@@ -184,7 +199,10 @@ export function renderChart(userSpec = {}, opts = {}) {
   const t = THEMES[s.theme] || THEMES.dark;
   const W = s.width, H = s.height;
   const F = s.fontScale;
-  const fs = { title: 30 * F, sub: 17 * F, legend: 14 * F, axis: 13 * F, val: 13 * F, src: 12 * F };
+  const fs = { title: 18 * F, sub: 17 * F, legend: 14 * F, axis: 13 * F, val: 13 * F, src: 12 * F };   // title: 60% do tamanho antigo (30)
+  // sufixo pra IDs de gradiente — vários gráficos podem acabar no mesmo DOM
+  // (diagramação embute o SVG direto no relatório), então "grad-0" colidiria
+  const uid = Math.random().toString(36).slice(2, 8);
 
   const series = (s.series || []).map((se, i) => ({
     ...se,
@@ -202,7 +220,7 @@ export function renderChart(userSpec = {}, opts = {}) {
   // no centro; some com logo:'none')
   const wm = s.watermark || {};
   const wmL = wm.logo && wm.logo !== 'none' ? LOGOS[wm.logo] : null;
-  const wmOp = wm.opacity ?? (wm.pos === 'center' ? 0.1 : 1);   // centro faded, canto opaco
+  const wmOp = wm.opacity ?? (wm.pos === 'center' ? 0.08 : 1);   // centro faded, canto opaco
   const wmH = wmL ? 40 * F * (wm.size || 1) : 0;          // altura do logo no canto
   const wmW = wmL ? wmH * (wmL.w / wmL.h) : 0;
 
@@ -212,7 +230,7 @@ export function renderChart(userSpec = {}, opts = {}) {
   const showSrc = s.source && s.show?.source;
   if (showTitle) { top += fs.title * 0.82; out.push(txt(pad, top, esc(s.title), { size: fs.title, weight: 600, fill: t.ink, ls: -0.02 })); }
   if (showSub) { top += fs.sub * 1.35; out.push(txt(pad, top, esc(s.subtitle), { size: fs.sub, fill: t.muted, stretch: 90 })); }
-  if (showTitle || showSub) top += 22 * F;
+  if (showTitle || showSub) top += 34 * F;   // gap até o gráfico — folga maior que antes (era 22)
 
   // logo no cabeçalho EXTERNO reserva faixa no topo (não pisa nos dados); o
   // INTERNO desenha por cima do plot, então não reserva nada.
@@ -247,7 +265,7 @@ export function renderChart(userSpec = {}, opts = {}) {
   if (s.type === 'donut' || s.type === 'pie') {
     out.push(...donut(series, labels, s, t, { pad, top, plotBottom, W, fs }));
   } else {
-    out.push(...cartesian(series, labels, s, t, { pad, top, plotBottom, W, fs, meta }));
+    out.push(...cartesian(series, labels, s, t, { pad, top, plotBottom, W, fs, meta, uid }));
   }
 
   if (showLegend && s.legend === 'bottom') out.push(legend(series, pad, plotBottom + legendH * 0.72, fs.legend, t));
@@ -304,25 +322,37 @@ function legend(series, x, y, size, t) {
 
 // ── cartesiano: line / area / bar / hbar / stacked / stacked100 / candle ──────
 function cartesian(series, labels, s, t, box) {
-  const { pad, top, plotBottom, W, fs, meta } = box;
+  const { pad, top, plotBottom, W, fs, meta, uid } = box;
   const horiz = s.type === 'hbar';
   const stacked = s.type === 'stacked' || s.type === 'stacked100';
   const isCandle = s.type === 'candle';
   const out = [];
 
+  // combo: cada série pode ser barra ou linha (se.as); candle usa as 4
+  // primeiras séries como O/H/L/C. Em empilhado, série com as:'line' sai do
+  // empilhamento e vira overlay (ex.: linha de "acumulado" sobre barra
+  // empilhada, tipicamente no eixo y2) — definido cedo pra filtrar o domínio
+  // do eixo Y mais abaixo.
+  const kindOf = (se) => se.as || (s.type === 'bar' || horiz || stacked ? 'bar' : s.type === 'area' ? 'area' : 'line');
+  const candleSer = isCandle ? series.slice(0, 4) : [];
+  const plainSer = isCandle ? series.slice(4) : series;
+  const stackSer = stacked ? plainSer.filter((se) => kindOf(se) !== 'line') : plainSer;
+
   // eixo direito (y2): combo com escalas diferentes (ex.: barras em US$ +
-  // linha de preço). Só nos tipos verticais simples — empilhado/hbar ignoram.
-  const canY2 = !horiz && !stacked;
+  // linha de preço, ou barra empilhada + linha de acumulado). hbar ignora —
+  // não faz sentido combinar com barra horizontal.
+  const canY2 = !horiz;
   const y2cfg = { format: 'compact', prefix: '', suffix: '', min: null, max: null, ticks: 5, zero: true, ...(s.y2 || {}) };
   const onY2 = (se) => canY2 && se.axis === 'y2';
   const serY1 = series.filter((se) => !onY2(se)), serY2 = series.filter(onY2);
 
-  // valores por índice (empilhados somam)
+  // valores por índice (empilhados somam — só as séries de barra; overlay de
+  // linha fica de fora, mede pelo eixo dele mesmo)
   let vals = [];
   if (stacked) {
     labels.forEach((_, i) => {
-      const pos = series.reduce((a, se) => a + Math.max(0, se.data[i] ?? 0), 0);
-      const neg = series.reduce((a, se) => a + Math.min(0, se.data[i] ?? 0), 0);
+      const pos = stackSer.reduce((a, se) => a + Math.max(0, se.data[i] ?? 0), 0);
+      const neg = stackSer.reduce((a, se) => a + Math.min(0, se.data[i] ?? 0), 0);
       vals.push(pos, neg);
     });
     if (s.type === 'stacked100') vals = [0, 100];
@@ -358,13 +388,54 @@ function cartesian(series, labels, s, t, box) {
     tickLabels2 = ticks2.map((v) => tt2[yKey(v)] ?? formatValue(v, y2cfg));
   }
 
-  // margens: eixo de valor de um lado, eixo de categoria do outro; y2 à direita
+  // margens: eixo de valor de um lado, eixo de categoria do outro.
+  // y.side escolhe o lado do eixo de valor; o y2 (quando existe) vai pro oposto.
+  const yRight = !horiz && s.y.side === 'right';
   const valAxisW = Math.max(...tickLabels.map((l) => textW(l, fs.axis))) + 14 * s.fontScale;
   const val2AxisW = has2 ? Math.max(...tickLabels2.map((l) => textW(l, fs.axis))) + 14 * s.fontScale : 0;
-  const catAxisH = fs.axis * 2.2;
-  const left = pad + (horiz ? Math.max(...labels.map((l) => textW(l, fs.axis))) + 14 * s.fontScale : valAxisW)
-             + (s.y.title && !horiz ? fs.axis * 1.6 : 0);
-  const right = W - pad - val2AxisW;
+  const yTitleW = s.y.title && !horiz ? fs.axis * 1.6 : 0;
+  // folga entre a linha do eixo e o rótulo — a MESMA nos dois lados, senão a
+  // margem externa da imagem sai diferente à esquerda e à direita
+  const axisGap = 22 * s.fontScale;
+  // 1.85 (não 2.2): sobrava folga não usada abaixo da linha de base do texto
+  // do eixo X (medido: baixo/esquerda tinham mais respiro que topo/direita)
+  const catAxisH = fs.axis * 1.85;
+  const catAxisW = horiz ? Math.max(...labels.map((l) => textW(l, fs.axis))) + 14 * s.fontScale : 0;
+
+  const barSer = !horiz && !stacked ? plainSer.filter((se) => kindOf(se) === 'bar') : [];
+  // overlay de linha: em empilhado só entra quem tem as:'line'/'area' explícito
+  // (o default de kindOf já é 'bar' pra empilhado, então isso não pega a
+  // barra normal) — hbar continua sem combo
+  const lineSer = !horiz ? plainSer.filter((se) => kindOf(se) !== 'bar') : [];
+  // com barra, candle ou overlay sobre empilhado, pontos de linha alinham ao CENTRO da banda
+  const mixed = isCandle || (barSer.length > 0 && lineSer.length > 0) || (stacked && lineSer.length > 0);
+
+  // rótulo do eixo X é centrado no ponto, então metade da largura dele fica pra
+  // fora — e se o rótulo da ponta estiver colado na borda do plot, essa metade
+  // invade a margem da imagem. Reserva só o que de fato passa da borda: quanto
+  // o rótulo já está pra dentro depende do tipo (barra/candle nascem meia-banda
+  // pra dentro) e do índice dele (com x.hidden a última visível pode estar longe
+  // da ponta), então mede pela posição real, não pela largura sozinha.
+  const every = Math.max(1, s.x.every | 0);
+  const xHidden = new Set(s.x.hidden || []);
+  const visIdx = labels.map((_, i) => i).filter((i) => !(i % every) && !xHidden.has(i));
+  const rawLeft = pad + (horiz ? catAxisW : (yRight ? val2AxisW : valAxisW + yTitleW));
+  const rawRight = W - pad - (horiz ? 0 : (yRight ? valAxisW + yTitleW : val2AxisW));
+  const centeredCat = !((s.type === 'line' || s.type === 'area') && !mixed);
+  const nCat = labels.length;
+  // distâncias na escala provisória: a reserva encolhe o plot e muda um pouco
+  // essas contas, mas o erro é de fração de pixel — não vale iterar
+  const rawPlotW = rawRight - rawLeft;
+  const distL = (i) => (centeredCat ? rawPlotW * (i + 0.5) / nCat : (nCat > 1 ? rawPlotW * i / (nCat - 1) : rawPlotW / 2));
+  const distR = (i) => (centeredCat ? rawPlotW * (nCat - i - 0.5) / nCat : (nCat > 1 ? rawPlotW * (nCat - 1 - i) / (nCat - 1) : rawPlotW / 2));
+  const over = (i, dist) => (i == null || horiz ? 0 : Math.max(0, textW(labels[i], fs.axis) / 2 - dist(i)));
+  // limite até onde o texto pode chegar: NÃO é o pad, é o mesmo tanto que o
+  // rótulo do eixo de valor já vaza pra fora dele (valAxisW reserva +14·fs mas
+  // o texto é desenhado a −22·fs, sobrando 8·fs pra fora). Clampar no pad puro
+  // deixaria a margem da direita maior que a dos outros 3 lados.
+  const outerInk = pad - 8 * s.fontScale;
+  const left = Math.max(rawLeft, outerInk + over(visIdx[0], distL));
+  const right = Math.min(rawRight, W - outerInk - over(visIdx.at(-1), distR));
   const bottom = plotBottom - catAxisH - (s.x.title ? fs.axis * 1.5 : 0);
   const plotH = bottom - top, plotW = right - left;
 
@@ -391,16 +462,6 @@ function cartesian(series, labels, s, t, box) {
   const catPoint = (i) => labels.length === 1 ? (horiz ? top : left) + (horiz ? plotH : plotW) / 2
     : (horiz ? top : left) + ((horiz ? plotH : plotW) / (labels.length - 1)) * i;
 
-  // combo: cada série pode ser barra ou linha (se.as); candle usa as 4 primeiras
-  // séries como O/H/L/C e o resto (ex.: volume no y2) segue a regra normal
-  const kindOf = (se) => se.as || (s.type === 'bar' || horiz || stacked ? 'bar' : s.type === 'area' ? 'area' : 'line');
-  const candleSer = isCandle ? series.slice(0, 4) : [];
-  const plainSer = isCandle ? series.slice(4) : series;
-  const barSer = !horiz && !stacked ? plainSer.filter((se) => kindOf(se) === 'bar') : [];
-  const lineSer = !horiz && !stacked ? plainSer.filter((se) => kindOf(se) !== 'bar') : [];
-  // com barra ou candle no gráfico, pontos de linha alinham ao CENTRO da banda
-  const mixed = isCandle || (barSer.length > 0 && lineSer.length > 0);
-
   // — grade + eixo de valor —
   const gridOn = s.grid === 'both' || s.grid === (horiz ? 'x' : 'y');
   ticks.forEach((v, i) => {
@@ -411,33 +472,49 @@ function cartesian(series, labels, s, t, box) {
         ? `<line x1="${n2(p)}" y1="${n2(top)}" x2="${n2(p)}" y2="${n2(bottom)}" stroke="${zero ? t.axis : t.grid}" stroke-width="1"/>`
         : `<line x1="${n2(left)}" y1="${n2(p)}" x2="${n2(right)}" y2="${n2(p)}" stroke="${zero ? t.axis : t.grid}" stroke-width="1"/>`);
     }
-    const lx = horiz ? p : left - 9 * s.fontScale;
+    const lx = horiz ? p : (yRight ? right + axisGap : left - axisGap);
     const ly = horiz ? bottom + fs.axis * 1.5 : p + fs.axis * 0.35;
-    const anchor = horiz ? 'middle' : 'end';
+    const anchor = horiz ? 'middle' : (yRight ? 'start' : 'end');
     out.push(txt(lx, ly, esc(tickLabels[i]), { size: fs.axis, fill: t.faint, anchor, stretch: 90 }));
     if (meta) meta.yTicks.push({ axis: 'y', value: v, key: yKey(v), cx: lx, cy: ly, anchor, w: textW(tickLabels[i], fs.axis), h: fs.axis, horiz });
   });
-  // ticks do y2 à direita (sem gridline própria — a grade é do eixo esquerdo)
+  // ticks do y2 no lado oposto ao do eixo principal (sem gridline própria — a
+  // grade é do eixo de valor principal)
   if (has2) ticks2.forEach((v, i) => {
-    const p = V2(v), lx = right + 9 * s.fontScale, ly = p + fs.axis * 0.35;
-    out.push(txt(lx, ly, esc(tickLabels2[i]), { size: fs.axis, fill: t.faint, anchor: 'start', stretch: 90 }));
-    if (meta) meta.yTicks.push({ axis: 'y2', value: v, key: yKey(v), cx: lx, cy: ly, anchor: 'start', w: textW(tickLabels2[i], fs.axis), h: fs.axis, horiz });
+    const p = V2(v), ly = p + fs.axis * 0.35;
+    const lx = yRight ? left - axisGap : right + axisGap;
+    const anchor = yRight ? 'end' : 'start';
+    out.push(txt(lx, ly, esc(tickLabels2[i]), { size: fs.axis, fill: t.faint, anchor, stretch: 90 }));
+    if (meta) meta.yTicks.push({ axis: 'y2', value: v, key: yKey(v), cx: lx, cy: ly, anchor, w: textW(tickLabels2[i], fs.axis), h: fs.axis, horiz });
   });
 
-  // — eixo de categoria —
-  const every = Math.max(1, s.x.every | 0);
+  // — eixo de categoria — (every/xHidden vêm de cima: entram no cálculo da margem)
   const catPos = (i) => ((s.type === 'line' || s.type === 'area') && !mixed ? catPoint(i) : catCenter(i));
+  const xOffsets = s.x.offsets || {};
   labels.forEach((l, i) => {
     if (i % every) return;
     const p = catPos(i);
-    const lx = horiz ? left - 9 * s.fontScale : p;
-    const ly = horiz ? p + fs.axis * 0.35 : bottom + fs.axis * 1.6;
+    // offset desloca só a POSIÇÃO HORIZONTAL DO TEXTO — p (posição real do
+    // ponto/barra) não muda, e a vertical do rótulo é sempre a mesma do eixo
+    const lx = (horiz ? left - axisGap : p) + (xOffsets[i] || 0);
+    // 2.2 (não 1.6): o rótulo cabia inteiro dentro do catAxisH reservado (fit
+    // "justo", sem sobra) — mas os outros 3 lados vazam um pouco pra fora da
+    // própria margem (texto de eixo Y centrado na grade, "jul" mais largo que
+    // o espaço da última categoria). Empurrando pra baixo, o rótulo do eixo X
+    // vaza pela mesma quantidade e a margem inferior finalmente bate com as outras.
+    const ly = horiz ? p + fs.axis * 0.35 : bottom + fs.axis * 2.2;
     const anchor = horiz ? 'end' : 'middle';
-    out.push(txt(lx, ly, esc(l), { size: fs.axis, fill: t.faint, anchor, stretch: 90 }));
-    if (meta) meta.catLabels.push({ i, cx: lx, cy: ly, anchor, w: textW(l, fs.axis), h: fs.axis, horiz });
+    const hidden = xHidden.has(i);
+    if (!hidden) out.push(txt(lx, ly, esc(l), { size: fs.axis, fill: t.faint, anchor, stretch: 90 }));
+    // entra no meta mesmo oculto: mantém a alça clicável (reativar/reposicionar) no editor
+    if (meta) meta.catLabels.push({ i, cx: lx, cy: ly, anchor, w: textW(l, fs.axis), h: fs.axis, horiz, hidden });
   });
-  if (s.y.title && !horiz) out.push(`<g transform="translate(${n2(pad + fs.axis * 0.8)},${n2((top + bottom) / 2)}) rotate(-90)">${txt(0, 0, esc(s.y.title), { size: fs.axis, fill: t.muted, anchor: 'middle', stretch: 90 })}</g>`);
-  if (s.x.title) out.push(txt((left + right) / 2, bottom + fs.axis * 3.1, esc(s.x.title), { size: fs.axis, fill: t.muted, anchor: 'middle', stretch: 90 }));
+  // à direita o título gira +90 (lê de cima pra baixo), que é a convenção do
+  // eixo secundário — girado -90 dos dois lados o da direita sai de cabeça pra baixo
+  if (s.y.title && !horiz) out.push(`<g transform="translate(${n2(yRight ? W - pad - fs.axis * 0.8 : pad + fs.axis * 0.8)},${n2((top + bottom) / 2)}) rotate(${yRight ? 90 : -90})">${txt(0, 0, esc(s.y.title), { size: fs.axis, fill: t.muted, anchor: 'middle', stretch: 90 })}</g>`);
+  // 3.9 (não 3.1): o rótulo de categoria passou a vazar mais pra baixo (ly
+  // acima, 2.2 em vez de 1.6) — sem esse ajuste o título do eixo X colidia com ele
+  if (s.x.title) out.push(txt((left + right) / 2, bottom + fs.axis * 3.9, esc(s.x.title), { size: fs.axis, fill: t.muted, anchor: 'middle', stretch: 90 }));
 
   // — anotações (linhas verticais marcadas) —
   (s.annotations || []).forEach((a) => {
@@ -455,12 +532,15 @@ function cartesian(series, labels, s, t, box) {
   // — candle: pavio (mín→máx) + corpo (abertura→fechamento), verde/coral —
   if (isCandle && candleSer.length >= 4) {
     const [O, Hi, Lo, C] = candleSer.map((se) => se.data);
-    const up = t.series[1], down = t.series[4];   // slots verde e coral do tema
+    const cdl = s.candle || {};
+    // sem cor explícita, cai nos slots verde e coral do tema (segue claro↔escuro)
+    const up = cdl.up || t.series[1], down = cdl.down || t.series[4];
+    const wickW = Math.max(0, cdl.wick ?? 1.2);
     const bw = Math.max(2, Math.min(band * 0.62, 14 * s.fontScale));
     labels.forEach((_, i) => {
       if (O[i] == null || Hi[i] == null || Lo[i] == null || C[i] == null) return;
       const x = catCenter(i), col = C[i] >= O[i] ? up : down;
-      out.push(`<line x1="${n2(x)}" y1="${n2(V(Hi[i]))}" x2="${n2(x)}" y2="${n2(V(Lo[i]))}" stroke="${col}" stroke-width="1.2"/>`);
+      out.push(`<line x1="${n2(x)}" y1="${n2(V(Hi[i]))}" x2="${n2(x)}" y2="${n2(V(Lo[i]))}" stroke="${col}" stroke-width="${n2(wickW)}"/>`);
       const yTop = V(Math.max(O[i], C[i])), yBot = V(Math.min(O[i], C[i]));
       out.push(`<rect x="${n2(x - bw / 2)}" y="${n2(yTop)}" width="${n2(bw)}" height="${n2(Math.max(1.2, yBot - yTop))}" fill="${col}"/>`);
     });
@@ -487,7 +567,10 @@ function cartesian(series, labels, s, t, box) {
   }
 
   if (horiz || stacked) {
-    const groups = stacked ? 1 : series.length;
+    // hbar continua com todas as séries; empilhado exclui o overlay de linha
+    // (esse é desenhado depois, no bloco de linha) da pilha em si
+    const barsHere = stacked ? stackSer : series;
+    const groups = stacked ? 1 : barsHere.length;
     // teto de largura: com 2–3 categorias a banda fica enorme e a barra vira
     // uma parede. 16% do plot é o limite do padrão da casa.
     const inner = Math.min(band * (1 - s.barGap), (horiz ? plotH : plotW) * 0.16);
@@ -496,9 +579,9 @@ function cartesian(series, labels, s, t, box) {
     labels.forEach((_, i) => {
       let accP = 0, accN = 0;
       const total = stacked && s.type === 'stacked100'
-        ? series.reduce((a, se) => a + Math.abs(se.data[i] ?? 0), 0) || 1 : 1;
+        ? barsHere.reduce((a, se) => a + Math.abs(se.data[i] ?? 0), 0) || 1 : 1;
 
-      series.forEach((se, k) => {
+      barsHere.forEach((se, k) => {
         let v = se.data[i];
         if (v == null) return;
         if (s.type === 'stacked100') v = (v / total) * 100;
@@ -520,9 +603,10 @@ function cartesian(series, labels, s, t, box) {
         out.push(roundedEnd(x, y, w, h, r, horiz, grow, se.color));
 
         // alça de arraste no topo do segmento; base = quanto já foi empilhado
-        // abaixo (0 em barra simples), pra converter arraste → valor da série
+        // abaixo (0 em barra simples), pra converter arraste → valor da série.
+        // s: índice VERDADEIRO em spec.series (barsHere pode ser um filtro)
         if (meta) meta.marks.push({
-          s: k, i, value: se.data[i], base: stacked ? start : 0, kind: 'bar',
+          s: series.indexOf(se), i, value: se.data[i], base: stacked ? start : 0, kind: 'bar',
           x: horiz ? b : off + size / 2, y: horiz ? off + size / 2 : b,
         });
 
@@ -532,7 +616,8 @@ function cartesian(series, labels, s, t, box) {
         }
       });
     });
-  } else if (lineSer.length) {
+  }
+  if (lineSer.length) {
     // line / area (e a parte de linha do combo)
     const px = (i) => (mixed ? catCenter(i) : catPoint(i));
     const pending = [];   // rótulos diretos, posicionados só no fim (ver anti-colisão)
@@ -545,7 +630,18 @@ function cartesian(series, labels, s, t, box) {
       if (s.type === 'area' || se.area) {
         const zero = onY2(se) ? Math.max(d2Min, Math.min(0, d2Max)) : Math.max(dMin, Math.min(0, dMax));
         const base = Vx(zero);
-        out.push(`<path d="${d}L${n2(pts.at(-1)[0])} ${n2(base)}L${n2(pts[0][0])} ${n2(base)}Z" fill="${se.color}" opacity="${lineSer.length > 1 ? 0.16 : 0.22}"/>`);
+        // degradê vertical, forte perto da linha e some na base — mesma
+        // convenção de praticamente todo gráfico de área por aí. Um
+        // gradiente reto não segue o contorno da curva coluna a coluna (isso
+        // exigiria uma máscara por ponto); a aproximação vertical padrão já
+        // dá o efeito certo.
+        const topOp = lineSer.length > 1 ? 0.22 : 0.35;
+        const gid = `grad-${uid}-${k}`;
+        out.push(`<defs><linearGradient id="${gid}" x1="0" y1="${n2(top)}" x2="0" y2="${n2(base)}" gradientUnits="userSpaceOnUse">`
+          + `<stop offset="0%" stop-color="${se.color}" stop-opacity="${topOp}"/>`
+          + `<stop offset="100%" stop-color="${se.color}" stop-opacity="0"/>`
+          + `</linearGradient></defs>`);
+        out.push(`<path d="${d}L${n2(pts.at(-1)[0])} ${n2(base)}L${n2(pts[0][0])} ${n2(base)}Z" fill="url(#${gid})"/>`);
       }
       out.push(`<path d="${d}" fill="none" stroke="${se.color}" stroke-width="${s.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"${se.dashed ? ' stroke-dasharray="7 5"' : ''}/>`);
       // um ponto sozinho não desenha traço nenhum — força marcador, senão a

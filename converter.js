@@ -10,7 +10,7 @@
  * Roda no browser (canvas) e em Node (teste-precisao.mjs decodifica o PNG).
  */
 import {
-  suggestColors, trace, assessTrace, detectGridlines,
+  suggestColors, suggestGrayColors, trace, assessTrace, detectGridlines,
   parseValue, makeLabels, oklab, rgb,
 } from './extrair.js';
 
@@ -178,8 +178,11 @@ export function buildSpecFromImage(img, meta) {
   }
 
   // ── cor + traço da(s) série(s) ──
-  const cands = suggestColors(img, rect);
-  if (!cands.length) throw new Error('nenhuma cor de série na área de plotagem');
+  // sem cor (gráfico preto-e-branco): cai pra luminância — pior sinal, mas
+  // melhor que recusar o gráfico inteiro
+  const colorCands = suggestColors(img, rect);
+  const cands = colorCands.length ? colorCands : suggestGrayColors(img, rect);
+  if (!cands.length) throw new Error('nenhuma cor (nem cinza) de série na área de plotagem');
   const wanted = Math.max(1, meta.series?.length || 1);
   let chosen;
   if (wanted === 1) chosen = [cands[0].hex];

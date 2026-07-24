@@ -28,13 +28,18 @@ const MIME = {
 };
 
 // ── converte imagem -> spec via CLI ──────────────────────────────────────────
-const MODEL = 'sonnet';   // só lê texto da imagem (ticks, título) — não precisa de mais
+const MODEL_CONVERT = 'sonnet';   // lê a imagem do zero (eixo, ticks, título) — precisa de visão forte
+// o ajuste ("o valor de março é 55 mil") PARECE edição de texto, mas não é:
+// a extração original pode ter errado, então cada pedido tem que reconferir
+// contra a imagem antes de aceitar o pedido do usuário (ou a spec atual) como
+// verdade — mesma exigência de leitura visual do convert, mesmo modelo.
+const MODEL_REFINE = MODEL_CONVERT;
 
-// Roda o CLU com um prompt. `extraArgs` permite `--resume <id>` pra CONTINUAR a
+// Roda o CLI com um prompt. `extraArgs` permite `--resume <id>` pra CONTINUAR a
 // mesma sessão (o "chat com a IA da extração"). Sem --no-session-persistence: a
 // sessão fica gravada e pode ser retomada (cada conversão gera um id único).
-function runClaude(prompt, extraArgs = []) {
-  const args = ['-p', prompt, '--output-format', 'json', '--model', MODEL,
+function runClaude(prompt, extraArgs = [], model = MODEL_CONVERT) {
+  const args = ['-p', prompt, '--output-format', 'json', '--model', model,
     '--tools', 'Read', '--allowedTools', 'Read', ...extraArgs];
   // limpa flags de "estou dentro do Claude Code" — senão o CLI recusa rodar
   // aninhado. Só relevante quando o server é iniciado de dentro de uma sessão.
@@ -81,19 +86,23 @@ function extractJson(text) {
   throw new Error('JSON incompleto na resposta');
 }
 
-async function handleConvert(req, res) {
+// Grava a imagem recebida e roda o CLI com o prompt de `promptFor(caminhoRel)`.
+// `base` separa os arquivos por ferramenta ('input' = gráfico, 'timeline' = linha
+// do tempo) — senão uma conversão sobrescreve a imagem que a outra ainda usa no
+// /api/refine.
+async function handleImage(req, res, base, promptFor) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
   const buf = Buffer.concat(chunks);
   if (!buf.length) return json(res, 400, { error: 'imagem vazia' });
 
   const ext = (req.headers['content-type'] || '').includes('jpeg') ? '.jpg' : '.png';
-  const imgPath = join(IA_DIR, 'input' + ext);
+  const imgPath = join(IA_DIR, base + ext);
   await mkdir(IA_DIR, { recursive: true });
   await writeFile(imgPath, buf);
 
   try {
-    const raw = await runClaude(convertPrompt('_ia/input' + ext));
+    const raw = await runClaude(promptFor(`_ia/${base}${ext}`));
     // envelope do --output-format json: { type:'result', result, session_id, ... }
     const env = JSON.parse(raw);
     if (env.is_error) throw new Error(env.result || 'CLI retornou erro');
@@ -106,8 +115,17 @@ async function handleConvert(req, res) {
   }
 }
 
-// Continua a sessão da extração pra corrigir um dado ("o valor de março é 55 mil").
-// A IA ainda tem a imagem no contexto, então pode reexaminá-la.
+const timelinePrompt = (imgPath) =>
+  `Leia o arquivo de imagem "${imgPath}" (é uma linha do tempo) e as instruções em `
+  + `"ia-timeline.md". Devolva SÓ o JSON minificado da spec, sem texto em volta.`;
+
+// Corrige um dado ("o valor de março é 55 mil", "remove o ponto de junho") —
+// SEMPRE relendo a imagem original, nunca confiando cegamente na spec atual
+// (que veio de uma extração automática e pode ter errado) nem no pedido do
+// usuário como fato. Chamada nova a cada pedido (sem --resume): contexto
+// previsível e do mesmo tamanho não importa quantas correções já rolaram na
+// sessão, e a leitura da imagem fica OBRIGATÓRIA (instrução, não memória de
+// sessão que o modelo pode decidir pular).
 async function handleRefine(req, res) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
@@ -117,14 +135,20 @@ async function handleRefine(req, res) {
   const { sessionId, spec, message } = body;
   if (!sessionId || !message) return json(res, 400, { error: 'faltou sessionId ou message' });
 
-  const prompt = `O usuário quer ajustar o gráfico que você extraiu da imagem desta sessão.\n`
+  const imgRel = ['_ia/input.png', '_ia/input.jpg'].find((p) => existsSync(join(ROOT, p)));
+  if (!imgRel) return json(res, 400, { error: 'imagem original não encontrada — converta de novo' });
+
+  const prompt = `Leia a imagem "${imgRel}" (ferramenta Read) ANTES de responder — sempre, mesmo que o `
+    + `pedido pareça simples ou a spec pareça óbvia. A spec abaixo veio de uma extração automática e `
+    + `PODE ter erro; não aceite ela nem o pedido do usuário como verdade sem conferir contra a imagem.\n\n`
     + `Spec atual (JSON):\n${JSON.stringify(spec)}\n\n`
-    + `Pedido: ${message}\n\n`
-    + `Reveja a imagem se precisar e devolva SÓ o JSON da spec corrigida, mesmo schema `
-    + `(type, title, subtitle, source, labels, series:[{name,data}], y). Mude apenas o `
-    + `necessário e mantenha o resto igual. Sem texto fora do JSON.`;
+    + `Pedido do usuário: ${message}\n\n`
+    + `Corrija o que foi pedido E qualquer outro valor/rótulo que você notar que não bate com a imagem `
+    + `enquanto estiver conferindo. Devolva SÓ o JSON da spec corrigida, mesmo schema (type, title, `
+    + `subtitle, source, labels, series:[{name,data}], y). Mude apenas o necessário e mantenha o resto `
+    + `igual. Sem texto fora do JSON.`;
   try {
-    const raw = await runClaude(prompt, ['--resume', sessionId]);
+    const raw = await runClaude(prompt, [], MODEL_REFINE);
     const env = JSON.parse(raw);
     if (env.is_error) throw new Error(env.result || 'CLI retornou erro');
     const out = extractJson(env.result ?? raw);
@@ -147,13 +171,30 @@ async function handleCandles(req, res) {
   try {
     let rows;   // normaliza pra [{t, o, h, l, c, v}]
     if (venue === 'hyperliquid') {
-      const r = await fetch('https://api.hyperliquid.xyz/info', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'candleSnapshot', req: { coin: symbol.toUpperCase(), interval, startTime: start, endTime: end } }),
-      });
-      if (!r.ok) throw new Error(`Hyperliquid HTTP ${r.status}`);
-      const data = await r.json();
-      if (!Array.isArray(data) || !data.length) throw new Error('sem candles — confira o ativo (ex.: HYPE, BTC) e as datas');
+      // o prefixo do dex HIP-3 é minúsculo e a moeda é maiúscula ("xyz:CL").
+      // Passar tudo em maiúscula ("XYZ:CL") derruba a API com HTTP 500 —
+      // era isso que quebrava TODO mercado HIP-3 aqui.
+      const coin = symbol.includes(':')
+        ? symbol.replace(/^([^:]+):(.*)$/, (_, dex, c) => `${dex.toLowerCase()}:${c.toUpperCase()}`)
+        : symbol.toUpperCase();
+      const snap = async (a, b) => {
+        const r = await fetch('https://api.hyperliquid.xyz/info', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'candleSnapshot', req: { coin, interval, startTime: a, endTime: b } }),
+        });
+        if (!r.ok) throw new Error(`Hyperliquid HTTP ${r.status}`);
+        return r.json();
+      };
+      const data = await snap(start, end);
+      // vazio pode ser ativo errado OU mercado que parou de negociar (acontece
+      // em HIP-3: o oráculo segue publicando preço mas não há mais candle).
+      // Uma sondagem larga separa os dois casos e diz o período que existe.
+      if (!Array.isArray(data) || !data.length) {
+        const wide = await snap(Date.now() - 5 * 365 * 86400e3, Date.now()).catch(() => null);
+        if (!Array.isArray(wide) || !wide.length) throw new Error('sem candles — confira o ativo (ex.: HYPE, BTC) e as datas');
+        const dia = (ms) => new Date(ms).toISOString().slice(0, 10).split('-').reverse().join('/');
+        throw new Error(`sem candles nesse período — ${coin} só tem de ${dia(wide[0].t)} a ${dia(wide.at(-1).t)}`);
+      }
       rows = data.map((k) => ({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }));
     } else {
       const u = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol.toUpperCase())}`
@@ -165,6 +206,51 @@ async function handleCandles(req, res) {
       rows = data.map((k) => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
     }
     json(res, 200, { rows });
+  } catch (e) {
+    json(res, 502, { error: String(e.message || e) });
+  }
+}
+
+// Lista de ativos por corretora, pra autocomplete no campo "Ativo" (evita
+// erro de digitação). Cache em memória — a lista de pares/moedas quase não
+// muda, então "tempo real" aqui é "busca uma vez por sessão do servidor e
+// reusa por 5min", não polling de verdade.
+const symbolsCache = new Map();   // venue -> { at, list }
+const SYMBOLS_TTL = 5 * 60 * 1000;
+
+const hlInfo = async (body) => {
+  const r = await fetch('https://api.hyperliquid.xyz/info', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`Hyperliquid HTTP ${r.status}`);
+  return r.json();
+};
+
+async function handleSymbols(req, res) {
+  const venue = new URL(req.url, 'http://x').searchParams.get('venue') || 'binance';
+  const hit = symbolsCache.get(venue);
+  if (hit && Date.now() - hit.at < SYMBOLS_TTL) return json(res, 200, { symbols: hit.list });
+  try {
+    let list;
+    if (venue === 'hyperliquid') {
+      // universo principal + TODOS os dexs HIP-3 (builder-deployed). Sem isso o
+      // autocomplete não conhece nomes como "xyz:CL" ou "cash:WTI", e o campo
+      // aceita um ativo inexistente que só falha lá na frente com HTTP 500.
+      const [main, dexs] = await Promise.all([hlInfo({ type: 'meta' }), hlInfo({ type: 'perpDexs' })]);
+      const names = (dexs || []).filter(Boolean).map((d) => d.name);
+      const unis = await Promise.all(names.map((dex) => hlInfo({ type: 'meta', dex }).catch(() => null)));
+      list = [
+        ...(main.universe || []).map((u) => u.name),
+        ...unis.filter(Boolean).flatMap((u) => (u.universe || []).map((a) => a.name)),
+      ];
+    } else {
+      const r = await fetch('https://api.binance.com/api/v3/exchangeInfo');
+      if (!r.ok) throw new Error(`Binance HTTP ${r.status}`);
+      const data = await r.json();
+      list = (data.symbols || []).filter((s) => s.status === 'TRADING').map((s) => s.symbol);
+    }
+    symbolsCache.set(venue, { at: Date.now(), list });
+    json(res, 200, { symbols: list });
   } catch (e) {
     json(res, 502, { error: String(e.message || e) });
   }
@@ -260,6 +346,7 @@ createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/pdf') return handlePdf(req, res);
   if (req.method === 'POST' && req.url === '/api/refine') return handleRefine(req, res);
   if (req.method === 'GET' && req.url.startsWith('/api/candles')) return handleCandles(req, res);
+  if (req.method === 'GET' && req.url.startsWith('/api/symbols')) return handleSymbols(req, res);
   // trilha D: o client faz um GET rápido (timeout curto) nessa rota pra decidir se
   // esconde o import de gráfico (que depende de /api/convert + /api/refine, só
   // existem com este server rodando — no GitHub Pages estático não existe).

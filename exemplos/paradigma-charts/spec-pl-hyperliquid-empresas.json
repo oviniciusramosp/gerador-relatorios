@@ -1,0 +1,54 @@
+{
+  "type": "hbar",
+  "title": "Preço/Lucro da Hyperliquid vs. Corretoras Listadas na Bolsa",
+  "subtitle": "",
+  "source": "",
+  "labels": [
+    "COIN",
+    "HOOD",
+    "IBKR",
+    "NDAQ",
+    "HYPE",
+    "CME",
+    "ICE"
+  ],
+  "series": [
+    {
+      "name": "P/L",
+      "data": [
+        60.8,
+        54.7,
+        39.2,
+        25.5,
+        20.9,
+        20.2,
+        19.4
+      ]
+    }
+  ],
+  "y": {
+    "format": "num",
+    "suffix": "×"
+  },
+  "labelMode": "all",
+  "legend": "none",
+  "theme": "light",
+  "strokeWidth": 8,
+  "fontScale": 1.6,
+  "watermark": {
+    "logo": "icone",
+    "pos": "center",
+    "region": "externo",
+    "align": "right",
+    "color": "#94A3B8",
+    "opacity": 0.1,
+    "size": 0.7
+  },
+  "show": {
+    "title": false,
+    "subtitle": false,
+    "source": false
+  },
+  "width": 1200,
+  "height": 675
+}

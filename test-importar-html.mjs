@@ -20,6 +20,16 @@ assert.deepEqual(v[0], { x: 70, y: 269.999 });
 assert.deepEqual(v[v.length - 1], { x: 82, y: 45.446 });
 assert.equal(v.length, 3);
 
+// sparkline de card: M + L absolutos, fechado com Z (o Z não vira ponto)
+const l = pathVertices('M0.00,196.61 L4.10,196.77 L8.20,197.15 L8.20,200.00 L0.00,200.00 Z');
+assert.equal(l.length, 5);
+assert.deepEqual(l[1], { x: 4.1, y: 196.77 });
+// relativo + H/V
+assert.deepEqual(pathVertices('m10,10 l5,5 h5 v-5'), [
+  { x: 10, y: 10 }, { x: 15, y: 15 }, { x: 20, y: 15 }, { x: 20, y: 10 }]);
+// coordenadas repetidas sem repetir a letra do comando
+assert.equal(pathVertices('M0,0L1,1 2,2 3,3').length, 4);
+
 // calibração px→valor pelos ticks reais do exemplo hyperscreener
 const f = calibrate([{ px: 270, val: 0 }, { px: 0, val: 6e12 }]);
 assert.ok(Math.abs(f(45.446) - 4.99e12) < 5e9);   // topo da curva ≈ 4.99T

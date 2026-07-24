@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Linhas do Tempo · Gerador de Relatórios Paradigma</title>
+<link rel="stylesheet" href="paradigma.css">
+<style>
+  body { height: 100dvh; display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
+
+  header {
+    display: flex; align-items: baseline; gap: 1rem;
+    padding: .8rem 1.1rem; border-bottom: 1px solid var(--hair);
+  }
+  header h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  header .crumb { color: var(--muted); font-size: .74rem; font-stretch: 85%; }
+  header nav { margin-left: auto; display: flex; gap: .4rem; }
+
+  main { display: grid; grid-template-columns: 350px 1fr; min-height: 0; }
+
+  aside {
+    border-right: 1px solid var(--hair);
+    overflow-y: auto; padding: 1rem; display: grid; gap: .9rem; align-content: start;
+  }
+  aside::-webkit-scrollbar { width: 8px; }
+  aside::-webkit-scrollbar-thumb { background: var(--hair-strong); border-radius: 4px; }
+
+  details > summary {
+    cursor: pointer; list-style: none; font-size: .68rem; font-weight: 600;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--lilac);
+    font-stretch: 85%; padding: .3rem 0; user-select: none;
+  }
+  details > summary::before { content: "▸ "; display: inline-block; transition: transform .12s; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  details > .body, .pane > .body { display: grid; gap: .55rem; padding: .5rem 0 .9rem; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+
+  /* pickers com ícone (mesmo componente do gerador de gráficos) */
+  .typepick { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
+  .typepick.cols4 { grid-template-columns: repeat(4, 1fr); }
+  .typepick button {
+    display: grid; justify-items: center; gap: .2rem; padding: .45rem .2rem;
+    border: 1px solid var(--hair); border-radius: var(--r); background: transparent;
+    color: var(--muted); cursor: pointer; font-stretch: 85%; font-size: .64rem;
+  }
+  .typepick button svg { width: 26px; height: 18px; }
+  .typepick button:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .typepick button[aria-pressed="true"] {
+    border-color: var(--violet); color: var(--ink);
+    background: color-mix(in srgb, var(--violet) 18%, transparent);
+  }
+
+  .lblswitch {
+    flex: 0 0 auto; width: 2.1rem; height: 1.2rem; margin-bottom: .3rem; padding: 0;
+    border-radius: 999px; border: 1px solid var(--hair-strong);
+    background: color-mix(in srgb, var(--lilac) 10%, transparent); position: relative; cursor: pointer;
+  }
+  .lblswitch::after {
+    content: ""; position: absolute; top: 50%; left: 2px; transform: translateY(-50%);
+    width: .85rem; height: .85rem; border-radius: 50%; background: var(--muted); transition: left .12s, background .12s;
+  }
+  .lblswitch[aria-checked="true"] { background: var(--mint); border-color: var(--mint); }
+  .lblswitch[aria-checked="true"]::after { left: calc(100% - .85rem - 2px); background: #fff; }
+  .labelrow { display: flex; gap: .55rem; align-items: end; }
+  .labelrow .field { flex: 1; min-width: 0; }
+  .toggle { display: flex; align-items: center; gap: .45rem; font-size: .78rem; color: var(--muted); cursor: pointer; }
+
+  textarea { width: 100%; min-height: 150px; resize: vertical; font-family: ui-monospace, "SF Mono", monospace; font-size: .72rem; line-height: 1.6; }
+
+  /* ---------- lista de eventos ---------- */
+  #events { display: grid; gap: .4rem; }
+  .ev {
+    display: grid; grid-template-columns: auto auto 1fr auto; gap: .4rem; align-items: center;
+    border: 1px solid var(--hair); border-radius: var(--r); padding: .4rem .45rem;
+  }
+  .ev.drop-before { box-shadow: 0 -2px 0 var(--mint); }
+  .ev.drop-after { box-shadow: 0 2px 0 var(--mint); }
+  .ev.dragging { opacity: .45; }
+  .ev-grip { cursor: grab; color: var(--muted); padding: 0 .1rem; background: none; border: 0; font-size: .9rem; line-height: 1; }
+  .ev-move { display: grid; gap: 1px; }
+  .ev-move button { padding: 0 .25rem; font-size: .62rem; line-height: 1.15; border-radius: 3px; }
+  .ev-fields { display: grid; gap: .25rem; min-width: 0; }
+  .ev-fields input { padding: .25rem .4rem; font-size: .76rem; min-width: 0; }
+  .ev-date { color: var(--mint); font-stretch: 85%; }
+  .ev-right { display: grid; gap: .25rem; justify-items: center; }
+  .ev-icon {
+    width: 2.1rem; height: 2.1rem; padding: 0; display: grid; place-items: center;
+    border-radius: 50%; border: 1px solid var(--hair-strong); color: var(--mint); cursor: pointer;
+  }
+  .ev-icon svg { width: 1.1rem; height: 1.1rem; }
+  .ev-icon .badge { font-size: .58rem; font-weight: 600; }
+  .ev-del { padding: .1rem .35rem; font-size: .8rem; color: var(--muted); }
+  .ev-del:hover { color: #FF6B6B; }
+
+  /* popover do picker de ícone */
+  .icon-pop {
+    position: fixed; z-index: 70; width: 17rem; max-height: 70vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: .35rem; padding: .6rem;
+    border: 1px solid var(--hair-strong); border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 8%, var(--ground)); box-shadow: 0 18px 50px -20px #000;
+  }
+  .icon-pop .ip-label { font-size: .6rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: .2rem 0 0; }
+  .ip-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: .25rem; }
+  .ip-grid button {
+    aspect-ratio: 1; display: grid; place-items: center; padding: 0;
+    border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .ip-grid button svg { width: 1.15rem; height: 1.15rem; }
+  .ip-grid button:hover { background: color-mix(in srgb, var(--violet) 18%, transparent); color: var(--ink); }
+  .ip-grid button.on { border-color: var(--mint); color: var(--mint); }
+  .ip-row { display: flex; gap: .35rem; align-items: center; }
+  .ip-row input { flex: 1; min-width: 0; padding: .3rem .45rem; font-size: .78rem; }
+
+  /* ---------- palco ---------- */
+  section.stage {
+    position: relative;
+    display: grid; grid-template-rows: 1fr auto; min-height: 0;
+    background:
+      radial-gradient(ellipse 70% 50% at 50% 130%, color-mix(in srgb, var(--violet) 26%, transparent), transparent 72%),
+      var(--ground);
+  }
+  .canvas { display: grid; place-items: center; padding: 1.4rem; min-height: 0; overflow: auto; }
+  .frame { box-shadow: 0 24px 70px -30px #000; border-radius: 4px; overflow: hidden; line-height: 0; }
+  .canvas svg { display: block; max-width: 100%; height: auto; }
+
+  #iaOverlay {
+    position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--ground) 78%, transparent); backdrop-filter: blur(2px);
+  }
+  #iaOverlay[hidden] { display: none; }
+  .ia-card {
+    display: grid; justify-items: center; gap: .7rem; text-align: center;
+    padding: 1.6rem 2rem; border: 1px solid var(--hair-strong); border-radius: 10px;
+    background: color-mix(in srgb, var(--lilac) 7%, var(--ground)); box-shadow: 0 24px 70px -30px #000;
+  }
+  .ia-spinner {
+    width: 2.2rem; height: 2.2rem; border-radius: 50%;
+    border: 3px solid var(--hair); border-top-color: var(--violet); animation: iaspin .8s linear infinite;
+  }
+  @keyframes iaspin { to { transform: rotate(360deg); } }
+  .ia-title { margin: 0; font-weight: 600; font-size: 1.05rem; }
+  .ia-sub { margin: 0; color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; }
+  #iaOverlay.err .ia-spinner { display: none; }
+  #iaOverlay.err .ia-title { color: #FF6B6B; }
+
+  .bar {
+    display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+    padding: .7rem 1.1rem; border-top: 1px solid var(--hair);
+    background: color-mix(in srgb, var(--ground) 88%, black);
+  }
+  .bar .sep { flex: 1; }
+  .hint { font-size: .72rem; color: var(--muted); font-stretch: 90%; }
+  #status.err { color: #FF6B6B; font-weight: 600; }
+  #drop.over { outline: 2px dashed var(--mint); outline-offset: -6px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Linhas do Tempo</h1>
+  <span class="crumb">Gerador de Relatórios · Paradigma</span>
+  <nav>
+    <button id="btnSvg">Baixar SVG</button>
+    <button id="btnPng" class="primary">Baixar PNG</button>
+  </nav>
+</header>
+
+<main id="drop">
+  <aside>
+    <details open>
+      <summary>Eventos</summary>
+      <div class="body">
+        <div class="segment cols-3" id="dataSegment" role="tablist">
+          <button data-seg="manual" aria-selected="true">Manual</button>
+          <button data-seg="texto" aria-selected="false">Texto</button>
+          <button data-seg="imagem" aria-selected="false">Imagem</button>
+        </div>
+
+        <div class="pane" data-pane="manual">
+          <div class="body">
+            <div id="events"></div>
+            <div class="row">
+              <button id="btnAdd" class="primary">+ Evento</button>
+              <button id="btnSort" title="Ordena pelos anos/meses das datas">Ordenar por data</button>
+            </div>
+            <p class="hint">Arraste pela alça <b>⠿</b> (ou use ▲▼) pra mudar a ordem. O ícone é opcional — clique no círculo pra escolher, ou use uma sigla (S&amp;P, ETF).</p>
+          </div>
+        </div>
+
+        <div class="pane" data-pane="texto" hidden>
+          <div class="body">
+            <label class="field">
+              Um evento por linha — <code>data | texto | ícone</code> (ícone opcional)
+              <textarea id="lines" spellcheck="false" placeholder="Novembro/2022 | Lançamento da primeira Testnet | flask"></textarea>
+            </label>
+            <p class="hint">Cola rápida de uma lista inteira. Edita aqui ou na aba Manual — os dois lados são a mesma coisa.</p>
+          </div>
+        </div>
+
+        <div class="pane" data-pane="imagem" hidden>
+          <div class="body">
+            <button id="btnIA" class="primary">Converter imagem em linha do tempo…</button>
+            <p class="hint">Escolha (ou arraste) a imagem de uma timeline — o Claude lê as datas, os textos e escolhe um ícone pra cada evento. Depois você ajusta na aba Manual.</p>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Formato</summary>
+      <div class="body">
+        <div class="field">
+          <div class="typepick" id="layoutPicker">
+            <button type="button" data-layout="alternada" title="Vertical, alternando os lados">
+              <svg viewBox="0 0 26 18"><line x1="13" y1="1" x2="13" y2="17" stroke="currentColor"/><rect x="1" y="2" width="8" height="5" fill="currentColor" opacity=".5"/><rect x="17" y="10" width="8" height="5" fill="currentColor" opacity=".5"/><circle cx="13" cy="4.5" r="1.6" fill="currentColor"/><circle cx="13" cy="12.5" r="1.6" fill="currentColor"/></svg>
+              <span>Alternada</span>
+            </button>
+            <button type="button" data-layout="esquerda" title="Vertical, tudo à direita do eixo">
+              <svg viewBox="0 0 26 18"><line x1="4" y1="1" x2="4" y2="17" stroke="currentColor"/><rect x="8" y="2" width="16" height="5" fill="currentColor" opacity=".5"/><rect x="8" y="10" width="16" height="5" fill="currentColor" opacity=".5"/><circle cx="4" cy="4.5" r="1.6" fill="currentColor"/><circle cx="4" cy="12.5" r="1.6" fill="currentColor"/></svg>
+              <span>Coluna</span>
+            </button>
+            <button type="button" data-layout="horizontal" title="Horizontal, alternando acima/abaixo">
+              <svg viewBox="0 0 26 18"><line x1="1" y1="9" x2="25" y2="9" stroke="currentColor"/><rect x="2" y="1" width="8" height="5" fill="currentColor" opacity=".5"/><rect x="15" y="12" width="8" height="5" fill="currentColor" opacity=".5"/><circle cx="6" cy="9" r="1.6" fill="currentColor"/><circle cx="19" cy="9" r="1.6" fill="currentColor"/></svg>
+              <span>Horizontal</span>
+            </button>
+          </div>
+        </div>
+        <div class="grid2">
+          <label class="field">Tema
+            <select id="theme"><option value="dark">Escuro</option><option value="light">Claro</option></select>
+          </label>
+          <label class="field">Cor de destaque
+            <button type="button" class="colorfield" id="accent" title="Cor da data, do eixo e dos nós"></button>
+          </label>
+        </div>
+        <div class="row">
+          <label class="toggle"><input id="card" type="checkbox"> Card atrás do texto</label>
+          <label class="toggle"><input id="connector" type="checkbox"> Ligação</label>
+          <label class="toggle"><input id="arrow" type="checkbox"> Seta no fim</label>
+        </div>
+        <div class="labelrow">
+          <button type="button" class="lblswitch" id="showTitle" role="switch" aria-checked="true" title="Mostrar na imagem"></button>
+          <label class="field">Título<input id="title" type="text"></label>
+        </div>
+        <div class="labelrow">
+          <button type="button" class="lblswitch" id="showSubtitle" role="switch" aria-checked="true" title="Mostrar na imagem"></button>
+          <label class="field">Subtítulo<input id="subtitle" type="text"></label>
+        </div>
+        <div class="labelrow">
+          <button type="button" class="lblswitch" id="showSource" role="switch" aria-checked="false" title="Mostrar na imagem"></button>
+          <label class="field">Fonte do dado<input id="source" type="text" placeholder="Fonte: Paradigma Education"></label>
+        </div>
+        <label class="toggle"><input id="showRange" type="checkbox"> Tarja de período (2022 — 2026)</label>
+
+        <div class="field">Logo da Paradigma
+          <div class="typepick cols4" id="wmPicker">
+            <button type="button" data-logo="none" aria-pressed="true" title="Sem logo"><span>Nenhum</span></button>
+            <button type="button" data-logo="icone" title="Só o ícone"><span>Ícone</span></button>
+            <button type="button" data-logo="full" title="Ícone + nome (horizontal)"><span>Completo</span></button>
+            <button type="button" data-logo="nome" title="Nome (Paradigma Education)"><span>Nome</span></button>
+          </div>
+        </div>
+        <div class="grid2" id="wmOpts" hidden>
+          <label class="field">Posição
+            <select id="wmPos">
+              <option value="footer">Rodapé (opaco)</option>
+              <option value="header">Cabeçalho (opaco)</option>
+              <option value="center">Centro (marca d'água)</option>
+            </select>
+          </label>
+          <label class="field">Cor do logo
+            <button type="button" class="colorfield" id="wmColor" title="Escolher cor do logo"></button>
+          </label>
+          <label class="field" id="wmAlignField">Lado
+            <select id="wmAlign">
+              <option value="right">Direita</option>
+              <option value="center">Centro</option>
+              <option value="left">Esquerda</option>
+            </select>
+          </label>
+          <label class="field">Opacidade <span class="hint" id="wmOpVal"></span>
+            <input type="range" id="wmOpacity" min="0" max="100" value="100">
+          </label>
+          <label class="field">Escala <span class="hint" id="wmScaleVal"></span>
+            <input type="range" id="wmScale" min="40" max="260" value="100">
+          </label>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Medidas e tipografia</summary>
+      <div class="body">
+        <label class="field">Escala da fonte <span id="fsVal"></span><input id="fontScale" type="range" min=".7" max="1.6" step=".05"></label>
+        <label class="field">Tamanho do nó <span id="nodeVal"></span><input id="nodeSize" type="range" min="24" max="72" step="2"></label>
+        <label class="field">Respiro entre eventos <span id="gapVal"></span><input id="gap" type="range" min="8" max="70" step="2"></label>
+        <div class="grid2">
+          <label class="field">Largura (vertical)<input id="width" type="number" step="20"></label>
+          <label class="field">Coluna (horizontal)<input id="colWidth" type="number" step="10"></label>
+        </div>
+        <label class="toggle"><input id="transparent" type="checkbox"> Fundo transparente</label>
+      </div>
+    </details>
+
+    <details>
+      <summary>Spec JSON</summary>
+      <div class="body">
+        <textarea id="json" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="btnApply">Aplicar JSON</button>
+          <button id="btnCopy">Copiar</button>
+        </div>
+      </div>
+    </details>
+  </aside>
+
+  <section class="stage">
+    <div class="canvas">
+      <div class="frame" id="out"></div>
+    </div>
+    <div id="iaOverlay" hidden>
+      <div class="ia-card">
+        <div class="ia-spinner" aria-hidden="true"></div>
+        <p class="ia-title">Lendo a linha do tempo com o Claude…</p>
+        <p class="ia-sub" id="iaTimer">pode levar de 20&nbsp;s a 1&nbsp;min</p>
+        <button id="iaClose" hidden>Fechar</button>
+      </div>
+    </div>
+    <div class="bar">
+      <label class="toggle">PNG em <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>×</label>
+      <span class="hint" id="dims"></span>
+      <span class="sep"></span>
+      <span class="hint" id="status"></span>
+    </div>
+  </section>
+</main>
+
+<input id="fileIA" type="file" accept="image/*" hidden>
+<script type="module" src="timelines.js"></script>
+</body>
+</html>

@@ -77,6 +77,43 @@ export function suggestColors(img, rect, { max = 5, minChroma = 0.06 } = {}) {
     .sort((a, b) => b.score - a.score).slice(0, max);
 }
 
+/**
+ * Fallback pra gráfico preto-e-branco: sem croma pra separar a série do
+ * resto (tudo é cinza), agrupa por LUMINÂNCIA em vez de matiz. Descarta
+ * quase-branco (fundo) e pontua mais escuro × mais pixel como candidato mais
+ * provável — convenção comum de gráfico P&B: o traço do dado é desenhado
+ * mais escuro/grosso que grade e texto. Menos confiável que suggestColors
+ * (grade escura ou eixo grosso podem competir), por isso só entra como
+ * fallback quando ela não acha nenhuma cor.
+ */
+export function suggestGrayColors(img, rect, { max = 5, minDark = 0.12 } = {}) {
+  const bins = new Map();
+  const step = Math.max(1, Math.floor(Math.min(rect.w, rect.h) / 260));
+  let sampled = 0;
+  for (let y = rect.y; y < rect.y + rect.h; y += step) {
+    for (let x = rect.x; x < rect.x + rect.w; x += step) {
+      const i = (y * img.width + x) * 4;
+      if (img.data[i + 3] < 200) continue;
+      sampled++;
+      const [r, g, b] = [img.data[i], img.data[i + 1], img.data[i + 2]];
+      const L = oklab(r, g, b)[0];               // luminância perceptual, 0..1
+      if (L > 1 - minDark) continue;              // quase-branco: fundo
+      const k = Math.round(L * 20);               // 20 faixas de cinza
+      const e = bins.get(k) || { n: 0, r: 0, g: 0, b: 0, L: 0 };
+      e.n++; e.r += r; e.g += g; e.b += b; e.L += L; bins.set(k, e);
+    }
+  }
+  const floor = Math.max(6, sampled * 0.002);
+  return [...bins.values()]
+    .filter((e) => e.n >= floor)
+    .map((e) => {
+      const R = Math.round(e.r / e.n), G = Math.round(e.g / e.n), B = Math.round(e.b / e.n);
+      const dark = 1 - e.L / e.n;                 // mais escuro pontua mais
+      return { hex: hex(R, G, B), n: e.n, score: dark * Math.sqrt(e.n) };
+    })
+    .sort((a, b) => b.score - a.score).slice(0, max);
+}
+
 // ── extração ─────────────────────────────────────────────────────────────────
 /** Trechos verticais contíguos de pixels que casam com a cor, numa coluna. */
 function runs(img, x, rect, target, tol) {

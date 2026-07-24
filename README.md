@@ -184,13 +184,15 @@ Todo campo é opcional menos `series`. Os defaults estão em `DEFAULTS`
     "min": null, "max": null,            // null = automático
     "ticks": 5, "zero": true             // zero: força a base no zero
   },
-  "x": { "title": "", "every": 1 },      // every: 1 rótulo a cada N
+  "x": { "title": "", "every": 1,        // every: 1 rótulo a cada N
+    "hidden": [3, 7],                    // índices SEM texto de rótulo (o ponto/barra continua)
+    "offsets": { "3": 10 } },            // desloca o TEXTO do rótulo N px na horizontal, nunca o dado
 
   "grid": "y",             // y | x | both | none
   "legend": "top",         // top | bottom | none  (some sozinha com 1 série)
-  "labelMode": "ends",     // none | ends | max | all
-  "smooth": false, "strokeWidth": 2.5, "dotSize": 0,
-  "barGap": 0.28, "fontScale": 1, "transparent": false,
+  "labelMode": "none",     // none | ends | max | all — default none
+  "smooth": false, "strokeWidth": 8, "dotSize": 0,        // default do traço: 8px
+  "barGap": 0.28, "fontScale": 1.6, "transparent": false, // default da fonte: 1.6×
   "annotations": [{ "at": "2021", "text": "Halving" }]   // at: índice ou rótulo
 }
 ```

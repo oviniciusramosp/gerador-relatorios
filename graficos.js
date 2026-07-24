@@ -37,15 +37,36 @@ function sync({ keepTable = false, keepJson = false } = {}) {
 function drawHandles() {
   if (!editMode) return;
   const svg = out.querySelector('svg');
-  if (!svg || !chartMeta.marks) return;
+  if (!svg) return;
   const NS = 'http://www.w3.org/2000/svg';
-  for (const m of chartMeta.marks) {
+  for (const m of chartMeta.marks || []) {
     const c = document.createElementNS(NS, 'circle');
     c.setAttribute('cx', m.x); c.setAttribute('cy', m.y); c.setAttribute('r', 7);
     c.setAttribute('class', 'edit-handle'); c.dataset.mark = `${m.s}:${m.i}`;
     svg.appendChild(c);
   }
+  // rótulo oculto: marca fantasma no lugar dele, só pra achar e clicar de novo
+  // (reativar ou arrastar) — o dado real não depende disso, é só um achado.
+  for (const c of chartMeta.catLabels || []) {
+    if (!c.hidden) continue;
+    const g = document.createElementNS(NS, 'circle');
+    g.setAttribute('cx', c.cx); g.setAttribute('cy', c.cy); g.setAttribute('r', 3);
+    g.setAttribute('class', 'edit-handle-ghost');
+    svg.appendChild(g);
+  }
 }
+
+// ── segmento Dados: Imagem / Corretora / HTML (mesmo padrão da diagramação) ───
+const dataSegBtns = [...document.querySelectorAll('#dataSegment button')];
+function setDataSegment(name) {
+  dataSegBtns.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.seg === name)));
+  document.querySelectorAll('.pane').forEach((p) => { p.hidden = p.dataset.pane !== name; });
+}
+dataSegBtns.forEach((b) => b.addEventListener('click', () => {
+  setDataSegment(b.dataset.seg);
+  if (b.dataset.seg === 'corretora') loadSymbols($('cdVenue').value);   // carrega só quando a aba abre
+}));
+setDataSegment('imagem');
 
 // ── controles ────────────────────────────────────────────────────────────────
 const bindText = (id, path) => $(id).addEventListener('input', (e) => { set(path, e.target.value); sync({ keepTable: true }); });
@@ -70,6 +91,7 @@ $('typePicker').addEventListener('click', (e) => {
 function paintTypePicker() {
   $('typePicker').querySelectorAll('button').forEach((b) =>
     b.setAttribute('aria-pressed', b.dataset.type === spec.type));
+  paintCandle();   // as opções de candle só aparecem nesse tipo
 }
 
 // switches de mostrar título/subtítulo/fonte no gráfico
@@ -81,7 +103,7 @@ function paintTypePicker() {
   });
 });
 // logo da Paradigma: picker + posição + região/lado + cor + sliders
-const wmDefaultOpacity = (pos) => (pos === 'center' ? 0.1 : 1);   // centro faded, canto opaco
+const wmDefaultOpacity = (pos) => (pos === 'center' ? 0.08 : 1);   // centro faded, canto opaco
 function setWm(patch) {
   spec.watermark = { ...DEFAULTS.watermark, ...spec.watermark, ...patch };
   paintWatermark(); sync({ keepTable: true });
@@ -111,6 +133,26 @@ $('wmAlign').addEventListener('change', (e) => setWm({ align: e.target.value }))
 $('wmColor').addEventListener('click', () => openSwatchPop($('wmColor'), (hex) => setWm({ color: hex }), { ...DEFAULTS.watermark, ...spec.watermark }.color, { opacity: false }));
 $('wmOpacity').addEventListener('input', (e) => setWm({ opacity: +e.target.value / 100 }));
 $('wmScale').addEventListener('input', (e) => setWm({ size: +e.target.value / 100 }));
+// — candle: cores de alta/baixa e espessura do pavio —
+// up/down guardam null enquanto o usuário não escolhe: aí a cor sai do tema e
+// acompanha claro↔escuro. O swatch mostra a cor resolvida (nunca "vazio").
+const candleCfg = () => ({ ...DEFAULTS.candle, ...spec.candle });
+const candleColor = (k) => candleCfg()[k] || (THEMES[spec.theme] || THEMES.dark).series[k === 'up' ? 1 : 4];
+// sem pushHistory aqui: o pavio é input numérico e gravaria um passo de undo por
+// tecla — mesmo tratamento que os sliders de traço/ponto e que o logo (setWm)
+const setCandle = (patch) => { spec.candle = { ...candleCfg(), ...patch }; paintCandle(); sync({ keepTable: true }); };
+['up', 'down'].forEach((k) => {
+  const el = $('candle' + k[0].toUpperCase() + k.slice(1));
+  el.addEventListener('click', () => openSwatchPop(el, (hex) => setCandle({ [k]: hex }), candleColor(k), { opacity: false }));
+});
+$('candleWick').addEventListener('input', (e) => setCandle({ wick: Math.max(0, +e.target.value || 0) }));
+function paintCandle() {
+  $('candleOpts').hidden = spec.type !== 'candle';
+  $('candleUp').style.background = candleColor('up');
+  $('candleDown').style.background = candleColor('down');
+  $('candleWick').value = candleCfg().wick;
+}
+
 function paintWatermark() {
   const wm = { ...DEFAULTS.watermark, ...spec.watermark };
   $('wmPicker').querySelectorAll('button').forEach((b) =>
@@ -132,10 +174,10 @@ $('theme').addEventListener('change', (e) => {
   // cor segue a entidade: remapeia só quem estava num slot padrão
   spec.series.forEach((s) => { const i = from.indexOf(s.color); if (i >= 0) s.color = to[i]; });
   spec.theme = e.target.value;
-  buildSeries(); sync({ keepTable: true });
+  buildSeries(); paintCandle(); sync({ keepTable: true });   // swatch mostra a cor do tema novo
 });
 
-[['yformat', 'y.format'], ['labelMode', 'labelMode'], ['grid', 'grid'], ['legend', 'legend']]
+[['yformat', 'y.format'], ['yside', 'y.side'], ['labelMode', 'labelMode'], ['grid', 'grid'], ['legend', 'legend']]
   .forEach(([id, path]) => $(id).addEventListener('change', (e) => {
     set(path, e.target.value);
     // usd/brl/pct já trazem o símbolo — prefixo/sufixo manual duplicaria ("US$ US$")
@@ -173,7 +215,7 @@ $('tsv').addEventListener('input', (e) => {
 
 $('btnApply').addEventListener('click', () => {
   try { spec = { ...structuredClone(DEFAULTS), ...JSON.parse($('json').value) }; }
-  catch (err) { return flash('JSON inválido: ' + err.message); }
+  catch (err) { return flash('JSON inválido: ' + err.message, true); }
   fillControls(); buildSeries(); sync();
 });
 $('btnCopy').addEventListener('click', async () => {
@@ -234,8 +276,8 @@ function buildSeries() {
 
 function fillControls() {
   const v = { ...spec, yformat: spec.y.format, ymin: spec.y.min ?? '', ymax: spec.y.max ?? '', ytitle: spec.y.title ?? '',
-    yprefix: spec.y.prefix ?? '', ysuffix: spec.y.suffix ?? '', xevery: spec.x.every };
-  for (const id of ['theme', 'title', 'subtitle', 'source', 'yformat', 'labelMode', 'grid', 'legend',
+    yprefix: spec.y.prefix ?? '', ysuffix: spec.y.suffix ?? '', xevery: spec.x.every, yside: spec.y.side ?? 'left' };
+  for (const id of ['theme', 'title', 'subtitle', 'source', 'yformat', 'yside', 'labelMode', 'grid', 'legend',
     'ymin', 'ymax', 'ytitle', 'yprefix', 'ysuffix', 'xevery', 'strokeWidth', 'dotSize', 'fontScale', 'width', 'height']) {
     if ($(id)) $(id).value = v[id];
   }
@@ -255,11 +297,19 @@ function fillControls() {
 // A fonte precisa ir embutida: o SVG desenhado no canvas roda isolado e não
 // enxerga a @font-face do documento — sem isso o PNG sai com fonte de sistema.
 let fontPromise;
+// O cache guarda só o SUCESSO: promise rejeitada em cache deixava o botão
+// quebrado até dar reload (servidor que caiu e voltou, rede que oscilou).
 const fontDataUri = () => (fontPromise ??= fetch('fonts/IBMPlexSans-Var.ttf')
   .then((r) => { if (!r.ok) throw new Error('fonte não encontrada (sirva a pasta por http, não file://)'); return r.blob(); })
   .then((b) => new Promise((res, rej) => {
     const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(b);
-  })));
+  }))
+  .catch((e) => {
+    fontPromise = null;                        // próximo clique tenta de novo
+    throw e instanceof TypeError                // fetch só dá TypeError em falha de rede
+      ? new Error('não consegui buscar a fonte — o servidor caiu? Confira que node server.mjs está no ar e clique de novo.')
+      : e;
+  }));
 
 async function svgString(sp) {
   return renderChart(sp, { fontDataUri: await fontDataUri() });
@@ -295,14 +345,14 @@ $('btnPng').addEventListener('click', async () => {
   try {
     download(await toPng(spec, +$('scale').value), `${slug(spec.title)}.png`);
     flash('PNG baixado.');
-  } catch (e) { flash('Falhou: ' + e.message); }
+  } catch (e) { flash('Falhou: ' + e.message, true); }
 });
 
 $('btnSvg').addEventListener('click', async () => {
   try {
     download(new Blob([await svgString(spec)], { type: 'image/svg+xml' }), `${slug(spec.title)}.svg`);
     flash('SVG baixado (fonte embutida).');
-  } catch (e) { flash('Falhou: ' + e.message); }
+  } catch (e) { flash('Falhou: ' + e.message, true); }
 });
 
 $('btnCsv').addEventListener('click', () => {
@@ -321,7 +371,7 @@ if (new URLSearchParams(location.search).has('embed')) {
       const svg = await svgString(spec);
       parent.postMessage({ type: 'pdgm-chart-svg', svg, title: spec.title, w: spec.width, h: spec.height }, location.origin);
       flash('Importado.');
-    } catch (e) { flash('Falhou: ' + e.message); }
+    } catch (e) { flash('Falhou: ' + e.message, true); }
   });
 }
 
@@ -349,12 +399,169 @@ function iaError(msg) {
 
 $('fileIA').addEventListener('change', (e) => { if (e.target.files[0]) convertImage(e.target.files[0]); e.target.value = ''; });
 
+// ── Autocomplete de ativo (evita erro de digitação) + paste de URL da corretora ─
+// A lista de símbolos quase não muda, então "tempo real" aqui é buscar uma vez
+// por corretora (cache client + 5min de cache no server) e filtrar local — não
+// tem por que fazer polling de verdade pra um catálogo que muda raríssimo.
+// ponytail: mercados HIP-3 (builder-deployed, tipo "xyz:WTIOIL") não entram
+// nessa lista — cobertos pelo paste de URL abaixo, que não depende dela.
+const symbolCache = new Map();   // venue -> [symbols]
+async function loadSymbols(venue) {
+  if (symbolCache.has(venue)) return;
+  symbolCache.set(venue, []);   // marca "em andamento" — evita 2 fetches simultâneos do mesmo venue
+  try {
+    const r = await fetch('/api/symbols?venue=' + venue);
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+    symbolCache.set(venue, j.symbols);
+    if ($('cdVenue').value === venue) fillSymbolList(venue);
+  } catch { symbolCache.delete(venue); }   // falhou — tenta de novo na próxima troca de corretora
+}
+function fillSymbolList(venue) {
+  $('cdSymbolList').innerHTML = (symbolCache.get(venue) || []).map((s) => `<option value="${s}">`).join('');
+}
+// "quis dizer…" pra ativo digitado errado: acha o maior pedaço em comum de 3+
+// letras (WTIOIL → cash:WTI, km:USOIL, xyz:BRENTOIL). Ignora o prefixo do dex
+// HIP-3 na comparação. 3 letras é o piso: com 1-2 o "W" de WTIOIL casava com
+// qualquer coisa e a sugestão virava lixo.
+// no HIP-3 o dex vem minúsculo e a moeda maiúscula ("xyz:CL") — uppercase geral
+// estragaria o nome no título do gráfico
+const shownSymbol = (s) => (s.includes(':')
+  ? s.replace(/^([^:]+):(.*)$/, (_, dex, c) => `${dex.toLowerCase()}:${c.toUpperCase()}`)
+  : s.toUpperCase());
+
+// Alguns mercados HIP-3 aparecem no site (e na URL) com um nome de vitrine
+// diferente do nome que a API usa, e a API NÃO expõe esse apelido em lugar
+// nenhum — conferido em meta, metaAndAssetCtxs, allMids, perpDexs e spotMeta,
+// e nos bundles JS do site. Por isso a tradução mora aqui.
+// xyz:WTIOIL = xyz:CL (CL é o ticker do WTI na NYMEX): abrir
+// /trade/xyz:CL faz a própria Hyperliquid redirecionar pra /trade/xyz:WTIOIL,
+// e os dois mostram o mesmo preço ao vivo.
+const APELIDOS_HL = { 'xyz:wtioil': 'xyz:CL' };
+const resolveSymbol = (s) => APELIDOS_HL[s.trim().toLowerCase()] || s.trim();
+
+function nearbySymbols(typed, known) {
+  const bare = typed.replace(/^[^:]+:/, '').toUpperCase();
+  const subs = [];   // do maior pro menor: o 1º que casar é o melhor pedaço
+  for (let n = bare.length; n >= 3; n--)
+    for (let i = 0; i + n <= bare.length; i++) subs.push(bare.slice(i, i + n));
+  const hits = known
+    .map((s) => ({ s, score: (subs.find((f) => s.replace(/^[^:]+:/, '').toUpperCase().includes(f)) || '').length }))
+    .filter((h) => h.score >= 3)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5).map((h) => h.s);
+  return hits.length ? ` Quis dizer: ${hits.join(', ')}?` : '';
+}
+$('cdVenue').addEventListener('change', () => {
+  fillSymbolList($('cdVenue').value);
+  loadSymbols($('cdVenue').value);
+});
+// em 1 dia/1 semana não existe hora pra escolher — o rótulo é sempre o dia
+const syncXLabelCtl = () => { $('cdXLabel').disabled = !/[mh]$/.test($('cdInterval').value); };
+$('cdInterval').addEventListener('change', syncXLabelCtl);
+syncXLabelCtl();
+
+// volume liga/desliga na hora, sem re-buscar: todo o resto dos controles
+// atualiza ao vivo, então só valer na próxima busca parecia que estava quebrado.
+// Guarda os candles da última busca pra conseguir religar o volume depois.
+let lastCandleRows = null;
+const volSeries = (rows) => ({ name: 'Volume', data: rows.map((k) => k.v), as: 'bar', axis: 'y2', color: '#94A3B8' });
+$('cdVol').addEventListener('change', () => {
+  if (spec.type !== 'candle') return;             // não mexe em gráfico que não veio da corretora
+  const at = spec.series.findIndex((se) => se.axis === 'y2');
+  const quer = $('cdVol').value === '1';
+  if (quer === (at >= 0)) return;
+  if (quer) {
+    if (!lastCandleRows) return flash('Busque os candles primeiro.', true);
+    // se os pontos foram editados, o volume guardado não alinha mais
+    if (lastCandleRows.length !== spec.labels.length)
+      return flash('O volume não bate mais com os dados editados — busque os candles de novo.', true);
+    spec.series.push(volSeries(lastCandleRows));
+    spec.y2 = { format: 'compact' };
+  } else {
+    spec.series.splice(at, 1);
+    delete spec.y2;
+  }
+  buildSeries(); sync(); pushHistory();
+});
+
+function parseAssetUrl(raw) {
+  let u; try { u = new URL(raw); } catch { return null; }
+  const host = u.hostname.replace(/^(app|www)\./, '');
+  if (host === 'hyperliquid.xyz') {
+    const m = u.pathname.match(/\/trade\/([^/?#]+)/);
+    // a URL traz o nome de vitrine; resolve pro nome da API (ver APELIDOS_HL)
+    return m ? { venue: 'hyperliquid', symbol: resolveSymbol(decodeURIComponent(m[1])) } : null;
+  }
+  // hypurrscan é explorer da Hyperliquid: /market/<ativo>, já com o nome da API
+  if (host === 'hypurrscan.io') {
+    const m = u.pathname.match(/\/market\/([^/?#]+)/);
+    return m ? { venue: 'hyperliquid', symbol: resolveSymbol(decodeURIComponent(m[1])) } : null;
+  }
+  if (host === 'binance.com') {
+    const m = u.pathname.match(/\/(?:trade|futures)\/([^/?#]+)/);
+    return m ? { venue: 'binance', symbol: decodeURIComponent(m[1]).replace('_', '') } : null;
+  }
+  return null;
+}
+// cola a URL do gráfico na corretora (ex.: https://app.hyperliquid.xyz/trade/xyz:WTIOIL)
+// em vez de digitar o ativo — extrai corretora + ativo direto do link.
+// 'paste' (não 'input'): lê o clipboard de uma vez só — em 'input' cada tecla
+// de uma URL sendo digitada aos poucos é uma URL válida mas incompleta, e
+// isso disparava "não reconheci" a cada caractere.
+$('cdSymbol').addEventListener('paste', (e) => {
+  const v = (e.clipboardData?.getData('text') || '').trim();
+  if (!/^https?:\/\//i.test(v)) return;   // não é URL — deixa colar normal
+  e.preventDefault();
+  const parsed = parseAssetUrl(v);
+  if (!parsed) return flash('Não reconheci essa URL — cole o ativo direto.', true);
+  $('cdVenue').value = parsed.venue;
+  fillSymbolList(parsed.venue); loadSymbols(parsed.venue);
+  const naUrl = decodeURIComponent(v.match(/\/trade\/([^/?#]+)/)?.[1] || '');
+  e.target.value = parsed.symbol;
+  // explica a troca de nome, senão parece que o campo ignorou o que foi colado
+  flash(parsed.symbol !== naUrl && naUrl
+    ? `Ativo: ${parsed.symbol} — é o nome que a API usa pro ${naUrl}.`
+    : `Ativo: ${parsed.symbol} (${parsed.venue === 'binance' ? 'Binance' : 'Hyperliquid'}).`);
+});
+
+// Rótulos do eixo X de um candle. Em intervalo menor que 1 dia o padrão é
+// marcar só a virada do dia, sem horário: o rótulo é o mesmo pros 24 candles do
+// dia, então mostrar em todos vira repetição — só o primeiro candle de cada dia
+// fica visível e o resto entra em x.hidden (o candle continua lá, some só o texto).
+const MAX_X_LABELS = 12;
+function candleLabels(rows, interval, mode) {
+  const sub = /[mh]$/.test(interval);            // 1m/5m/1h/4h — menor que 1 dia
+  const dia = (ms) => { const d = new Date(ms); return `${d.getUTCDate()}/${capFirst(MES[d.getUTCMonth()])}`; };
+  const hora = (ms) => `${String(new Date(ms).getUTCHours()).padStart(2, '0')}h`;
+  const thin = (n) => ({ every: Math.max(1, Math.ceil(n / MAX_X_LABELS)) });
+
+  if (!sub || mode === 'dia') {
+    const labels = rows.map((k) => dia(k.t));
+    if (!sub) return { labels, x: thin(rows.length) };
+    // índices em que o dia vira; se der muitos dias, mostra 1 a cada N viradas
+    const viradas = labels.map((_, i) => i).filter((i) => i === 0 || labels[i] !== labels[i - 1]);
+    const passo = Math.max(1, Math.ceil(viradas.length / MAX_X_LABELS));
+    const visiveis = new Set(viradas.filter((_, n) => n % passo === 0));
+    return { labels, x: { every: 1, hidden: labels.map((_, i) => i).filter((i) => !visiveis.has(i)) } };
+  }
+  const labels = rows.map((k) => (mode === 'hora' ? hora(k.t) : `${dia(k.t)} ${hora(k.t)}`));
+  return { labels, x: thin(rows.length) };
+}
+
 // ── Candles por API (Binance/Hyperliquid): ativo + datas → gráfico candle ─────
 $('btnCandles').addEventListener('click', async () => {
-  const symbol = $('cdSymbol').value.trim();
+  // resolve o nome de vitrine antes de validar (digitado à mão também vale)
+  const symbol = resolveSymbol($('cdSymbol').value);
   const start = $('cdStart').value, end = $('cdEnd').value;
-  if (!symbol) return flash('Diga o ativo (BTCUSDT na Binance; HYPE na Hyperliquid).');
-  if (!start || !end) return flash('Preencha as datas De e Até.');
+  if (!symbol) return flash('Diga o ativo (BTCUSDT na Binance; HYPE na Hyperliquid).', true);
+  if (!start || !end) return flash('Preencha as datas De e Até.', true);
+  // ativo inexistente falha aqui, com sugestão — antes era HTTP 500 da corretora,
+  // que não diz o que fazer nenhum
+  const known = symbolCache.get($('cdVenue').value) || [];
+  if (known.length && !known.some((s) => s.toLowerCase() === symbol.toLowerCase())) {
+    return flash(`"${symbol}" não existe nessa corretora.${nearbySymbols(symbol, known)}`, true);
+  }
   const btn = $('btnCandles');
   btn.disabled = true; btn.textContent = 'Buscando…';
   try {
@@ -366,16 +573,11 @@ $('btnCandles').addEventListener('click', async () => {
     const j = await r.json();
     if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
     const rows = j.rows;
-    const hourly = /h$/.test($('cdInterval').value);
-    const lb = (ms) => {
-      const d = new Date(ms);
-      const dm = `${d.getUTCDate()}/${capFirst(MES[d.getUTCMonth()])}`;
-      return hourly ? `${dm} ${String(d.getUTCHours()).padStart(2, '0')}h` : dm;
-    };
+    const { labels, x } = candleLabels(rows, $('cdInterval').value, $('cdXLabel').value);
     const cSpec = {
       type: 'candle',
-      title: `${symbol.toUpperCase()} — ${$('cdVenue').value === 'binance' ? 'Binance' : 'Hyperliquid'}`,
-      labels: rows.map((k) => lb(k.t)),
+      title: `${shownSymbol(symbol)} — ${$('cdVenue').value === 'binance' ? 'Binance' : 'Hyperliquid'}`,
+      labels,
       series: [
         { name: 'Abertura', data: rows.map((k) => k.o) },
         { name: 'Máxima', data: rows.map((k) => k.h) },
@@ -383,18 +585,19 @@ $('btnCandles').addEventListener('click', async () => {
         { name: 'Fechamento', data: rows.map((k) => k.c) },
       ],
       y: { format: 'num', zero: false },
-      x: { every: Math.ceil(rows.length / 10) },
+      x,
     };
+    lastCandleRows = rows;
     if ($('cdVol').value === '1') {
-      cSpec.series.push({ name: 'Volume', data: rows.map((k) => k.v), as: 'bar', axis: 'y2', color: '#94A3B8' });
+      cSpec.series.push(volSeries(rows));
       cSpec.y2 = { format: 'compact' };
     }
     spec = { ...structuredClone(DEFAULTS), ...cSpec };
     exitEditIfOn(); fillControls(); buildSeries(); sync(); pushHistory();
     hideChat();   // dados de API, não de imagem — o chat da extração não se aplica
-    flash(`${rows.length} candles de ${symbol.toUpperCase()}.`);
+    flash(`${rows.length} candles de ${shownSymbol(symbol)}.`);
   } catch (e) {
-    flash('Candles: ' + e.message);
+    flash('Candles: ' + e.message, true);
   } finally {
     btn.disabled = false; btn.textContent = 'Buscar candles';
   }
@@ -404,17 +607,46 @@ function exitEditIfOn() { if (editMode) exitEdit(); }
 // ── Importar de HTML/SVG: reconstrói a spec do markup colado (sem IA) ─────────
 $('btnImportHtml').addEventListener('click', () => {
   const html = $('htmlIn').value.trim();
-  if (!html) return flash('Cole o HTML do elemento primeiro.');
+  if (!html) return flash('Cole o HTML do elemento primeiro.', true);
   let partial;
   try { partial = parseChartHtml(html); }
-  catch (err) { return flash('Não deu: ' + err.message); }
-  if (!partial || !partial.series?.length) return flash('Não achei gráfico nem tabela nesse HTML.');
+  catch (err) { return flash('Não deu: ' + err.message, true); }
+  if (!partial || !partial.series?.length) return flash('Não achei gráfico nem tabela nesse HTML.', true);
   spec = { ...structuredClone(DEFAULTS), ...partial };
+  const datou = datarX();                     // se as datas já estiverem preenchidas
   fillControls(); buildSeries(); sync();
   enterEdit(); pushHistory();
   const n = spec.series[0].data.length, cal = partial._calibrated;
   flash(`Importado — ${spec.series.length} série(s), ${n} pontos.` +
-    (cal ? ' Arraste pra ajustar.' : ' Sem eixo pra calibrar: defina mín/máx ou arraste.'));
+    (datou ? ' Eixo X datado.' : '') +
+    (partial._note ? ' ' + partial._note
+      : cal ? ' Arraste pra ajustar.' : ' Sem eixo pra calibrar: defina mín/máx ou arraste.'));
+});
+
+/* Datas no eixo X. Sparkline de card não escreve data nenhuma no HTML — o que
+ * dá pra saber é que os pontos são igualmente espaçados no tempo. Com as duas
+ * pontas da janela, o passo sai por divisão. Rótulo em dia/mês, ou mês/ano
+ * quando a janela passa de ~2 anos (senão vira papa de "13/Jan"). Não mexe em
+ * nada se faltar data ou série — devolve false. */
+function datarX() {
+  const a = Date.parse($('hxStart').value + 'T00:00:00Z'), b = Date.parse($('hxEnd').value + 'T00:00:00Z');
+  const n = spec.series?.[0]?.data.length || 0;
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a || n < 2) return false;
+  const longa = (b - a) > 730 * 864e5;
+  spec.labels = Array.from({ length: n }, (_, i) => {
+    const d = new Date(a + (b - a) * i / (n - 1));
+    return longa ? `${capFirst(MES[d.getUTCMonth()])}/${String(d.getUTCFullYear()).slice(2)}`
+      : `${d.getUTCDate()}/${capFirst(MES[d.getUTCMonth()])}`;
+  });
+  spec.x = { ...spec.x, every: Math.max(1, Math.ceil(n / MAX_X_LABELS)), hidden: [] };
+  return true;
+}
+
+$('btnDatarX').addEventListener('click', () => {
+  if (!spec.series?.length) return flash('Importe o gráfico primeiro.', true);
+  if (!datarX()) return flash('Preencha as duas datas (a última depois da primeira).', true);
+  fillControls(); buildSeries(); sync(); pushHistory();
+  flash(`Eixo X datado — ${spec.labels.length} pontos, 1 rótulo a cada ${spec.x.every}.`);
 });
 
 // decodifica a imagem no canvas -> ImageData pro extrator por pixel
@@ -428,7 +660,7 @@ async function fileToImageData(file) {
 }
 
 async function convertImage(file) {
-  if (!file.type.startsWith('image/')) return flash('Mande uma imagem (PNG/JPG).');
+  if (!file.type.startsWith('image/')) return flash('Mande uma imagem (PNG/JPG).', true);
   setReference(file);                      // já deixa a original pronta pra sobrepor
   $('btnIA').disabled = true;
   const timer = iaShow();
@@ -495,7 +727,7 @@ $('iaFab').addEventListener('click', openChat);
 $('iaMin').addEventListener('click', minChat);
 
 async function refineChart(message) {
-  if (!iaSession) return flash('Converta uma imagem primeiro.');
+  if (!iaSession) return flash('Converta uma imagem primeiro.', true);
   if (refining) return;                        // uma correção por vez
   refining = true;
   appendChat('user', message);
@@ -723,6 +955,25 @@ function midLabel(a, b) {
 // line/area/bar/stacked. Horizontal: hbar. Donut edita pela planilha.
 const editLayer = $('editLayer'), tip = $('dragTip');
 let drag = null, raf = 0;
+let labelDrag = null;   // { i, lbl, startClientX, startClientY, startDx, moved } — só horizontal
+
+// depois de inserir (delta=+1, at=índice novo) ou remover (delta=-1, at=índice
+// removido) um ponto, realinha os índices guardados em x.hidden/x.offsets —
+// senão "oculto no índice 5" passa a apontar pro ponto errado.
+function reindexX(at, delta) {
+  if (!spec.x) return;
+  const shift = (i) => (delta > 0 ? (i >= at ? i + 1 : i) : (i > at ? i - 1 : i));
+  if (Array.isArray(spec.x.hidden)) spec.x.hidden = spec.x.hidden.filter((i) => delta > 0 || i !== at).map(shift);
+  if (spec.x.offsets) {
+    const o = {};
+    for (const k in spec.x.offsets) {
+      const i = +k;
+      if (delta < 0 && i === at) continue;
+      o[shift(i)] = spec.x.offsets[k];
+    }
+    spec.x.offsets = o;
+  }
+}
 
 // tela → coordenadas do viewBox do SVG
 function toViewBox(clientX, clientY) {
@@ -822,6 +1073,18 @@ function roundNice(v, axis) {
 }
 
 editLayer.addEventListener('pointermove', (e) => {
+  if (labelDrag) {   // arrastando um rótulo do eixo X: só desloca na horizontal, o dado não muda
+    const vb0 = labelDrag.vb0;
+    const dx = (e.clientX - labelDrag.startClientX) * (spec.width / vb0.r.width);
+    const dy = (e.clientY - labelDrag.startClientY) * (spec.height / vb0.r.height);
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) labelDrag.moved = true;   // qualquer direção conta como "arrastou"
+    if (labelDrag.moved) {
+      spec.x = spec.x || {}; spec.x.offsets = spec.x.offsets || {};
+      spec.x.offsets[labelDrag.i] = Math.round(labelDrag.startDx + dx);   // só o componente horizontal é aplicado
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; sync({ keepTable: true, keepJson: true }); });
+    }
+    return;
+  }
   if (!drag) {   // hover: mostra que dá pra pegar (ponto) ou renomear (rótulo)
     const vb = toViewBox(e.clientX, e.clientY);
     const onLabel = !!(vb && labelZone(vb));
@@ -844,16 +1107,36 @@ editLayer.addEventListener('pointerdown', (e) => {
   if (!editMode) return;
   const vb = toViewBox(e.clientX, e.clientY);
   if (!vb) return;
-  const lbl = labelZone(vb);              // clicou na faixa do eixo → renomear inline
-  if (lbl) { e.preventDefault(); editLabel(lbl); return; }
+  const lbl = labelZone(vb);              // clicou na faixa do eixo
+  if (lbl) {
+    e.preventDefault();
+    if (lbl.axis) { editLabel(lbl); return; }   // tick do eixo Y: renomeia direto, como já era
+    // rótulo do eixo X: só decide clique (renomeia) vs arraste (reposiciona) no pointerup
+    const startDx = (spec.x?.offsets || {})[lbl.i] || 0;
+    labelDrag = { i: lbl.i, lbl, startClientX: e.clientX, startClientY: e.clientY, startDx, vb0: vb, moved: false };
+    editLayer.setPointerCapture(e.pointerId);
+    return;
+  }
   const m = nearestMark(vb.x, vb.y);
   if (m) { drag = m; editLayer.setPointerCapture(e.pointerId); editLayer.classList.add('dragging'); }
 });
+// solta a captura só se ela ainda estiver ativa — o navegador pode já ter
+// liberado sozinho (ex.: pointercancel), e chamar de novo lança NotFoundError
+// e aborta o resto do endDrag (perderia o commit/histórico em silêncio)
+const releaseCapture = (e) => { if (e && editLayer.hasPointerCapture?.(e.pointerId)) editLayer.releasePointerCapture(e.pointerId); };
+
 function endDrag(e) {
+  if (labelDrag) {
+    const ld = labelDrag; labelDrag = null;
+    releaseCapture(e);
+    if (!ld.moved) editLabel(ld.lbl);             // não arrastou: foi um clique → renomeia
+    else { sync(); pushHistory(); flash('Rótulo reposicionado.'); }
+    return;
+  }
   if (!drag) return;
   drag = null; tip.hidden = true;
   editLayer.classList.remove('dragging');
-  if (e) editLayer.releasePointerCapture(e.pointerId);
+  releaseCapture(e);
   sync();          // fecha atualizando planilha + JSON
   pushHistory();   // cada arraste vira um passo de undo
 }
@@ -874,27 +1157,43 @@ editLayer.addEventListener('dblclick', (e) => {
     const a = se.data[idx - 1] ?? se.data[idx] ?? 0, b = se.data[idx] ?? se.data[idx - 1] ?? 0;
     se.data.splice(idx, 0, roundNice((a + b) / 2));
   });
+  reindexX(idx, +1);
   sync(); pushHistory();
   flash('Ponto adicionado.');
 });
 
-// remover ponto: botão direito em cima de uma marca tira aquela coluna
+// botão direito: em cima de um RÓTULO do eixo X alterna oculto/visível (o
+// dado continua intacto); em cima de uma MARCA (ponto/barra) remove a coluna
 editLayer.addEventListener('contextmenu', (e) => {
   if (!editMode) return;
   e.preventDefault();
   const vb = toViewBox(e.clientX, e.clientY);
+  const lbl = labelZone(vb);
+  if (lbl && !lbl.axis) {
+    spec.x = spec.x || {}; spec.x.hidden = spec.x.hidden || [];
+    const k = spec.x.hidden.indexOf(lbl.i);
+    if (k >= 0) { spec.x.hidden.splice(k, 1); flash('Rótulo visível.'); }
+    else { spec.x.hidden.push(lbl.i); flash('Rótulo oculto (valor mantido).'); }
+    sync(); pushHistory();
+    return;
+  }
   const m = vb && nearestMark(vb.x, vb.y);
   if (!m || spec.labels.length <= 2) return;   // mantém ao menos 2 pontos
   spec.labels.splice(m.i, 1);
   spec.series.forEach((se) => se.data.splice(m.i, 1));
+  reindexX(m.i, -1);
   sync(); pushHistory();
   flash('Ponto removido.');
 });
 
+// erro fica mais tempo e em vermelho — status text normal (4s, cor discreta)
+// já passou batido antes (erro sumia rápido e ninguém via)
 let flashT;
-function flash(msg) {
-  $('status').textContent = msg;
-  clearTimeout(flashT); flashT = setTimeout(() => ($('status').textContent = ''), 4000);
+function flash(msg, isError = false) {
+  const el = $('status');
+  el.textContent = msg;
+  el.classList.toggle('err', isError);
+  clearTimeout(flashT); flashT = setTimeout(() => { el.textContent = ''; el.classList.remove('err'); }, isError ? 8000 : 4000);
 }
 
 // ── start ────────────────────────────────────────────────────────────────────

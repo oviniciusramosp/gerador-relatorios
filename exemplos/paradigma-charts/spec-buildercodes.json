@@ -1,0 +1,62 @@
+{
+  "type": "hbar",
+  "title": "Builder Codes: Total de Taxas Coletadas",
+  "subtitle": "",
+  "source": "",
+  "labels": [
+    "Phantom",
+    "Based",
+    "PVP",
+    "MetaMask",
+    "Insilico",
+    "Infinex",
+    "Axiom",
+    "TreadFi",
+    "Dreamcash",
+    "Liquid",
+    "Other"
+  ],
+  "series": [
+    {
+      "name": "Taxas",
+      "data": [
+        23430000,
+        15210000,
+        8030000,
+        7920000,
+        3670000,
+        2760000,
+        2360000,
+        2220000,
+        1830000,
+        1490000,
+        20850000
+      ]
+    }
+  ],
+  "y": {
+    "format": "compact",
+    "prefix": "$"
+  },
+  "labelMode": "all",
+  "legend": "none",
+  "theme": "light",
+  "strokeWidth": 8,
+  "fontScale": 1.6,
+  "watermark": {
+    "logo": "icone",
+    "pos": "center",
+    "region": "externo",
+    "align": "right",
+    "color": "#94A3B8",
+    "opacity": 0.1,
+    "size": 0.7
+  },
+  "show": {
+    "title": false,
+    "subtitle": false,
+    "source": false
+  },
+  "width": 1200,
+  "height": 675
+}

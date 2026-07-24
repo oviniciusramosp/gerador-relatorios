@@ -448,7 +448,9 @@
      não faz sentido semântico de <label>) — o global label.field (paradigma.css) só casa com a TAG
      label, então não pegava. Replica a MESMA declaração aqui, escopada aos dois popovers (não mexe
      no seletor global, que a sidebar A e os gráficos também usam). */
-  #imgPanel .field, #coverPanel .field { display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); }
+  #imgPanel .field, #coverPanel .field, #blockcol { display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); }
+  #blockcol { margin-top: .5rem; }
+  #blockcol[hidden] { display: none; }
   /* trilha H (t3): linha "rótulo + valor" do slider (Cantos raio / Tamanho) — valor px empurrado
      pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de baixo, como
      já era). (t4) botão de reset discreto colado ao lado do valor, dentro do mesmo grupo à direita. */
@@ -575,7 +577,7 @@
     <span class="hsep"></span>
     <button id="btnUndo" title="Desfazer (⌘Z)" disabled>↩︎</button>
     <button id="btnRedo" title="Refazer (⌘⇧Z)" disabled>↪︎</button>
-    <button id="btnMd" title="Salvar uma cópia editável (.pdgm.json)">Salvar</button>
+    <button id="btnMd" title="Salvar uma cópia editável (.pdgm.zip)">Salvar</button>
     <button id="btnPrint" class="primary" title="Gerar e baixar o PDF (igual à visualização)">Baixar PDF</button>
   </nav>
 </header>
@@ -593,9 +595,11 @@
         <div class="body">
           <div id="srcRow" hidden></div>
           <button id="btnFile">Importar arquivo (.md, .txt)</button>
-          <input type="file" id="file" accept=".md,.markdown,.txt,.pdgm.json,text/plain,text/markdown,application/json" hidden>
+          <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
+          <input type="file" id="fileProject" accept=".pdgm.zip,.zip,.pdgm.json,.json,application/zip,application/json" hidden>
           <div class="row">
             <button id="btnNew">Novo Documento</button>
+            <button id="btnOpen" title="Abrir um projeto salvo (.pdgm.zip)">Abrir</button>
           </div>
         </div>
       </details>
@@ -743,6 +747,9 @@
             <button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button>
             <button data-type="pagebreak" title="Quebra de página (⌘⏎)"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h8v3H4zM4 11h8v3H4z"/><path d="M1.5 8h3M6.5 8h3M12 8h2.5"/></svg></span><span class="lbl">Quebra de Página</span><span class="sc">⌘⏎</span></button>
           </div>
+          <!-- coluna do bloco EM FOCO — mesmo componente (columnField) do popover de Imagem e
+               da Capa; o JS (syncColUI) preenche/limpa conforme state.activeId -->
+          <div class="field" id="blockcol" hidden>Coluna<div data-slot="col"></div></div>
         </div>
       </details>
     </div>

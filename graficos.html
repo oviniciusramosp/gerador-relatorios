@@ -32,7 +32,7 @@
   }
   details > summary::before { content: "▸ "; display: inline-block; transition: transform .12s; }
   details[open] > summary::before { transform: rotate(90deg); }
-  details > .body { display: grid; gap: .55rem; padding: .5rem 0 .9rem; }
+  details > .body, .pane > .body { display: grid; gap: .55rem; padding: .5rem 0 .9rem; }
 
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
 
@@ -97,6 +97,8 @@
   .iconbtn:disabled { opacity: .35; cursor: default; }
   .edit-handle { fill: color-mix(in srgb, var(--ink) 70%, transparent); stroke: var(--violet); stroke-width: 2; pointer-events: none; }
   .edit-handle.hot { fill: var(--ink); }
+  /* rótulo oculto do eixo X: marquinha fantasma só pra achar e clicar de novo */
+  .edit-handle-ghost { fill: none; stroke: var(--violet); stroke-width: 1.5; stroke-dasharray: 2 2; opacity: .6; pointer-events: none; }
   #dragTip {
     position: absolute; z-index: 6; pointer-events: none;
     padding: .2rem .5rem; border-radius: 5px; font-size: .8rem; font-weight: 600;
@@ -157,6 +159,7 @@
   }
   .bar .sep { flex: 1; }
   .hint { font-size: .72rem; color: var(--muted); font-stretch: 90%; }
+  #status.err { color: #FF6B6B; font-weight: 600; }
 
   /* chat flutuante com a IA da extração (mesma sessão) */
   #iaFab {
@@ -243,25 +246,28 @@
     <details open>
       <summary>Dados</summary>
       <div class="body">
-        <label class="field">
-          Dados em CSV (1ª coluna = rótulos, 1ª linha = nomes das séries)
-          <textarea id="tsv" spellcheck="false"></textarea>
-        </label>
-        <div class="row">
-          <button id="btnIA" class="primary">Converter imagem em gráfico…</button>
-          <button id="btnCsv" title="Baixar os dados em CSV">Baixar CSV</button>
+        <div class="segment cols-3" id="dataSegment" role="tablist">
+          <button data-seg="imagem" aria-selected="true">Imagem</button>
+          <button data-seg="corretora" aria-selected="false">Corretora</button>
+          <button data-seg="html" aria-selected="false">HTML</button>
         </div>
-        <p class="hint" id="iaHint">Escolha uma imagem de gráfico — o Claude lê o eixo e os dados e monta o gráfico no padrão da casa. Depois <b>arraste os pontos (ou o topo das barras)</b> no gráfico à direita pra ajustar.</p>
 
-        <details>
-          <summary>Candles por API (Binance / Hyperliquid)</summary>
+        <div class="pane" data-pane="imagem">
+          <div class="body">
+            <button id="btnIA" class="primary">Converter imagem em gráfico…</button>
+            <p class="hint" id="iaHint">Escolha uma imagem de gráfico — o Claude lê o eixo e os dados e monta o gráfico no padrão da casa. Depois <b>arraste os pontos (ou o topo das barras)</b> no gráfico à direita pra ajustar.</p>
+          </div>
+        </div>
+
+        <div class="pane" data-pane="corretora" hidden>
           <div class="body">
             <div class="grid2">
               <label class="field">Corretora
                 <select id="cdVenue"><option value="binance">Binance</option><option value="hyperliquid">Hyperliquid</option></select>
               </label>
               <label class="field">Ativo
-                <input id="cdSymbol" type="text" placeholder="BTCUSDT" spellcheck="false">
+                <input id="cdSymbol" type="text" placeholder="BTCUSDT ou cole a URL da corretora" spellcheck="false" list="cdSymbolList" autocomplete="off">
+                <datalist id="cdSymbolList"></datalist>
               </label>
               <label class="field">Intervalo
                 <select id="cdInterval">
@@ -274,6 +280,13 @@
               <label class="field">Volume
                 <select id="cdVol"><option value="1">Mostrar (eixo dir.)</option><option value="0">Ocultar</option></select>
               </label>
+              <label class="field">Rótulo do eixo X
+                <select id="cdXLabel">
+                  <option value="dia">Dia (marca a virada)</option>
+                  <option value="diahora">Dia e hora</option>
+                  <option value="hora">Só a hora</option>
+                </select>
+              </label>
               <label class="field">De
                 <input id="cdStart" type="date">
               </label>
@@ -282,19 +295,39 @@
               </label>
             </div>
             <button id="btnCandles" class="primary">Buscar candles</button>
-            <p class="hint">Binance: par completo (BTCUSDT). Hyperliquid: só a moeda (HYPE, BTC). API pública, sem chave.</p>
+            <p class="hint">Binance: par completo (BTCUSDT). Hyperliquid: a moeda (HYPE, BTC) ou um mercado HIP-3 com o prefixo do dex (xyz:CL, cash:WTI). Digite pra autocompletar ou cole a URL do gráfico na corretora. API pública, sem chave.</p>
           </div>
-        </details>
+        </div>
 
-        <details>
-          <summary>Importar de HTML/SVG</summary>
+        <div class="pane" data-pane="html" hidden>
           <div class="body">
             <label class="field">
               Cole o HTML do elemento (no site: botão-direito no gráfico → Inspecionar → botão-direito no nó → Copy → Copy element)
               <textarea id="htmlIn" spellcheck="false" placeholder="&lt;div data-chart-id=…&gt; … &lt;/div&gt;"></textarea>
             </label>
             <button id="btnImportHtml">Importar</button>
+            <div class="grid2">
+              <label class="field">Primeiro ponto
+                <input id="hxStart" type="date">
+              </label>
+              <label class="field">Último ponto
+                <input id="hxEnd" type="date">
+              </label>
+            </div>
+            <button id="btnDatarX">Datar o eixo X</button>
             <p class="hint">SVG (recharts e afins): lê a curva e os eixos e reconstrói os valores reais — sem IA, na hora. Só cola o HTML, não a URL (o navegador não lê outro domínio).</p>
+            <p class="hint">Sparkline de card não traz data nenhuma no HTML. Preencha as duas pontas da janela e os pontos são datados em passo constante (aplica junto no Importar).</p>
+          </div>
+        </div>
+
+        <details open>
+          <summary>CSV</summary>
+          <div class="body">
+            <label class="field">
+              Dados em CSV (1ª coluna = rótulos, 1ª linha = nomes das séries) — qualquer uma das 3 opções acima preenche aqui, ou edite direto
+              <textarea id="tsv" spellcheck="false"></textarea>
+            </label>
+            <button id="btnCsv" title="Baixar os dados em CSV">Baixar CSV</button>
           </div>
         </details>
       </div>
@@ -303,7 +336,7 @@
     <details open>
       <summary>Formato</summary>
       <div class="body">
-        <div class="field">Tipo
+        <div class="field">
           <div class="typepick" id="typePicker">
             <button type="button" data-type="line" title="Linha"><svg viewBox="0 0 24 16"><polyline points="1,13 7,7 13,10 23,2" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>Linha</span></button>
             <button type="button" data-type="area" title="Área"><svg viewBox="0 0 24 16"><path d="M1 13 7 7 13 10 23 2 23 15 1 15Z" fill="currentColor" opacity=".35"/><polyline points="1,13 7,7 13,10 23,2" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>Área</span></button>
@@ -319,6 +352,15 @@
         <label class="field">Tema
           <select id="theme"><option value="light">Claro</option><option value="dark">Escuro</option></select>
         </label>
+        <div class="grid2" id="candleOpts" hidden>
+          <label class="field">Candle de alta
+            <button type="button" class="colorfield" id="candleUp" title="Cor do candle de alta"></button>
+          </label>
+          <label class="field">Candle de baixa
+            <button type="button" class="colorfield" id="candleDown" title="Cor do candle de baixa"></button>
+          </label>
+          <label class="field">Espessura do pavio<input id="candleWick" type="number" min="0" max="20" step="0.2"></label>
+        </div>
         <div class="labelrow">
           <button type="button" class="lblswitch" id="showTitle" role="switch" aria-checked="false" title="Mostrar no gráfico"></button>
           <label class="field">Título<input id="title" type="text"></label>
@@ -401,6 +443,9 @@
           <label class="field">Grade
             <select id="grid"><option value="y">Horizontal</option><option value="x">Vertical</option><option value="both">Ambas</option><option value="none">Nenhuma</option></select>
           </label>
+          <label class="field">Eixo Y
+            <select id="yside"><option value="left">Esquerda</option><option value="right">Direita</option></select>
+          </label>
           <label class="field">Legenda
             <select id="legend"><option value="top">Topo</option><option value="bottom">Base</option><option value="none">Nenhuma</option></select>
           </label>
@@ -463,7 +508,7 @@
       <button id="editToggle">✎ Editar</button>
       <button id="undo" class="iconbtn" title="Desfazer (⌘Z)" hidden>↶</button>
       <button id="redo" class="iconbtn" title="Refazer (⇧⌘Z)" hidden>↷</button>
-      <span class="hint" id="editHint" hidden>arraste os pontos · clique num rótulo dos eixos (X ou Y) renomeia · 2 cliques adiciona · botão-direito remove</span>
+      <span class="hint" id="editHint" hidden>arraste os pontos · no rótulo do eixo: clique renomeia, arraste desloca o texto na horizontal, botão-direito oculta/mostra · 2 cliques no gráfico adiciona ponto · botão-direito num ponto remove</span>
       <span class="sep"></span>
       <label class="toggle">PNG em <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>×</label>
       <span class="hint" id="dims"></span>
