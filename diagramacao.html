@@ -371,6 +371,20 @@
     .page.cover-page .cover-item.cover-sel { outline: none; }
     .breakmark, .drag-badge, #fmtbar, #addImgMenu, #imgPanel, #coverPanel, #chartModal, .snap-guide, #bhandle, #dropline { display: none !important; }
   }
+
+  /* trilha D: logo fixo da Paradigma no cabeçalho/rodapé da capa e contracapa.
+     Faixa absoluta nas mesmas margens do cover-area (48/40); o justify alinha o
+     svg esq/centro/dir. pointer-events:none pra nunca roubar o clique dos textos. */
+  .page.cover-page .cover-logo { position: absolute; left: 48px; right: 48px; display: flex; align-items: center; z-index: 3; pointer-events: none; }
+  .page.cover-page .cover-logo.lg-header { top: 40px; }
+  .page.cover-page .cover-logo.lg-footer { bottom: 40px; }
+  .page.cover-page .cover-logo svg { display: block; }
+  /* trilha D: picker do logo na sidebar (mesmo desenho dos botões de tipo/posição) */
+  .logopick { display: grid; grid-template-columns: repeat(4, 1fr); gap: .3rem; margin-top: .3rem; }
+  .logopick button { padding: .35rem .2rem; border: 1px solid var(--hair); border-radius: var(--r);
+    background: transparent; color: var(--muted); cursor: pointer; font-size: .72rem; font-stretch: 85%; }
+  .logopick button:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .logopick button[aria-pressed="true"] { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
 </style>
 </head>
 <body>
@@ -426,6 +440,35 @@
               <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="cover" min="0" max="100" value="50"></label>
               <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="cover" min="0" max="100" value="50"></label>
             </div>
+            <div class="field">Logo da Paradigma
+              <div class="logopick" data-logopick="cover">
+                <button type="button" data-logokind="none" aria-pressed="true"><span>Nenhum</span></button>
+                <button type="button" data-logokind="icone"><span>Ícone</span></button>
+                <button type="button" data-logokind="full"><span>Completo</span></button>
+                <button type="button" data-logokind="nome"><span>Nome</span></button>
+              </div>
+            </div>
+            <div class="grid2" data-logoopts="cover" hidden>
+              <label class="field">Posição
+                <select data-logopos="cover">
+                  <option value="header">Cabeçalho (topo)</option>
+                  <option value="footer">Rodapé (base)</option>
+                </select>
+              </label>
+              <label class="field">Alinhamento
+                <select data-logoalign="cover">
+                  <option value="left">Esquerda</option>
+                  <option value="center">Centro</option>
+                  <option value="right">Direita</option>
+                </select>
+              </label>
+              <label class="field">Cor do logo
+                <button type="button" class="colorfield" data-logocolor="cover" title="Escolher cor do logo"></button>
+              </label>
+              <label class="field">Tamanho <span class="hint" data-logosizev="cover"></span>
+                <input type="range" data-logosize="cover" min="40" max="260" value="100">
+              </label>
+            </div>
             <div class="row"><button data-addtxt="cover">+ Texto</button></div>
             <p class="hint" style="margin:0">Duas colunas. Clique num texto para tamanho, cor, coluna e alinhamento. Arraste pela alça <b>⠿</b> para reposicionar no eixo Y. Quantos blocos quiser.</p>
           </div>
@@ -442,6 +485,35 @@
             <div class="grid2">
               <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="back" min="0" max="100" value="50"></label>
               <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="back" min="0" max="100" value="50"></label>
+            </div>
+            <div class="field">Logo da Paradigma
+              <div class="logopick" data-logopick="back">
+                <button type="button" data-logokind="none" aria-pressed="true"><span>Nenhum</span></button>
+                <button type="button" data-logokind="icone"><span>Ícone</span></button>
+                <button type="button" data-logokind="full"><span>Completo</span></button>
+                <button type="button" data-logokind="nome"><span>Nome</span></button>
+              </div>
+            </div>
+            <div class="grid2" data-logoopts="back" hidden>
+              <label class="field">Posição
+                <select data-logopos="back">
+                  <option value="header">Cabeçalho (topo)</option>
+                  <option value="footer">Rodapé (base)</option>
+                </select>
+              </label>
+              <label class="field">Alinhamento
+                <select data-logoalign="back">
+                  <option value="left">Esquerda</option>
+                  <option value="center">Centro</option>
+                  <option value="right">Direita</option>
+                </select>
+              </label>
+              <label class="field">Cor do logo
+                <button type="button" class="colorfield" data-logocolor="back" title="Escolher cor do logo"></button>
+              </label>
+              <label class="field">Tamanho <span class="hint" data-logosizev="back"></span>
+                <input type="range" data-logosize="back" min="40" max="260" value="100">
+              </label>
             </div>
             <div class="row"><button data-addtxt="back">+ Texto</button></div>
           </div>
