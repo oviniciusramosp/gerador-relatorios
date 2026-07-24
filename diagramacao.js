@@ -18,6 +18,7 @@
 import { openSwatchPop } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
 import { autocropWhite } from './autocrop.js'; // trilha C (t3): recrop da margem branca de imagens
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
+import { LOGOS } from './logos.js';            // trilha D (t8): logos tingíveis (currentColor) — mesma fonte dos gráficos
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
@@ -85,6 +86,11 @@ const mkBlock = (type, html = '') => ({ id: uid(), type, html });
 // item de capa/contracapa: texto livre — tamanho, coluna (esq/dir/ambas), alinhamento, cor
 // e posição Y livre (arrastável, como as imagens da coluna direita).
 const coverItem = (html, size, span, align, color = null, y = 0) => ({ id: uid(), html, size, span, align, color, y });
+// logo da Paradigma FIXO no cabeçalho/rodapé da capa/contracapa — NÃO é coverItem
+// arrastável: mora fora do fluxo de itens e do anti-sobreposição. Tingido via
+// currentColor (como nos gráficos), escalado por size. defaultLogo() serve o seed
+// E a migração de config antiga (LS salvo antes deste campo existir).
+const defaultLogo = () => ({ on: false, kind: 'icone', pos: 'header', align: 'left', color: '#FFFFFF', size: 1 });
 
 function seedDoc() {
   return {
@@ -92,11 +98,11 @@ function seedDoc() {
     footText: 'paradigma.education', headText: '', firstPage: 1, source: null,
     // páginas especiais — ligadas por padrão via switcher no painel Documento.
     // bgX/bgY = posição do fundo (Fill) em %; itens posicionados por coluna (x) + y livre.
-    cover: { on: true, bg: null, bgX: 50, bgY: 50, items: [
+    cover: { on: true, bg: null, bgX: 50, bgY: 50, logo: defaultLogo(), items: [
       coverItem('Título do relatório', 40, 'full', 'left', null, 330),
       coverItem('Subtítulo · Paradigma Education', 15, 'full', 'left', null, 392),
     ] },
-    back: { on: true, bg: null, bgX: 50, bgY: 50, items: [
+    back: { on: true, bg: null, bgX: 50, bgY: 50, logo: defaultLogo(), items: [
       coverItem('paradigma.education', 18, 'full', 'center', null, 360),
     ] },
     index: { on: true, resumo: '<p>Escreva aqui o resumo do relatório.</p>' },
@@ -114,9 +120,12 @@ function load() {
     if (cfg.cover) state.doc.cover = cfg.cover;
     if (cfg.back) state.doc.back = cfg.back;
     if (cfg.index) state.doc.index = cfg.index;
-    // migração: capas salvas antes do Y livre não têm item.y → empilha
+    // migração: capas salvas antes do Y livre não têm item.y → empilha;
+    // capas salvas antes do logo não têm cov.logo → default (não quebra LS antigo)
     [state.doc.cover, state.doc.back].forEach(cov => {
-      if (!cov || !cov.items) return;
+      if (!cov) return;
+      if (!cov.logo) cov.logo = defaultLogo();
+      if (!cov.items) return;
       let yy = 40;
       cov.items.forEach(it => { if (typeof it.y !== 'number') { it.y = yy; yy += 60; } });
     });
@@ -435,7 +444,29 @@ function renderCoverPage(kind, cov) {
   const area = document.createElement('div'); area.className = 'cover-area';
   cov.items.forEach(it => area.appendChild(buildCoverItem(kind, it)));   // absolutos: coluna (x) + y livre
   page.appendChild(area);
+  if (cov.logo && cov.logo.on) page.appendChild(buildCoverLogo(cov.logo));   // faixa fixa topo/base
   return page;
+}
+
+const LOGO_BASE_H = 30;   // altura-base (px) do logo em size=1; o slider (40–260%) escala em cima
+// <svg> do logo tingido — mesma montagem do logoSvg() dos gráficos (currentColor→cor),
+// mas aqui vira DOM (innerHTML). preserveAspectRatio mantém a proporção w/h do logo.
+function coverLogoSvg(lg) {
+  const L = LOGOS[lg.kind]; if (!L) return '';
+  const h = LOGO_BASE_H * (lg.size || 1), w = h * (L.w / L.h);
+  const inner = L.inner.replace(/currentColor/g, lg.color || '#FFFFFF');
+  return `<svg width="${+w.toFixed(1)}" height="${+h.toFixed(1)}" viewBox="0 0 ${L.w} ${L.h}"`
+    + ` preserveAspectRatio="xMidYMid meet" aria-hidden="true">${inner}</svg>`;
+}
+// faixa fixa (cabeçalho topo / rodapé base) com o logo alinhado esq/centro/dir. Fora
+// do cover-area e do arrasto/anti-sobreposição; render sempre (mesmo !editing) → sai
+// vetorial no PDF automaticamente via exportPagesHtml.
+function buildCoverLogo(lg) {
+  const el = document.createElement('div');
+  el.className = 'cover-logo ' + (lg.pos === 'footer' ? 'lg-footer' : 'lg-header');
+  el.style.justifyContent = lg.align === 'center' ? 'center' : lg.align === 'right' ? 'flex-end' : 'flex-start';
+  el.innerHTML = coverLogoSvg(lg);
+  return el;
 }
 // larguras das colunas na capa (iguais às do miolo): esq 258 · dir 217 · gap 24 → x=282
 function coverColBox(span) {
@@ -1513,6 +1544,31 @@ function syncSpecialUI() {
   document.querySelectorAll('[data-bgx]').forEach(s => { s.value = specialObj(s.dataset.bgx).bgX ?? 50; });
   document.querySelectorAll('[data-bgy]').forEach(s => { s.value = specialObj(s.dataset.bgy).bgY ?? 50; });
   syncSubCtrl();
+  syncLogoUI();
+}
+// espelha o campo logo (de cada capa) na sidebar. "none" = logo desligado; os opts
+// (posição/alinhamento/cor/tamanho) só aparecem com o logo ligado.
+function syncLogoUI() {
+  document.querySelectorAll('[data-logopick]').forEach(pick => {
+    const lg = specialObj(pick.dataset.logopick).logo;
+    const active = lg.on ? lg.kind : 'none';
+    pick.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.logokind === active)));
+  });
+  document.querySelectorAll('[data-logoopts]').forEach(o => { o.hidden = !specialObj(o.dataset.logoopts).logo.on; });
+  document.querySelectorAll('[data-logopos]').forEach(s => { s.value = specialObj(s.dataset.logopos).logo.pos; });
+  document.querySelectorAll('[data-logoalign]').forEach(s => { s.value = specialObj(s.dataset.logoalign).logo.align; });
+  document.querySelectorAll('[data-logocolor]').forEach(b => { b.style.background = specialObj(b.dataset.logocolor).logo.color; });
+  document.querySelectorAll('[data-logosize]').forEach(s => { s.value = Math.round((specialObj(s.dataset.logosize).logo.size || 1) * 100); });
+  document.querySelectorAll('[data-logosizev]').forEach(sp => { sp.textContent = (+(specialObj(sp.dataset.logosizev).logo.size || 1).toFixed(2)) + '×'; });
+}
+// escala ao vivo (sem re-render, como os sliders de fundo) — só redimensiona o <svg> já montado
+function applyCoverLogoLive(kind) {
+  const lg = specialObj(kind).logo;
+  const svg = pagesEl.querySelector(`.page[data-cover="${kind}"] .cover-logo svg`);
+  if (!svg) { if (lg.on) render(); return; }        // logo ainda não existe no DOM → render normal
+  const L = LOGOS[lg.kind]; if (!L) return;
+  const h = LOGO_BASE_H * (lg.size || 1);
+  svg.setAttribute('height', +h.toFixed(1)); svg.setAttribute('width', +(h * (L.w / L.h)).toFixed(1));
 }
 // reposiciona o fundo ao vivo (sem re-render) — Fill com controle X/Y
 function applyCoverBgPos(kind) {
@@ -1532,6 +1588,26 @@ document.querySelectorAll('[data-rmbg]').forEach(btn => btn.addEventListener('cl
 document.querySelectorAll('[data-addtxt]').forEach(btn => btn.addEventListener('click', () => addCoverText(btn.dataset.addtxt)));
 document.querySelectorAll('[data-bgx]').forEach(s => s.addEventListener('input', (e) => { specialObj(s.dataset.bgx).bgX = +e.target.value; applyCoverBgPos(s.dataset.bgx); save(); scheduleCommit(); }));
 document.querySelectorAll('[data-bgy]').forEach(s => s.addEventListener('input', (e) => { specialObj(s.dataset.bgy).bgY = +e.target.value; applyCoverBgPos(s.dataset.bgy); save(); scheduleCommit(); }));
+// ── logo da Paradigma na capa/contracapa (trilha D) — picker + posição/alinhamento/cor/tamanho ──
+document.querySelectorAll('[data-logopick]').forEach(pick => pick.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-logokind]'); if (!b) return;
+  const lg = specialObj(pick.dataset.logopick).logo;
+  if (b.dataset.logokind === 'none') lg.on = false;          // "none" desliga; demais ligam e trocam o kind
+  else { lg.on = true; lg.kind = b.dataset.logokind; }
+  syncLogoUI(); render();
+}));
+document.querySelectorAll('[data-logopos]').forEach(s => s.addEventListener('change', (e) => { specialObj(s.dataset.logopos).logo.pos = e.target.value; render(); }));
+document.querySelectorAll('[data-logoalign]').forEach(s => s.addEventListener('change', (e) => { specialObj(s.dataset.logoalign).logo.align = e.target.value; render(); }));
+document.querySelectorAll('[data-logocolor]').forEach(b => b.addEventListener('click', () => {
+  const lg = specialObj(b.dataset.logocolor).logo;
+  openSwatchPop(b, (hex) => { lg.color = hex; b.style.background = hex; render(); }, lg.color);
+}));
+document.querySelectorAll('[data-logosize]').forEach(s => s.addEventListener('input', (e) => {
+  const kind = s.dataset.logosize, lg = specialObj(kind).logo;
+  lg.size = +e.target.value / 100;
+  const sp = document.querySelector(`[data-logosizev="${kind}"]`); if (sp) sp.textContent = (+lg.size.toFixed(2)) + '×';
+  applyCoverLogoLive(kind); save(); scheduleCommit();
+}));
 document.getElementById('zoom').addEventListener('change', (e) => { state.zoom = e.target.value === 'fit' ? 'fit' : +e.target.value; applyZoom(); });
 
 // ── exportar PDF (WYSIWYG, vetorial, com links) — sem o diálogo de imprimir ──
