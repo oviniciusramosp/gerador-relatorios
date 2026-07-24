@@ -16,6 +16,8 @@
  */
 
 import { openSwatchPop } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
+import { autocropWhite } from './autocrop.js'; // trilha C (t3): recrop da margem branca de imagens
+import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
@@ -76,6 +78,7 @@ const state = {
   doc: null,          // { blocks:[], footText, firstPage, source }
   sel: null,          // id da imagem selecionada
   zoom: 1,
+  autocrop: true,     // trilha C (t3): recortar margem branca ao inserir imagem (não persiste)
 };
 
 const mkBlock = (type, html = '') => ({ id: uid(), type, html });
@@ -383,11 +386,10 @@ function buildToc(content) {
     for (const b of pg.left) {
       const lvl = b.type === 'h1' ? 1 : b.type === 'h2' ? 2 : b.type === 'h3' ? 3 : 0;
       if (!lvl) continue;
-      if (lvl === 1) { c[0]++; c[1] = 0; c[2] = 0; }
-      else if (lvl === 2) { c[1]++; c[2] = 0; }
-      else { c[2]++; }
-      const num = lvl === 1 ? `${c[0]}` : lvl === 2 ? `${c[0]}.${c[1]}` : `${c[0]}.${c[1]}.${c[2]}`;
-      rows.push({ num, level: lvl, text: stripHtml(b.html), pageIdx: ci });
+      // trilha C (t4): se o título já vem numerado ("1.2 - X"), usa o número lido
+      // e remove o prefixo do texto; senão, contador hierárquico. tocNum muta c[].
+      const { num, text } = tocNum(lvl, stripHtml(b.html), c);
+      rows.push({ num, level: lvl, text, pageIdx: ci });
     }
   });
   return rows;
@@ -971,6 +973,7 @@ function openImgPanel() {
     <label class="field">Cantos (raio) <span data-role="radv" style="color:var(--muted)">${b.radius ?? 4}px</span>
       <input type="range" data-a="radius" min="0" max="24" step="1" value="${b.radius ?? 4}">
     </label>
+    <label class="checkrow"><input type="checkbox" data-a="autocrop" ${state.autocrop !== false ? 'checked' : ''}>Cortar margem branca <span style="color:var(--muted)">(próxima imagem)</span></label>
     <button data-a="del" style="color:#CE5249">Remover imagem</button>`;
   imgPanel.hidden = false;
   // seletor de coluna (MESMO componente da capa): imagem usa 'inline'/'full'/'right'
@@ -993,6 +996,7 @@ function openImgPanel() {
         save(); scheduleCommit();
         return;
       }
+      if (a === 'autocrop') { state.autocrop = el.checked; return; }   // só o padrão da próxima imagem; sem re-render
       if (a === 'title') b.title = b.title != null ? null : '';
       else if (a === 'caption') b.caption = b.caption != null ? null : '';
       else if (a === 'del') { state.doc.blocks.splice(idxOf(b.id), 1); state.sel = null; closeImgPanel(); }
@@ -1270,7 +1274,16 @@ function addImageFile(file, placementOverride) {
     const img = new Image();
     img.onload = () => {
       const placement = placementOverride || document.getElementById('imgPlacement').value;
-      const b = { id: uid(), type: 'image', src: reader.result, placement, radius: 4, nw: img.naturalWidth, nh: img.naturalHeight };
+      // trilha C (t3): recorta a margem branca ANTES de montar o bloco. nw/nh têm
+      // que virar o tamanho recortado, senão imgHeight() erra a proporção. O crop
+      // roda no ADD (antes do painel existir p/ esta imagem); o checkbox do painel
+      // controla o PADRÃO da PRÓXIMA imagem — comportamento aceito pelo plano.
+      let src = reader.result, nw = img.naturalWidth, nh = img.naturalHeight;
+      if (state.autocrop !== false) {
+        const cropped = autocropWhite(img);
+        if (cropped) { src = cropped.dataUrl; nw = cropped.w; nh = cropped.h; }
+      }
+      const b = { id: uid(), type: 'image', src, placement, radius: 4, nw, nh };
       if (placement === 'right') { b.y = 0; b.page = state.addPage ?? lastEditedPage(); }
       state.addPage = null;
       closeAddImgMenu();
