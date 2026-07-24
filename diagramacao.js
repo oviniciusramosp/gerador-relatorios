@@ -16,6 +16,7 @@
  */
 
 import { openSwatchPop } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
+import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
@@ -1218,17 +1219,18 @@ function inlineHtmlOf(node) {
     if (tag === 'br') { out += '<br>'; continue; }
     let inner = inlineHtmlOf(n);
     if (!inner.trim() && !inner.includes('<br>')) continue;
-    const st = n.style || {};
-    const deco = st.textDecoration || st.textDecorationLine || '';
-    // atenção: o Google embrulha TUDO num <b style="font-weight:normal"> — por
-    // isso o style vence a tag na decisão de negrito
-    const bold = (tag === 'b' || tag === 'strong')
-      ? !(st.fontWeight && (st.fontWeight === 'normal' || +st.fontWeight < 600))
-      : (st.fontWeight === 'bold' || +st.fontWeight >= 600);
+    // decisão de marcas centralizada no parser puro (paste-style.js) — negrito/itálico/
+    // sublinhado/tachado viram tag; cor/fundo (Figma, tarefa 10) viram <span style> enxuto,
+    // os mesmos atributos que o foreColor/hiliteColor da tarefa 5 geram.
+    const { bold, italic, underline, strike, color, bg } = marksFromStyle(n.style, tag);
     if (bold) inner = '<b>' + inner + '</b>';
-    if (tag === 'i' || tag === 'em' || st.fontStyle === 'italic') inner = '<i>' + inner + '</i>';
-    if (tag === 'u' || deco.includes('underline')) inner = '<u>' + inner + '</u>';
-    if (tag === 's' || tag === 'strike' || tag === 'del' || deco.includes('line-through')) inner = '<s>' + inner + '</s>';
+    if (italic) inner = '<i>' + inner + '</i>';
+    if (underline) inner = '<u>' + inner + '</u>';
+    if (strike) inner = '<s>' + inner + '</s>';
+    if (color || bg) {
+      const s = (color ? 'color:' + color + ';' : '') + (bg ? 'background-color:' + bg + ';' : '');
+      inner = '<span style="' + s + '">' + inner + '</span>';
+    }
     out += inner;
   }
   return out;
@@ -1253,6 +1255,15 @@ function blocksFromHtml(html) {
     else if (tag === 'blockquote') { if (h) out.push(mkBlock('quote', h)); }
     else out.push(mkBlock('p', h));   // p vazio fica: parágrafo em branco é intencional
   });
+  // trilha A (t10): Figma copia SEM tags de bloco — só <span>/texto com estilo inline.
+  // querySelectorAll acima não achou nada; preserva a formatação inline (inlineHtmlOf já
+  // mantém negrito/itálico/cor) e separa parágrafos por <br> ou quebra de linha (o Figma
+  // usa \n dentro de spans white-space:pre-wrap).
+  // ponytail: variante rara de "uma <div> por linha" junta as linhas num parágrafo só;
+  //           só resolvo se aparecer — o formato comum (pre-wrap/<br>) está coberto.
+  if (!out.length) {
+    inlineHtmlOf(doc.body).split(/<br\s*\/?>|\n/).forEach(p => { const h = p.trim(); if (h) out.push(mkBlock('p', h)); });
+  }
   return out.length ? out : parseMarkdown(doc.body.textContent || '');
 }
 
@@ -1607,6 +1618,42 @@ fmtbar.querySelectorAll('.typebtn').forEach(btn => btn.addEventListener('click',
   updateFmtbar();
 }));
 
+// trilha A (t5): cor do texto / destaque. ARMADILHA — o swatch (openSwatchPop) vive no
+// <body>, FORA do fmtbar, então NÃO herda o preventDefault do mousedown da barra. Clicar
+// num chip tira o foco do contenteditable e colapsa a seleção. Por isso guardamos o Range
+// AQUI (a barra ainda segura a seleção) e o restauramos antes do execCommand.
+fmtbar.querySelectorAll('.colorbtn').forEach(btn => btn.addEventListener('click', () => {
+  const sel = getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const saved = sel.getRangeAt(0).cloneRange();
+  const host = editableHostOfRange(saved);
+  openSwatchPop(btn, (hex) => {
+    if (host) host.focus();
+    const s = getSelection(); s.removeAllRanges(); s.addRange(saved);
+    // foreColor sai como <font color>; hiliteColor como <span style="background-color">
+    // — ambos disparam 'input' e sincronizam o bloco (mesmo caminho dos .markbtn).
+    const ok = document.execCommand(btn.dataset.cmd, false, hex);
+    if (btn.dataset.cmd === 'hiliteColor' && !ok) document.execCommand('backColor', false, hex);
+    updateFmtbar();
+  });
+}));
+
+// trilha A (t2): abre o mini-editor de URL (aplica createLink / edita / remove <a>)
+fmtbar.querySelector('.linkbtn').addEventListener('click', openLinkEdit);
+
+// sobe de um nó até o contenteditable do miolo que o contém (ou null)
+function editableHostOfRange(range) {
+  let n = range && range.commonAncestorContainer;
+  while (n && n.nodeType === 3) n = n.parentNode;
+  return (n && n.closest && n.closest('#pages [contenteditable]')) || null;
+}
+// <a> sob a seleção/cursor (ou null)
+function anchorInSelection(sel) {
+  let n = sel && sel.anchorNode;
+  while (n && n.nodeType === 3) n = n.parentNode;
+  return (n && n.closest && n.closest('#pages [contenteditable] a')) || null;
+}
+
 function updateFmtbar() {
   const sel = getSelection();
   const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
@@ -1622,6 +1669,8 @@ function updateFmtbar() {
   fmtbar.classList.toggle('caption-mode', !isMiolo);
   fmtbar.querySelectorAll('.markbtn').forEach(b =>
     b.classList.toggle('on', document.queryCommandState(b.dataset.cmd)));
+  // trilha A (t2): reflete se a seleção está sobre um link existente
+  fmtbar.querySelector('.linkbtn').classList.toggle('on', !!anchorInSelection(sel));
   const blk = isMiolo ? blockOf(host.dataset.id) : null;
   fmtbar.querySelectorAll('.typebtn').forEach(b =>
     b.classList.toggle('on', !!blk && blk.type === b.dataset.t));
@@ -1633,6 +1682,67 @@ function updateFmtbar() {
   const y = rect.top - bh - 8 >= 8 ? rect.top - bh - 8 : rect.bottom + 8;
   fmtbar.style.left = x + 'px'; fmtbar.style.top = y + 'px';
 }
+
+// ── trilha A (t2): mini-editor de URL ────────────────────────────────────────
+// createLink exige seleção não-colapsada; o fmtbar só aparece com seleção, então
+// "criar link" sempre tem texto. "Editar/remover" seleciona o <a> inteiro. Mesma
+// armadilha da cor: digitar no input tira o foco do texto e colapsa a seleção →
+// guardamos o Range ao abrir e o restauramos antes do execCommand.
+const linkedit = document.getElementById('linkedit');
+const linkUrl = document.getElementById('linkUrl');
+let linkSavedRange = null, linkHost = null, linkEl = null;
+function openLinkEdit() {
+  const sel = getSelection();
+  if (!sel || !sel.rangeCount) return;
+  linkSavedRange = sel.getRangeAt(0).cloneRange();
+  linkHost = editableHostOfRange(linkSavedRange);
+  if (!linkHost) return;
+  linkEl = anchorInSelection(sel);
+  linkUrl.value = linkEl ? (linkEl.getAttribute('href') || '') : '';
+  document.getElementById('linkRemove').hidden = !linkEl;
+  fmtbar.hidden = true;
+  linkedit.hidden = false;
+  // posiciona sobre a seleção (ou o link), como o fmtbar
+  const rect = (linkEl || linkSavedRange).getBoundingClientRect();
+  const bw = linkedit.offsetWidth, bh = linkedit.offsetHeight;
+  linkedit.style.left = Math.max(8, Math.min(rect.left, innerWidth - bw - 8)) + 'px';
+  linkedit.style.top = (rect.top - bh - 8 >= 8 ? rect.top - bh - 8 : rect.bottom + 8) + 'px';
+  linkUrl.focus(); linkUrl.select();
+  setTimeout(() => addEventListener('pointerdown', outsideLinkEdit), 0);
+}
+function closeLinkEdit() {
+  removeEventListener('pointerdown', outsideLinkEdit);
+  linkedit.hidden = true; linkSavedRange = linkHost = linkEl = null;
+}
+function outsideLinkEdit(e) { if (!linkedit.contains(e.target)) closeLinkEdit(); }
+function applyLink() {
+  if (!linkHost) return closeLinkEdit();
+  const raw = linkUrl.value.trim();
+  linkHost.focus();
+  const s = getSelection(); s.removeAllRanges();
+  if (linkEl) { const r = document.createRange(); r.selectNode(linkEl); s.addRange(r); }
+  else s.addRange(linkSavedRange);
+  if (!raw) { if (linkEl) document.execCommand('unlink'); }          // apagou a URL editando → remove
+  else document.execCommand('createLink', false, /^www\./i.test(raw) ? 'https://' + raw : raw);
+  closeLinkEdit(); updateFmtbar();
+}
+function removeLink() {
+  if (linkEl && linkHost) {
+    linkHost.focus();
+    const s = getSelection(); s.removeAllRanges();
+    const r = document.createRange(); r.selectNode(linkEl); s.addRange(r);
+    document.execCommand('unlink');
+  }
+  closeLinkEdit(); updateFmtbar();
+}
+linkedit.addEventListener('mousedown', (e) => { if (e.target === linkedit) e.preventDefault(); });
+document.getElementById('linkApply').addEventListener('click', applyLink);
+document.getElementById('linkRemove').addEventListener('click', removeLink);
+linkUrl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); applyLink(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeLinkEdit(); }
+});
+
 document.addEventListener('selectionchange', () => {
   clearTimeout(updateFmtbar._t);
   updateFmtbar._t = setTimeout(updateFmtbar, 80);
