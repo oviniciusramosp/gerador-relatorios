@@ -400,7 +400,8 @@
   #fmtbar .cb-fore { border-bottom: 3px solid #29E899; border-radius: 3px; padding-bottom: calc(.28rem - 3px); }
   #fmtbar .cb-back { background: #FFF3A3; color: #23292F; }
   #fmtbar .cb-back:hover { background: #FFE875; color: #23292F; }
-  #fmtbar .linkbtn { font-size: .72rem; }
+  #fmtbar .linkbtn { display: inline-flex; align-items: center; justify-content: center; }
+  #fmtbar .linkbtn svg { width: 15px; height: 15px; display: block; }
   #linkedit {
     position: fixed; z-index: 31; display: flex; gap: 4px; align-items: center;
     padding: 4px; border: 1px solid var(--hair-strong); border-radius: 8px;
@@ -777,7 +778,7 @@
   <button class="markbtn" data-cmd="strikeThrough" title="Tachado" style="text-decoration:line-through">S</button>
   <span class="sep"></span>
   <!-- trilha A (t2): editor de link -->
-  <button class="linkbtn" data-cmd="link" title="Link">🔗</button>
+  <button class="linkbtn" data-cmd="link" title="Link"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="3.4" y="6.7" width="6" height="2.6" rx="1.3" transform="rotate(-45 6.4 8)"/><rect x="6.6" y="6.7" width="6" height="2.6" rx="1.3" transform="rotate(-45 9.6 8)"/></svg></button>
   <span class="sep"></span>
   <!-- trilha A (t5): cor do texto (foreColor) e destaque/fundo (hiliteColor) via swatch -->
   <button class="colorbtn cb-fore" data-cmd="foreColor" title="Cor do texto">A</button>
