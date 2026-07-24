@@ -120,9 +120,20 @@
       radial-gradient(ellipse 70% 50% at 50% 130%, color-mix(in srgb, var(--violet) 26%, transparent), transparent 72%),
       var(--ground);
   }
-  .canvas { display: grid; place-items: center; padding: 1.4rem; min-height: 0; overflow: auto; }
-  .frame { box-shadow: 0 24px 70px -30px #000; border-radius: 4px; overflow: hidden; line-height: 0; }
-  .canvas svg { display: block; max-width: 100%; height: auto; }
+  /* palco rola nos DOIS eixos, com a imagem no tamanho real (1200 × 2000+ px) —
+     encolher pra caber deixaria o texto ilegível. `safe center` centraliza quando
+     cabe e alinha no início quando não cabe; sem o `safe`, centralizar corta a
+     borda de cima/da esquerda e o scroll não alcança o pedaço cortado. */
+  .canvas { display: grid; place-content: safe center; padding: 1.4rem; min-height: 0; overflow: auto; }
+  .canvas::-webkit-scrollbar { width: 10px; height: 10px; }
+  .canvas::-webkit-scrollbar-thumb { background: var(--hair-strong); border-radius: 5px; }
+  .canvas::-webkit-scrollbar-corner { background: transparent; }
+  /* max-content nos DOIS eixos — sem isso o .frame (item de grid) esticaria pro
+     tamanho do palco e o overflow:hidden das bordas arredondadas CORTARIA a imagem
+     em vez de deixar o .canvas rolar */
+  .frame { width: max-content; height: max-content;
+    box-shadow: 0 24px 70px -30px #000; border-radius: 4px; overflow: hidden; line-height: 0; }
+  .canvas svg { display: block; }
 
   #iaOverlay {
     position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
@@ -228,7 +239,7 @@
         </div>
         <div class="grid2">
           <label class="field">Tema
-            <select id="theme"><option value="dark">Escuro</option><option value="light">Claro</option></select>
+            <select id="theme"><option value="light">Claro</option><option value="dark">Escuro</option></select>
           </label>
           <label class="field">Cor de destaque
             <button type="button" class="colorfield" id="accent" title="Cor da data, do eixo e dos nós"></button>
@@ -295,6 +306,7 @@
         <label class="field">Escala da fonte <span id="fsVal"></span><input id="fontScale" type="range" min=".7" max="1.6" step=".05"></label>
         <label class="field">Tamanho do nó <span id="nodeVal"></span><input id="nodeSize" type="range" min="24" max="72" step="2"></label>
         <label class="field">Respiro entre eventos <span id="gapVal"></span><input id="gap" type="range" min="8" max="70" step="2"></label>
+        <label class="field">Largura do card <span id="cardScaleVal"></span> <span class="hint">(só nos verticais)</span><input id="cardScale" type="range" min="25" max="100" step="5"></label>
         <div class="grid2">
           <label class="field">Largura (vertical)<input id="width" type="number" step="20"></label>
           <label class="field">Coluna (horizontal)<input id="colWidth" type="number" step="10"></label>

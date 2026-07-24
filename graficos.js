@@ -84,14 +84,28 @@ bindText('ysuffix', 'y.suffix');
 // picker de tipo (botões com ícone)
 $('typePicker').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-type]'); if (!b) return;
-  spec.type = b.dataset.type;
-  paintTypePicker();
+  const de = spec.type, para = b.dataset.type;
+  spec.type = para;
+  if (de === 'candle' && para !== 'candle') soFechamento(true);
+  if (para === 'candle' && de !== 'candle') soFechamento(false);
+  paintTypePicker(); buildSeries();
   sync({ keepTable: true });
 });
+// candle → linha/área: traça só o Fechamento. Candle usa as 4 primeiras séries
+// como O/H/L/C (contrato do renderer), então basta ocultar as 3 primeiras —
+// ocultar, não apagar, pra não perder o dado: voltar pra candle reacende todas.
+function soFechamento(ligar) {
+  if (spec.series.length < 4) return;
+  spec.series.forEach((se, i) => {
+    if (i >= 3) return;
+    if (ligar) se.hidden = true; else delete se.hidden;
+  });
+}
 function paintTypePicker() {
   $('typePicker').querySelectorAll('button').forEach((b) =>
     b.setAttribute('aria-pressed', b.dataset.type === spec.type));
   paintCandle();   // as opções de candle só aparecem nesse tipo
+  paintBarOpts();  // idem pra barra/barra horizontal
 }
 
 // switches de mostrar título/subtítulo/fonte no gráfico
@@ -151,6 +165,34 @@ function paintCandle() {
   $('candleUp').style.background = candleColor('up');
   $('candleDown').style.background = candleColor('down');
   $('candleWick').value = candleCfg().wick;
+}
+
+// — barra/barra horizontal: canto arredondado, espaço entre barras, trilha —
+// (empilhado fica de fora: segmento arredondado/trilha atrás não fazem sentido
+// quando as barras já ficam coladas umas nas outras formando o próprio 100%)
+const barTrackCfg = () => ({ ...DEFAULTS.barTrack, ...spec.barTrack });
+const setBarTrack = (patch) => { spec.barTrack = { ...barTrackCfg(), ...patch }; sync({ keepTable: true }); };
+$('barRadius').addEventListener('input', (e) => {
+  spec.barRadius = +e.target.value; $('brVal').textContent = spec.barRadius + ' px'; sync({ keepTable: true });
+});
+$('barGap').addEventListener('input', (e) => {
+  spec.barGap = +e.target.value; $('bgVal').textContent = Math.round(spec.barGap * 100) + '%'; sync({ keepTable: true });
+});
+$('btShow').addEventListener('change', (e) => setBarTrack({ show: e.target.checked }));
+$('btOpacity').addEventListener('input', (e) => {
+  $('btOpVal').textContent = e.target.value + '%'; setBarTrack({ opacity: +e.target.value / 100 });
+});
+$('btScale').addEventListener('input', (e) => {
+  $('btScaleVal').textContent = e.target.value + '%'; setBarTrack({ scale: +e.target.value / 100 });
+});
+function paintBarOpts() {
+  $('barOpts').hidden = !['bar', 'hbar'].includes(spec.type);
+  $('barRadius').value = spec.barRadius; $('brVal').textContent = spec.barRadius + ' px';
+  $('barGap').value = spec.barGap; $('bgVal').textContent = Math.round(spec.barGap * 100) + '%';
+  const bt = barTrackCfg();
+  $('btShow').checked = bt.show;
+  $('btOpacity').value = Math.round(bt.opacity * 100); $('btOpVal').textContent = Math.round(bt.opacity * 100) + '%';
+  $('btScale').value = Math.round(bt.scale * 100); $('btScaleVal').textContent = Math.round(bt.scale * 100) + '%';
 }
 
 function paintWatermark() {
@@ -242,12 +284,20 @@ function buildSeries() {
     name.type = 'text'; name.className = 'sname'; name.value = s.name ?? ''; name.setAttribute('aria-label', 'Nome da série');
     name.oninput = () => { s.name = name.value; sync({ keepTable: true }); };
 
-    const dash = document.createElement('button');
-    dash.type = 'button'; dash.className = 'lblswitch'; dash.setAttribute('role', 'switch');
-    dash.setAttribute('aria-checked', !!s.dashed); dash.title = 'Linha tracejada';
-    dash.onclick = () => { s.dashed = !s.dashed; dash.setAttribute('aria-checked', s.dashed); sync({ keepTable: true }); };
+    // o switch é MOSTRAR/ESCONDER a série (o estilo do traço virou o dropdown
+    // abaixo). Esconder não apaga: o dado continua na spec e no CSV.
+    const vis = document.createElement('button');
+    vis.type = 'button'; vis.className = 'lblswitch'; vis.setAttribute('role', 'switch');
+    vis.setAttribute('aria-checked', !s.hidden); vis.title = 'Mostrar a série no gráfico';
+    vis.onclick = () => {
+      if (s.hidden) delete s.hidden; else s.hidden = true;
+      vis.setAttribute('aria-checked', !s.hidden);
+      row.classList.toggle('off', !!s.hidden);
+      sync({ keepTable: true });
+    };
+    row.classList.toggle('off', !!s.hidden);
 
-    row.append(sw, name, dash);
+    row.append(sw, name, vis);
 
     // combo: forma (linha/barra) e eixo (esq/dir) por série — só nos tipos
     // verticais simples, onde o renderer aceita misturar
@@ -267,6 +317,11 @@ function buildSeries() {
           s.as || '', (v) => { if (v) s.as = v; else delete s.as; }),
         mk('Eixo da série', [['', 'Eixo esq.'], ['y2', 'Eixo dir.']],
           s.axis || '', (v) => { if (v) s.axis = v; else delete s.axis; }),
+        // o glifo à esquerda do rótulo é o "ícone" do tipo de traço — dá pra ver
+        // a diferença sem ler. `dashed` antigo é lido aqui e reescrito como stroke.
+        mk('Estilo do traço', [['solid', '─── Sólida'], ['dashed', '╌╌╌ Tracejada'], ['dotted', '··· Pontilhada']],
+          s.stroke || (s.dashed ? 'dashed' : 'solid'),
+          (v) => { delete s.dashed; if (v === 'solid') delete s.stroke; else s.stroke = v; }),
       );
       row.append(opts);
     }

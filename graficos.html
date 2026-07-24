@@ -76,6 +76,8 @@
   .serie .mini { font-size: .68rem; padding: .22rem .4rem; flex: 1; min-width: 0; }
   .serie .sname { border: 0; background: none; padding: .2rem; min-width: 0; color: var(--ink); }
   .serie .swatch { width: 1.5rem; height: 1.5rem; }
+  /* série escondida do gráfico — continua editável, só sinaliza que não é desenhada */
+  .serie.off .swatch, .serie.off .sname, .serie.off .serie-opts { opacity: .4; }
   /* .colorfield e o popover .swatch-pop/.sp-* vêm do componente compartilhado swatch.js */
 
   /* ---------- editor de arraste (pontos/barras) ---------- */
@@ -360,6 +362,13 @@
             <button type="button" class="colorfield" id="candleDown" title="Cor do candle de baixa"></button>
           </label>
           <label class="field">Espessura do pavio<input id="candleWick" type="number" min="0" max="20" step="0.2"></label>
+        </div>
+        <div class="grid2" id="barOpts" hidden>
+          <label class="field">Canto arredondado <span id="brVal"></span><input id="barRadius" type="range" min="0" max="24" step="1"></label>
+          <label class="field">Espaço entre barras <span id="bgVal"></span><input id="barGap" type="range" min="0" max="0.8" step="0.02"></label>
+          <label class="toggle"><input id="btShow" type="checkbox"> Fundo (iguala a 100%)</label>
+          <label class="field">Opacidade do fundo <span id="btOpVal"></span><input id="btOpacity" type="range" min="0" max="100" step="5"></label>
+          <label class="field">Espessura do fundo <span id="btScaleVal"></span><input id="btScale" type="range" min="50" max="200" step="10"></label>
         </div>
         <div class="labelrow">
           <button type="button" class="lblswitch" id="showTitle" role="switch" aria-checked="false" title="Mostrar no gráfico"></button>

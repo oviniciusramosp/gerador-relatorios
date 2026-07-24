@@ -19,6 +19,11 @@ const h1 = layoutSize({ events: EV }).h;
 const h3 = layoutSize({ events: [...EV, ...EV, ...EV] }).h;
 assert.ok(h3 > h1 * 2, 'mais eventos ⇒ imagem mais alta');
 assert.equal(layoutSize({ events: EV, width: 1100 }).w, 1100, 'largura respeita a spec (vertical)');
+// card mais estreito não muda a largura da imagem, só quebra mais o texto ⇒ mais alta
+const largo = layoutSize({ events: EV, width: 1200, cardScale: 1 });
+const estreito = layoutSize({ events: EV, width: 1200, cardScale: 0.35 });
+assert.equal(estreito.w, largo.w, 'cardScale não mexe na largura da imagem');
+assert.ok(estreito.h > largo.h, 'card estreito ⇒ texto quebra mais ⇒ imagem mais alta');
 // horizontal: largura sai das colunas, não de spec.width
 const hz = layoutSize({ layout: 'horizontal', events: EV, colWidth: 250, width: 400 });
 assert.ok(hz.w >= 3 * 250, 'horizontal dimensiona por coluna × eventos');

@@ -131,8 +131,12 @@ function seedDoc() {
   };
 }
 
+// load() é SÍNCRONO e serve o primeiro paint: lê do localStorage o que é pequeno
+// (rodapé, nº da 1ª página, capa/contracapa/índice). O MIOLO não cabe aqui — imagem
+// em base64 estoura os ~5 MB de quota do localStorage — então ele mora no IndexedDB
+// e volta logo depois, em restoreSession() (ver o bloco de init no fim do arquivo).
 function load() {
-  state.doc = seedDoc();                     // o MIOLO sempre abre em branco; capa/índice/resumo persistem
+  state.doc = seedDoc();
   try {
     const cfg = JSON.parse(localStorage.getItem(LS_KEY)) || {};
     if (cfg.footText != null) state.doc.footText = cfg.footText;
@@ -160,6 +164,11 @@ function load() {
 }
 let saveT;
 function save() { clearTimeout(saveT); saveT = setTimeout(() => {
+  // sessão COMPLETA (miolo incluso, com imagens) no IndexedDB — é o que faz o documento
+  // sobreviver a reload/fechar a aba. Sem isso o miolo só existia em memória, e um Salvar
+  // depois de um reload exportava um .pdgm com blocos vazios (capa/resumo vinham do LS,
+  // o que fazia o arquivo PARECER cheio — 1 MB de fundo em base64 — e abrir vazio).
+  idb.set('doc', state.doc);
   const cfg = {
     footText: state.doc.footText, headText: state.doc.headText, firstPage: state.doc.firstPage,
     source: state.doc.source || null, cover: state.doc.cover, back: state.doc.back, index: state.doc.index,
@@ -1790,9 +1799,14 @@ function migrateSpecialPages(doc) {
 // seedDoc() novo cobre campo ausente (arquivo de versão futura ou editado à mão)
 // sem precisar listar cada campo — mesmo espírito genérico do doc-format.js.
 function applyDocFile(doc) {
+  fileHandle = null; idb.del('fh');   // .pdgm.json não é origem sincronizável (sem "Salvar no arquivo" de volta)
+  applyDoc(doc);
+}
+// mesma troca de documento SEM mexer na origem vinculada — usada pela restauração de
+// sessão no boot, que não pode derrubar o fileHandle de um .md linkado.
+function applyDoc(doc) {
   state.doc = Object.assign(seedDoc(), doc);
   migrateSpecialPages(state.doc);
-  fileHandle = null; idb.del('fh');   // .pdgm.json não é origem sincronizável (sem "Salvar no arquivo" de volta)
   document.getElementById('footText').value = state.doc.footText;
   document.getElementById('headText').value = state.doc.headText || '';
   document.getElementById('firstPage').value = state.doc.firstPage;
@@ -2015,7 +2029,7 @@ document.getElementById('imgfile').addEventListener('change', (e) => {
 });
 document.getElementById('btnNew').addEventListener('click', () => {
   if (!confirm('Limpar o documento atual e desvincular a origem?')) return;
-  state.doc = seedDoc(); fileHandle = null; idb.del('fh');
+  state.doc = seedDoc(); fileHandle = null; idb.del('fh'); idb.del('doc');
   document.getElementById('footText').value = state.doc.footText;
   document.getElementById('headText').value = state.doc.headText || '';
   document.getElementById('firstPage').value = state.doc.firstPage;
@@ -2218,6 +2232,11 @@ function downloadMd() {
 // (doc.json + imagens como arquivo separado em media/, ver doc-format.js) — sem
 // perda, ao contrário do .md acima (só o texto). Reabre pelo botão "Abrir".
 async function saveDocFile() {
+  // cinto de segurança: salvar com o miolo em branco gera um arquivo que PARECE cheio
+  // (megabytes de capa em base64) e abre vazio. Bloco conta como conteúdo se tem texto
+  // ou se não é de texto (imagem, tabela, divisor, quebra).
+  const vazio = !state.doc.blocks.some(b => (b.html || '').trim() || !TEXT_TYPES.has(b.type));
+  if (vazio && !confirm('O miolo está em branco — o arquivo vai levar só capa, índice/resumo e contracapa. Salvar assim mesmo?')) return;
   const blob = await serializeDocZip(state.doc);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -2446,3 +2465,14 @@ syncSpecialUI();
 setSegment('documento');
 render();
 updateHistBtns();
+
+// restauração de sessão: o miolo volta do IndexedDB (ver save()). É async, então cai
+// DEPOIS do primeiro paint — e por isso só aplica se o documento ainda estiver intocado
+// (seed de 1 parágrafo vazio, sem histórico). Se o usuário já começou a digitar nesses
+// milissegundos, o que ele escreveu ganha: restaurar por cima seria perder digitação.
+const pristine = () => state.doc.blocks.length === 1
+  && !(state.doc.blocks[0].html || '').trim() && !hist.past.length;
+idb.get('doc').then(doc => {
+  if (!doc || !Array.isArray(doc.blocks) || !doc.blocks.length || !pristine()) return;
+  applyDoc(doc);
+});

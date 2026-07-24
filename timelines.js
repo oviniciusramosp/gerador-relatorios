@@ -11,19 +11,18 @@ let spec = structuredClone(DEFAULTS);
 Object.assign(spec, {
   title: 'Linha do Tempo: Hyperliquid',
   subtitle: 'Principais produtos, atualizações e marcos históricos',
-  theme: 'dark',
   events: [
     { date: 'Novembro/2022', text: 'Lançamento da primeira Testnet', icon: 'flask' },
     { date: 'Fevereiro/2023', text: 'Lançamento da Mainnet fechada', icon: 'rocket' },
     { date: 'Março/2023', text: 'Começa o programa de referrals, Mainnet aberta', icon: 'users' },
-    { date: 'Maio/2023', text: 'Lançamento do vault HLP', icon: 'cube' },
+    { date: 'Maio/2023', text: 'Lançamento do vault HLP', icon: 'wallet' },
     { date: 'Novembro/2023', text: 'Inicia campanha de pontos', icon: 'star' },
     { date: 'Fevereiro/2024', text: 'Corretora alcança US$ 1 bilhão em volume diário pela primeira vez', icon: 'chart-bar' },
     { date: 'Abril/2024', text: 'HIP-1 e HIP-2', icon: 'doc' },
     { date: 'Outubro/2024', text: 'Lançamento dos Builder Codes', icon: 'code' },
     { date: 'Novembro/2024', text: 'Lançamento e airdrop do token HYPE', icon: 'parachute' },
     { date: 'Novembro/2024', text: 'Alcança US$ 1 bilhão em Open Interest', icon: 'trend-up' },
-    { date: 'Fevereiro/2025', text: 'Lançamento da HyperEVM', icon: 'gear' },
+    { date: 'Fevereiro/2025', text: 'Lançamento da HyperEVM', icon: 'cube' },
     { date: 'Março/2025', text: 'Volume acumulado ultrapassa US$ 1 trilhão', icon: 'coins' },
     { date: 'Março/2025', text: 'Incidente "Jelly Jelly"', icon: 'alert' },
     { date: 'Junho/2025', text: 'Primeira DAT de HYPE (Hyperion DeFi)', icon: 'bank' },
@@ -241,6 +240,12 @@ const paintAccent = () => { $('accent').style.background = accentOf(); };
   .forEach(([id, o, fmt]) => $(id).addEventListener('input', (e) => {
     spec[id] = +e.target.value; $(o).textContent = fmt(e.target.value); sync({ keepList: true });
   }));
+// cardScale é fração na spec (0..1) e % no slider
+$('cardScale').addEventListener('input', (e) => {
+  spec.cardScale = +e.target.value / 100;
+  $('cardScaleVal').textContent = e.target.value + '%';
+  sync({ keepList: true });
+});
 
 ['width', 'colWidth'].forEach((id) =>
   $(id).addEventListener('input', (e) => { spec[id] = +e.target.value || DEFAULTS[id]; sync({ keepList: true }); }));
@@ -306,6 +311,8 @@ function fillControls() {
   $('fsVal').textContent = spec.fontScale + '×';
   $('nodeVal').textContent = spec.nodeSize + ' px';
   $('gapVal').textContent = spec.gap + ' px';
+  const cs = Math.round((spec.cardScale ?? DEFAULTS.cardScale) * 100);
+  $('cardScale').value = cs; $('cardScaleVal').textContent = cs + '%';
   paintLayout(); paintAccent(); paintWatermark();
 }
 
@@ -366,21 +373,9 @@ $('btnSvg').addEventListener('click', async () => {
   } catch (e) { flash('Falhou: ' + e.message, true); }
 });
 
-// ── modo embutido (iframe da Diagramação): manda o SVG pro relatório ─────────
-if (new URLSearchParams(location.search).has('embed')) {
-  const b = document.createElement('button');
-  b.id = 'btnImport'; b.className = 'primary'; b.textContent = 'Importar para o relatório →';
-  document.querySelector('header nav').prepend(b);
-  b.addEventListener('click', async () => {
-    flash('Gerando SVG…');
-    try {
-      const svg = await svgString(spec);
-      const { w, h } = layoutSize(spec);
-      parent.postMessage({ type: 'pdgm-chart-svg', svg, title: spec.title, w, h }, location.origin);
-      flash('Importado.');
-    } catch (e) { flash('Falhou: ' + e.message, true); }
-  });
-}
+// ponytail: sem modo ?embed aqui. Pra mandar a timeline direto pro relatório
+// bastaria repetir o postMessage('pdgm-chart-svg') do graficos.js + uma opção no
+// menu Adicionar Imagem da diagramação — 15 linhas, quando for pedido.
 
 // ── Converter imagem em linha do tempo (CLI do Claude, via server local) ─────
 $('btnIA').addEventListener('click', () => $('fileIA').click());

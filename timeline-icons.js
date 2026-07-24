@@ -24,16 +24,16 @@ export const ICONS = {
   cube:     { label: 'Rede / bloco', inner:
     '<path d="M12 2.8 20.4 7.2v9.6L12 21.2 3.6 16.8V7.2L12 2.8Z"/>'
     + '<path d="M3.6 7.2 12 11.6l8.4-4.4M12 11.6v9.6"/>' },
-  gear:     { label: 'Atualização', inner:
-    '<circle cx="12" cy="12" r="3.1"/>'
-    + '<path d="M12 2.8v2.5M12 18.7v2.5M2.8 12h2.5M18.7 12h2.5M6.2 6.2 8 8M16 16l1.8 1.8M17.8 6.2 16 8M8 16l-1.8 1.8"/>' },
+  update:   { label: 'Atualização', inner:
+    '<path d="M20.4 12a8.4 8.4 0 0 1-14.6 5.7"/><path d="M3.6 12a8.4 8.4 0 0 1 14.6-5.7"/>'
+    + '<path d="M18.2 2.6v3.8h-3.8M5.8 21.4v-3.8h3.8"/>' },
   link:     { label: 'Integração', inner:
     '<path d="M10.2 14.2a4 4 0 0 1 0-5.7l2.2-2.2a4 4 0 0 1 5.7 5.7l-1.3 1.3"/>'
     + '<path d="M13.8 9.8a4 4 0 0 1 0 5.7l-2.2 2.2a4 4 0 0 1-5.7-5.7l1.3-1.3"/>' },
 
   // — mercado / dinheiro —
   'chart-bar': { label: 'Volume', inner:
-    '<path d="M4 20h16"/><path d="M6 17.5v-6h3.2v6M14.8 17.5v-9H18v9M10.4 17.5V6h3.2v11.5" />' },
+    '<path d="M3.6 20.2h16.8"/><path d="M7.4 17.4v-6.2M12 17.4V6.4M16.6 17.4v-3.6"/>' },
   'trend-up':  { label: 'Alta', inner:
     '<path d="M3.5 16.8 9.2 11l3.8 3.3L20.5 7"/><path d="M15.2 7h5.3v5.3"/>' },
   'trend-down':{ label: 'Queda', inner:
@@ -73,9 +73,9 @@ export const ICONS = {
   flame:    { label: 'Queima / hype', inner:
     '<path d="M12 2.6c3.9 3.9 5.9 6.5 5.9 9.9a5.9 5.9 0 0 1-11.8 0c0-2 .8-3.6 2.2-5 .3 1.4.9 2.3 1.8 2.7C10.6 7.6 10.6 5.2 12 2.6Z"/>' },
   parachute:{ label: 'Airdrop', inner:
-    '<path d="M3.2 11.4a8.8 8.8 0 0 1 17.6 0"/>'
-    + '<path d="M3.2 11.4c2.9 0 3.9 3.8 8.8 8.8M20.8 11.4c-2.9 0-3.9 3.8-8.8 8.8"/>'
-    + '<path d="M9.3 11.4c0 3 1 6.3 2.7 8.8M14.7 11.4c0 3-1 6.3-2.7 8.8"/>' },
+    '<path d="M3 10.8a9 9 0 0 1 18 0"/><path d="M3 10.8h18"/>'
+    + '<path d="M8.6 10.8c0-3.3 1.1-6 3.4-8.4M15.4 10.8c0-3.3-1.1-6-3.4-8.4"/>'
+    + '<path d="M3.6 10.8 12 18.4l8.4-7.6"/><rect x="10.2" y="18.2" width="3.6" height="3" rx=".7"/>' },
   gift:     { label: 'Recompensa', inner:
     '<rect x="3.6" y="8.6" width="16.8" height="11.8" rx="1.6"/><path d="M3.6 13h16.8M12 8.6v11.8"/>'
     + '<path d="M12 8.6C12 6.2 10.6 4.6 9 4.6S6.6 5.8 6.6 7c0 1 .8 1.6 2 1.6H12ZM12 8.6c0-2.4 1.4-4 3-4s2.4 1.2 2.4 2.4c0 1-.8 1.6-2 1.6H12Z"/>' },

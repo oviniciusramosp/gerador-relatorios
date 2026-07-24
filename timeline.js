@@ -17,9 +17,12 @@ import { iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
 
 export const DEFAULTS = {
   layout: 'alternada',      // alternada | esquerda | horizontal
-  theme: 'dark',
-  width: 900,              // largura da imagem (layouts verticais)
+  theme: 'light',
+  // 1200 = mesma largura padrão do gerador de gráficos (chart.js), pra gráfico e
+  // timeline caírem no relatório com a mesma caixa
+  width: 1200,             // largura da imagem (layouts verticais)
   colWidth: 250,           // largura da coluna de cada evento (layout horizontal)
+  cardScale: 0.5,          // fração do espaço ao lado do eixo que o card ocupa (só vertical)
   title: 'Linha do Tempo',
   subtitle: '',
   source: '',
@@ -157,9 +160,13 @@ function plan(s) {
 
   if (!horiz) {
     const axisX = s.layout === 'esquerda' ? m.pad + m.node / 2 : W0 / 2;
-    const cardW = s.layout === 'esquerda'
+    // espaço livre de um lado do eixo; o card usa a fração cardScale dele e fica
+    // encostado no eixo (a sobra vira margem externa). Sem isso, com a largura de
+    // 1200 do gráfico, o card ocupa ~520px e o texto vira uma linha esticada.
+    const avail = s.layout === 'esquerda'
       ? W0 - m.pad - (axisX + m.node / 2 + m.conn)
       : W0 / 2 - m.pad - m.node / 2 - m.conn;
+    const cardW = Math.max(140, avail * (s.cardScale ?? 1));
     const rows = [];
     let cursor = y;
     events.forEach((ev, i) => {
@@ -169,8 +176,10 @@ function plan(s) {
       rows.push({ ev, i, side, cardW, ...mm, cy: cursor + rowH / 2, top: cursor + (rowH - mm.h) / 2 });
       cursor += rowH + m.gap;
     });
+    // fundo do conteúdo = base do último card OU a ponta da seta, o que descer mais
     const last = rows.length ? cursor - m.gap : y;
-    const H = last + (s.arrow && rows.length ? 26 * m.F : 0) + m.pad + srcH + wmFooter;
+    const tip = rows.length && s.arrow ? rows[rows.length - 1].cy + m.node / 2 + 24 * m.F : 0;
+    const H = Math.max(last, tip) + m.pad + srcH + wmFooter;
     return { m, events, head, rows, axisX, horiz, size: { w: W0, h: Math.round(H) }, srcH, wmH, wmFooter };
   }
 
@@ -275,9 +284,11 @@ function drawVertical(out, s, t, p, accent, card) {
   const { m, rows, axisX } = p;
   if (!rows.length) return;
   const y0 = rows[0].cy, y1 = rows[rows.length - 1].cy;
-  out.push(`<line x1="${n2(axisX)}" y1="${n2(y0)}" x2="${n2(axisX)}" y2="${n2(y1 + (s.arrow ? 22 * m.F : 0))}" stroke="${accent}" stroke-width="${n2(1.6 * m.F)}" opacity=".45"/>`);
+  // sobra do eixo depois do último nó: passa do raio do nó, senão a seta encosta nele
+  const tail = m.node / 2 + 20 * m.F;
+  out.push(`<line x1="${n2(axisX)}" y1="${n2(y0)}" x2="${n2(axisX)}" y2="${n2(y1 + (s.arrow ? tail : 0))}" stroke="${accent}" stroke-width="${n2(1.6 * m.F)}" opacity=".45"/>`);
   if (s.arrow) {
-    const ay = y1 + 22 * m.F, k = 5 * m.F;
+    const ay = y1 + tail, k = 5 * m.F;
     out.push(`<path d="M${n2(axisX - k)} ${n2(ay - k * 1.2)}L${n2(axisX)} ${n2(ay + k * 0.6)}L${n2(axisX + k)} ${n2(ay - k * 1.2)}" fill="none" stroke="${accent}" stroke-width="${n2(1.6 * m.F)}" opacity=".7" stroke-linecap="round" stroke-linejoin="round"/>`);
   }
 
@@ -311,7 +322,7 @@ function drawHorizontal(out, s, t, p, accent, card) {
   const { m, cols, axisY } = p;
   if (!cols.length) return;
   const x0 = cols[0].cx, x1 = cols[cols.length - 1].cx;
-  const end = x1 + (s.arrow ? 26 * m.F : 0);
+  const end = x1 + (s.arrow ? m.node / 2 + 20 * m.F : 0);
   out.push(`<line x1="${n2(x0)}" y1="${n2(axisY)}" x2="${n2(end)}" y2="${n2(axisY)}" stroke="${accent}" stroke-width="${n2(1.6 * m.F)}" opacity=".45"/>`);
   if (s.arrow) {
     const k = 5 * m.F;

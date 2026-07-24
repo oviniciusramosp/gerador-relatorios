@@ -57,7 +57,10 @@ export const DEFAULTS = {
   // mas só aparece quando o switch é ligado
   show: { title: false, subtitle: false, source: false },
   labels: [],
-  series: [],            // [{ name, data:[…], color?, dashed?, area? }]
+  // [{ name, data:[…], color?, area?, hidden?, stroke? }]
+  // hidden: série fica na spec (e no CSV) mas não é desenhada nem entra na legenda
+  // stroke: 'solid' | 'dashed' | 'dotted' — `dashed: true` ainda é aceito (specs antigas)
+  series: [],
   // side: lado do eixo de valor (left|right) — o y2, se houver, vai pro oposto
   y: { format: 'num', prefix: '', suffix: '', title: '', min: null, max: null, ticks: 5, zero: true, side: 'left' },
   x: { title: '', every: 1, hidden: [], offsets: {} },
@@ -72,6 +75,12 @@ export const DEFAULTS = {
   strokeWidth: 8,
   dotSize: 0,            // 0 = sem marcador; >=8 recomendado quando ligado
   barGap: 0.28,          // fração da banda usada como respiro entre grupos
+  barRadius: 4,          // canto arredondado da barra, em px (bar/hbar — empilhado não arredonda: os segmentos ficam colados)
+  // "trilha": fundo atrás de cada barra cobrindo o range INTEIRO do eixo (não só
+  // 0→valor) — iguala visualmente o "100%" de referência entre as barras, tipo
+  // barra de progresso. scale: espessura da trilha relativa à própria barra
+  // (1 = igual; >1 sobra dos dois lados; <1 fica mais fina que a barra).
+  barTrack: { show: false, opacity: 0.12, scale: 1 },
   // candle: up/down null = usa o verde/coral do tema (acompanha claro↔escuro);
   // um hex explícito fixa a cor. wick = espessura do pavio em px.
   candle: { up: null, down: null, wick: 1.2 },
@@ -111,6 +120,17 @@ export function logoSvg(logo, box, color, opacity) {
     + ` aria-hidden="true">${inner}</svg></g>`;
 }
 const n2 = (v) => Math.round(v * 100) / 100;
+
+// Estilo do traço da linha. Os intervalos escalam com a espessura porque o
+// traço padrão é 8px: valores fixos (o "7 5" antigo) somem num traço grosso.
+// Pontilhado usa traço de comprimento 0 + linecap round = bolinha.
+// `dashed: true` de specs antigas continua valendo.
+const STROKES = { dashed: (w) => `${n2(w * 1.7)} ${n2(w * 1.15)}`, dotted: (w) => `0 ${n2(w * 1.8)}` };
+function dashArray(se, w) {
+  const kind = se.stroke || (se.dashed ? 'dashed' : 'solid');
+  const fn = STROKES[kind];
+  return fn ? ` stroke-dasharray="${fn(w)}"` : '';
+}
 const deepMerge = (base, over) => {
   const out = { ...base };
   for (const k in over) {
@@ -204,12 +224,17 @@ export function renderChart(userSpec = {}, opts = {}) {
   // (diagramação embute o SVG direto no relatório), então "grad-0" colidiria
   const uid = Math.random().toString(36).slice(2, 8);
 
+  // filtra as ocultas aqui, uma vez só: tudo daqui pra baixo (legenda, domínio
+  // do eixo, formas) já as ignora sem precisar checar. _i guarda o índice em
+  // spec.series — depois do filtro a posição no array não aponta mais de volta,
+  // e o editor usa esse índice pra saber que dado o arraste altera.
   const series = (s.series || []).map((se, i) => ({
     ...se,
     name: se.name ?? SERIES_NAMES[i] ?? `Série ${i + 1}`,
     color: se.color || t.series[i % t.series.length],
     data: (se.data || []).map((v) => (v === null || v === '' ? null : Number(v))),
-  }));
+    _i: i,
+  })).filter((se) => !se.hidden);
   const labels = s.labels?.length ? s.labels : (series[0]?.data || []).map((_, i) => String(i + 1));
 
   const out = [];
@@ -527,7 +552,8 @@ function cartesian(series, labels, s, t, box) {
 
   // — marcas —
   const GAP = 2; // respiro de 2px entre fatias/barras vizinhas (spec de marca)
-  const R = 4;
+  const R = Math.max(0, s.barRadius);
+  const track = s.barTrack;
 
   // — candle: pavio (mín→máx) + corpo (abertura→fechamento), verde/coral —
   if (isCandle && candleSer.length >= 4) {
@@ -551,13 +577,14 @@ function cartesian(series, labels, s, t, box) {
     const inner = Math.min(band * (1 - s.barGap), plotW * 0.16);
     const barSize = Math.max(1, inner / barSer.length - (barSer.length > 1 ? GAP : 0));
     barSer.forEach((se, k) => {
-      const k0 = series.indexOf(se), Vx = Vfor(se);
+      const k0 = se._i, Vx = Vfor(se);
       const zero = onY2(se) ? Math.max(d2Min, Math.min(0, d2Max)) : Math.max(dMin, Math.min(0, dMax));
       labels.forEach((_, i) => {
         const v = se.data[i];
         if (v == null) return;
         const a = Vx(zero), b = Vx(v);
         const x = catCenter(i) - inner / 2 + k * (barSize + GAP);
+        if (track.show) out.push(trackRect(x, barSize, top, bottom, false, R, track, se.color));
         out.push(roundedEnd(x, Math.min(a, b), barSize, Math.abs(b - a), Math.min(R, barSize / 2), false, b < a, se.color));
         if (meta) meta.marks.push({ s: k0, i, value: v, base: 0, kind: 'bar', axis: onY2(se) ? 'y2' : 'y', x: x + barSize / 2, y: b });
         if (s.labelMode === 'all') out.push(txt(x + barSize / 2, Math.min(a, b) - 6,
@@ -600,13 +627,14 @@ function cartesian(series, labels, s, t, box) {
         const y = horiz ? off : Math.min(a, b) + (stacked && grow ? GAP : 0);
         const w = horiz ? len : size, h = horiz ? size : len;
         const r = stacked ? 0 : Math.min(R, size / 2);
+        if (track.show && !stacked) out.push(trackRect(off, size, left, right, true, R, track, se.color));
         out.push(roundedEnd(x, y, w, h, r, horiz, grow, se.color));
 
         // alça de arraste no topo do segmento; base = quanto já foi empilhado
         // abaixo (0 em barra simples), pra converter arraste → valor da série.
         // s: índice VERDADEIRO em spec.series (barsHere pode ser um filtro)
         if (meta) meta.marks.push({
-          s: series.indexOf(se), i, value: se.data[i], base: stacked ? start : 0, kind: 'bar',
+          s: se._i, i, value: se.data[i], base: stacked ? start : 0, kind: 'bar',
           x: horiz ? b : off + size / 2, y: horiz ? off + size / 2 : b,
         });
 
@@ -622,7 +650,7 @@ function cartesian(series, labels, s, t, box) {
     const px = (i) => (mixed ? catCenter(i) : catPoint(i));
     const pending = [];   // rótulos diretos, posicionados só no fim (ver anti-colisão)
     lineSer.forEach((se) => {
-      const k = series.indexOf(se), Vx = Vfor(se);
+      const k = se._i, Vx = Vfor(se);
       const pts = se.data.map((v, i) => (v == null ? null : [px(i), Vx(v)])).filter(Boolean);
       if (meta) se.data.forEach((v, i) => { if (v != null) meta.marks.push({ s: k, i, value: v, base: 0, kind: 'point', axis: onY2(se) ? 'y2' : 'y', x: px(i), y: Vx(v) }); });
       if (!pts.length) return;
@@ -643,7 +671,7 @@ function cartesian(series, labels, s, t, box) {
           + `</linearGradient></defs>`);
         out.push(`<path d="${d}L${n2(pts.at(-1)[0])} ${n2(base)}L${n2(pts[0][0])} ${n2(base)}Z" fill="url(#${gid})"/>`);
       }
-      out.push(`<path d="${d}" fill="none" stroke="${se.color}" stroke-width="${s.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"${se.dashed ? ' stroke-dasharray="7 5"' : ''}/>`);
+      out.push(`<path d="${d}" fill="none" stroke="${se.color}" stroke-width="${s.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"${dashArray(se, s.strokeWidth)}/>`);
       // um ponto sozinho não desenha traço nenhum — força marcador, senão a
       // série some do gráfico
       const dot = pts.length === 1 ? Math.max(s.dotSize, 9) : s.dotSize;
@@ -686,6 +714,21 @@ function cartesian(series, labels, s, t, box) {
     ? `<line x1="${n2(left)}" y1="${n2(top)}" x2="${n2(left)}" y2="${n2(bottom)}" stroke="${t.axis}" stroke-width="1"/>`
     : `<line x1="${n2(left)}" y1="${n2(bottom)}" x2="${n2(right)}" y2="${n2(bottom)}" stroke="${t.axis}" stroke-width="1"/>`);
   return out;
+}
+
+// trilha atrás da barra: cobre o range INTEIRO do eixo (from→to), não só
+// 0→valor — por isso arredonda os dois cantos (rx/ry do <rect> já dá conta,
+// diferente da barra em si que arredonda só a ponta do dado). crossPos/crossSize
+// = posição/espessura no eixo transversal (x/largura vertical, y/altura horiz.);
+// track.scale recentraliza uma trilha mais grossa/fina que a própria barra.
+function trackRect(crossPos, crossSize, from, to, horiz, r, track, seriesColor) {
+  const sz = Math.max(0, crossSize * (track.scale ?? 1));
+  const off = crossPos + (crossSize - sz) / 2;
+  const rr = Math.min(r, sz / 2, Math.abs(to - from) / 2);
+  const fill = track.color || seriesColor, op = track.opacity ?? 0.12;
+  return horiz
+    ? `<rect x="${n2(Math.min(from, to))}" y="${n2(off)}" width="${n2(Math.abs(to - from))}" height="${n2(sz)}" rx="${n2(rr)}" fill="${fill}" opacity="${op}"/>`
+    : `<rect x="${n2(off)}" y="${n2(Math.min(from, to))}" width="${n2(sz)}" height="${n2(Math.abs(to - from))}" rx="${n2(rr)}" fill="${fill}" opacity="${op}"/>`;
 }
 
 function roundedEnd(x, y, w, h, r, horiz, grow, fill) {

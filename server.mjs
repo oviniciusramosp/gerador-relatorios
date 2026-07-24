@@ -38,25 +38,42 @@ const MODEL_REFINE = MODEL_CONVERT;
 // Roda o CLI com um prompt. `extraArgs` permite `--resume <id>` pra CONTINUAR a
 // mesma sessão (o "chat com a IA da extração"). Sem --no-session-persistence: a
 // sessão fica gravada e pode ser retomada (cada conversão gera um id único).
-function runClaude(prompt, extraArgs = [], model = MODEL_CONVERT) {
+//
+// --strict-mcp-config (sem --mcp-config): ZERO servidor MCP carregado. Sem essa
+// flag o CLI sobe com TODA a config global do usuário — conectores de conta
+// (Notion/Gmail/Calendar/dados financeiros/etc.), plugins com hook de
+// SessionStart (claude-mem, ponytail)... nada disso tem a ver com "ler uma
+// imagem e devolver JSON", e é exatamente o "daemon herdado segurando o
+// stdout" do comentário abaixo: um MCP que não sobe limpo trava o processo
+// inteiro. --setting-sources sem 'user': não lê ~/.claude/settings.json (mesmo
+// motivo). Isso é a causa raiz do timeout de 3min em pedido simples, não só
+// paliativo — sem essas flags o CLI perde a maior parte do tempo conectando
+// coisa que a tarefa nunca usa.
+function runClaude(prompt, extraArgs = [], model = MODEL_CONVERT, signal) {
   const args = ['-p', prompt, '--output-format', 'json', '--model', model,
-    '--tools', 'Read', '--allowedTools', 'Read', ...extraArgs];
+    '--tools', 'Read', '--allowedTools', 'Read',
+    '--strict-mcp-config', '--setting-sources', 'project,local', '--disable-slash-commands',
+    ...extraArgs];
   // limpa flags de "estou dentro do Claude Code" — senão o CLI recusa rodar
   // aninhado. Só relevante quando o server é iniciado de dentro de uma sessão.
   const env = { ...process.env };
   delete env.CLAUDECODE; delete env.CLAUDE_CODE_ENTRYPOINT; delete env.CLAUDE_CODE_SSE_PORT;
   return new Promise((resolve, reject) => {
     // stdin 'ignore' (=/dev/null): sem isso, claude -p espera EOF de um pipe
-    // aberto e trava pra sempre.
-    const cp = spawn('claude', args, { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // aberto e trava pra sempre. `signal`: aborta o processo se o CLIENTE
+    // desistir (fetch cancelado) — sem isso o CLI ficava rodando até 4 min
+    // órfão, e um "tenta de novo" empilhava um 2º processo pesado em cima do
+    // 1º ainda vivo, piorando cada tentativa seguinte.
+    const cp = spawn('claude', args, { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], signal });
     let out = '', err = '', done = false;
     const finish = (fn, arg) => { if (done) return; done = true; clearTimeout(kill); fn(arg); };
-    // teto de 4 min: se o CLI travar, mata o processo e devolve erro (não deixa
-    // a requisição — nem o "pensando…" do cliente — pendurada pra sempre)
-    const kill = setTimeout(() => { cp.kill('SIGKILL'); finish(reject, new Error('o CLI travou (timeout 4 min)')); }, 240000);
+    // teto de 2 min: sem os conectores/plugins acima, ler 1 imagem + responder
+    // não deveria chegar nem perto disso — se travar mesmo assim, mata e devolve
+    // erro (não deixa a requisição pendurada pra sempre)
+    const kill = setTimeout(() => { cp.kill('SIGKILL'); finish(reject, new Error('o CLI travou (timeout 2 min)')); }, 120000);
     cp.stdout.on('data', (d) => (out += d));
     cp.stderr.on('data', (d) => (err += d));
-    cp.on('error', (e) => finish(reject, e));   // claude não encontrado etc.
+    cp.on('error', (e) => finish(reject, e.name === 'AbortError' ? new Error('cancelado') : e));   // claude não encontrado, abort, etc.
     const settle = (code) => finish(code === 0 ? resolve : reject,
       code === 0 ? out : new Error(err || `claude saiu com código ${code}`));
     // 'close' = processo E pipes fecharam (caminho normal). MAS o CLI às vezes
@@ -342,7 +359,8 @@ async function serveStatic(req, res) {
 }
 
 createServer((req, res) => {
-  if (req.method === 'POST' && req.url === '/api/convert') return handleConvert(req, res);
+  if (req.method === 'POST' && req.url === '/api/convert') return handleImage(req, res, 'input', convertPrompt);
+  if (req.method === 'POST' && req.url === '/api/timeline') return handleImage(req, res, 'timeline', timelinePrompt);
   if (req.method === 'POST' && req.url === '/api/pdf') return handlePdf(req, res);
   if (req.method === 'POST' && req.url === '/api/refine') return handleRefine(req, res);
   if (req.method === 'GET' && req.url.startsWith('/api/candles')) return handleCandles(req, res);

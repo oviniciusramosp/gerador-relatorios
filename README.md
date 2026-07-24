@@ -60,14 +60,21 @@ gráfico e sobrepõe a original pra você conferir.
   além disso (sem Bash, sem escrita, sem rede).
 - A imagem enviada fica em `_ia/input.png` (sobrescrita a cada conversão).
 
+A **linha do tempo** usa o mesmo caminho, com outra rota e outras instruções:
+`POST /api/timeline` + `ia-timeline.md` → imagem em `_ia/timeline.png`. Aqui o
+LLM faz o trabalho inteiro (o dado É o texto: datas, descrições e a escolha do
+ícone), então não há extrator por pixel envolvido.
+
 ## Arquitetura
 
-Três ferramentas, **uma base compartilhada**. É a base que garante que texto,
-gráfico e diagramação saiam com a mesma cara.
+Quatro ferramentas, **uma base compartilhada**. É a base que garante que texto,
+gráfico, diagramação e linha do tempo saiam com a mesma cara.
 
 ```
-paradigma.css      tokens da marca (cor, fonte, escala) — usado pelas 3
+paradigma.css      tokens da marca (cor, fonte, escala) — usado por todas
 chart.js           spec JSON -> string SVG. Puro: sem DOM, sem browser.
+timeline.js        spec de eventos -> string SVG. Puro. Reusa THEMES/logoSvg do chart.js
+timeline-icons.js  ~36 ícones de nó (stroke, 24×24) + nó de sigla (txt:S&P)
 extrair.js         imagem (pixels) -> série numérica. Puro. Sem LLM, sem rede.
 extrair-ui.js      interface do extrator (canvas, seleção de área e cor)
 tabela.js          tabela colada (planilha) <-> spec. Puro. Lê pt-BR e en-US.
@@ -76,7 +83,10 @@ fonts/             IBM Plex Sans variável (.ttf)
 index.html         porta de entrada
 graficos.html      [2] editor de gráficos          ← pronto
 graficos.js        controles do editor
+timelines.html     [4] editor de linhas do tempo   ← pronto
+timelines.js       controles do editor
 teste.html         checagem: extração + eixo X + número + 13 gráficos
+test-timeline.mjs  auto-checagem do renderer de linha do tempo (node)
 exemplos/*.json    specs de exemplo
 ```
 
@@ -85,6 +95,7 @@ exemplos/*.json    specs de exemplo
 | 1 | Texto | a fazer | Edita `.md` do vault direto, via File System Access API (`showOpenFilePicker` + handle persistido no IndexedDB). Sincronia real, sem botão. |
 | 2 | Gráficos | **pronto** | `renderChart(spec)` → SVG; `extrair.js` faz imagem → série |
 | 3 | Diagramação | a fazer | Importa `renderChart` e embute o SVG entre os blocos de texto. PDF pelo `window.print()` + `@page` — o navegador já é o motor de PDF. |
+| 4 | Linhas do tempo | **pronto** | `renderTimeline(spec)` → SVG, reusando `THEMES`/`logoSvg` do `chart.js`. Eventos à mão, colados em texto (`data \| texto \| ícone`) ou lidos de uma imagem de referência (`/api/timeline`). |
 
 O ponto de junção é o `chart.js`: a diagramação não vai reimplementar gráfico,
 ela chama a mesma função e recebe SVG pronto pra colar no fluxo do documento.
