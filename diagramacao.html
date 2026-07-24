@@ -499,6 +499,7 @@
   }
   #calloutBar .co-iconbtn:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
   #calloutBar .swatch { width: 24px; height: 24px; border-radius: 5px; }
+  #calloutBar .sep { width: 1px; align-self: stretch; margin: 2px 1px; background: var(--hair-strong); }
 
   /* popover do ícone do callout — "Emoji personalizado" + grade dos Ionicons curados */
   .ico-pop {
@@ -819,7 +820,9 @@
      (state.activeId), não em seleção de texto; ver updateCalloutBar() em diagramacao.js -->
 <div id="calloutBar" hidden>
   <button type="button" class="co-iconbtn" title="Trocar ícone"></button>
-  <button type="button" class="swatch" title="Cor do fundo"></button>
+  <button type="button" class="swatch co-iconswatch" title="Cor do ícone"></button>
+  <span class="sep"></span>
+  <button type="button" class="swatch co-bgswatch" title="Cor do fundo"></button>
 </div>
 
 <!-- trilha A (t2): mini-editor de URL inline (abre ancorado na seleção) -->

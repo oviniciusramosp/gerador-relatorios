@@ -234,9 +234,12 @@ function measure(b) {
   return h;
 }
 
-// tom padrão do callout: equivalente estático do antigo color-mix(lilac 14%, #fff) — vira o
-// seed de b.color; a partir daí quem manda é o valor salvo no bloco (picker via swatch.js).
-const DEFAULT_CALLOUT_COLOR = '#F5F4FF';
+// defaults do callout: mesma cor-base do app (--lilac #BAB1FF), em duas opacidades — fundo
+// bem sutil (10%), ícone mais presente (40%). rgba de verdade (não um hex pré-misturado como
+// antes) porque o swatch.js já entende rgba nativamente: abrir o picker num callout que nunca
+// teve cor escolhida já mostra o chip lilás destacado e o slider na porcentagem certa, de graça.
+const DEFAULT_CALLOUT_BG = 'rgba(186,177,255,0.10)';
+const DEFAULT_ICON_COLOR = 'rgba(186,177,255,0.40)';
 
 // ─────────────────────────── construção de elementos ────────────────────────
 function buildText(b, editing) {
@@ -264,12 +267,13 @@ function buildText(b, editing) {
     const wrap = document.createElement('div');
     wrap.className = 'b callout';
     wrap.dataset.id = b.id;                      // mesmo esquema do check: alça/drag acham o envelope por [data-id]
-    wrap.style.background = b.color || DEFAULT_CALLOUT_COLOR;
+    wrap.style.background = b.color || DEFAULT_CALLOUT_BG;
 
     const row = document.createElement('div');
     row.className = 'callout-row';
     const icon = document.createElement('div');
     icon.className = 'co-icon';
+    icon.style.color = b.iconColor || DEFAULT_ICON_COLOR;   // currentColor: pinta o stroke do Ionicon
     const isIonicon = b.iconSet === 'ionicon' && IONICONS[b.icon];
     if (isIonicon) {
       icon.innerHTML = ioniconSvg(b.icon, 14);
@@ -384,20 +388,33 @@ function closeCalloutIconPicker() {
 const calloutBar = document.getElementById('calloutBar');
 calloutBar.addEventListener('mousedown', (e) => e.preventDefault());
 const calloutBarIconBtn = calloutBar.querySelector('.co-iconbtn');
-const calloutBarColorBtn = calloutBar.querySelector('.swatch');
+const calloutBarIconColorBtn = calloutBar.querySelector('.co-iconswatch');
+const calloutBarBgBtn = calloutBar.querySelector('.co-bgswatch');
 calloutBarIconBtn.addEventListener('click', () => {
   const b = state.activeId && blockOf(state.activeId);
   if (b && b.type === 'callout') openCalloutIconPicker(calloutBarIconBtn, b);
 });
-calloutBarColorBtn.addEventListener('click', () => {
+// cor do ÍCONE (currentColor do SVG/emoji) — botão separado da cor de fundo, mesmo swatch.js
+calloutBarIconColorBtn.addEventListener('click', () => {
   const b = state.activeId && blockOf(state.activeId);
   if (!b || b.type !== 'callout') return;
-  openSwatchPop(calloutBarColorBtn, (color) => {
+  openSwatchPop(calloutBarIconColorBtn, (color) => {
+    b.iconColor = color; save(); scheduleCommit();
+    const el = pagesEl.querySelector(`.callout[data-id="${b.id}"] .co-icon`);
+    if (el) el.style.color = color;
+    calloutBarIconColorBtn.style.background = color;
+  }, b.iconColor || DEFAULT_ICON_COLOR);
+});
+// cor do FUNDO do callout
+calloutBarBgBtn.addEventListener('click', () => {
+  const b = state.activeId && blockOf(state.activeId);
+  if (!b || b.type !== 'callout') return;
+  openSwatchPop(calloutBarBgBtn, (color) => {
     b.color = color; save(); scheduleCommit();
     const el = pagesEl.querySelector(`.callout[data-id="${b.id}"]`);
     if (el) el.style.background = color;
-    calloutBarColorBtn.style.background = color;
-  }, b.color || DEFAULT_CALLOUT_COLOR);
+    calloutBarBgBtn.style.background = color;
+  }, b.color || DEFAULT_CALLOUT_BG);
 });
 // mostra/esconde e reposiciona a barra sobre o bloco callout ATIVO — chamada no focusin
 // (qualquer bloco ganhando foco, callout ou não) e no scroll do palco (reflow de posição).
@@ -407,7 +424,8 @@ function updateCalloutBar() {
   if (!host) { calloutBar.hidden = true; return; }
   const isIonicon = b.iconSet === 'ionicon' && IONICONS[b.icon];
   calloutBarIconBtn.innerHTML = isIonicon ? ioniconSvg(b.icon, 13) : (b.icon || '💡');
-  calloutBarColorBtn.style.background = b.color || DEFAULT_CALLOUT_COLOR;
+  calloutBarIconColorBtn.style.background = b.iconColor || DEFAULT_ICON_COLOR;
+  calloutBarBgBtn.style.background = b.color || DEFAULT_CALLOUT_BG;
   calloutBar.hidden = false;
   // acima do callout, centrada; se não couber, abaixo — mesma heurística do updateFmtbar()
   const rect = host.getBoundingClientRect();
