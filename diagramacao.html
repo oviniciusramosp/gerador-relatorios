@@ -435,6 +435,28 @@
   .page .check.b.checked .ck-txt { text-decoration: line-through; color: #9A9A9A; }
   .page .ck-txt:empty { min-height: 1lh; }
   .page.editing .ck-txt:empty:focus::before { content: attr(data-ph); color: #bbb; }
+
+  /* trilha A (t2.9): "Sem fundo" vira botão-ícone de lixeira — só existe no DOM com
+     texto/label nenhum (title= cobre a11y); visibilidade (hidden) é setada no JS
+     (syncSpecialUI) conforme state.doc[cover|back].bg != null. */
+  [data-rmbg] { display: inline-flex; align-items: center; justify-content: center; padding: .42rem .55rem; }
+  [data-rmbg] svg { width: 14px; height: 14px; display: block; }
+  [data-rmbg][hidden] { display: none; }
+  /* trilha A (t3.1): ícone real do logo (via logoPickSvg) no lugar do texto Ícone/
+     Completo/Nome — svg já traz fill="currentColor" nos paths, herda a cor do botão
+     (--muted / --ink em aria-pressed) de graça; só precisa centralizar. */
+  .logopick button svg { display: block; margin: 0 auto; }
+  /* trilha A (t2.10): tooltip do "Índice + Resumo" via title= nativo (sem componente
+     custom) — ícone de info empurrado pro fim da linha do <summary> (mesmo truque do
+     margin-left:auto de .blocktypes button .sc). Listener no JS faz preventDefault no
+     click do ícone pra não togglar o <details> junto. */
+  summary.sum-info { display: flex; align-items: center; }
+  .infoicon {
+    margin-left: auto; border: 0; background: none; padding: 0 0 0 .4rem;
+    color: var(--muted); font-size: .85rem; text-transform: none; letter-spacing: normal;
+    cursor: help; line-height: 1;
+  }
+  .infoicon:hover { background: none; color: var(--ink); }
 </style>
 </head>
 <body>
@@ -458,33 +480,25 @@
 
     <div class="pane" data-pane="documento">
       <details open>
-        <summary>Documento</summary>
+        <summary>Texto</summary>
         <div class="body">
           <div id="srcRow" hidden></div>
           <button id="btnFile">Importar arquivo (.md, .txt)</button>
           <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
-          <label class="field">URL do Google Docs
-            <span class="row" style="flex-wrap:nowrap">
-              <input type="url" id="gdocUrl" placeholder="https://docs.google.com/document/d/…" style="flex:1;min-width:0">
-              <button id="btnGdoc">Conectar</button>
-            </span>
-          </label>
-          <p class="hint">O documento abre <b>em branco</b>. Importar <b>vincula</b> a origem — use <b>Sincronizar</b> pra puxar o conteúdo novo quando quiser. Google Docs precisa estar compartilhado como “qualquer pessoa com o link”. Colar (⌘V) do Docs/Word também funciona.</p>
           <div class="row">
-            <button id="btnNew">Novo / limpar</button>
-            <button id="btnSample">Exemplo</button>
+            <button id="btnNew">Novo Documento</button>
           </div>
         </div>
       </details>
 
       <details open>
-        <summary>Páginas especiais</summary>
+        <summary>Capa</summary>
         <div class="body">
           <div class="swrow"><span>Capa</span><button class="sw" data-sw="cover" role="switch" aria-checked="true"></button></div>
           <div class="subctrl" data-sub="cover">
             <div class="row">
               <button class="filebtn">Imagem de fundo<input type="file" data-bg="cover" accept="image/*"></button>
-              <button data-rmbg="cover" title="Remover imagem de fundo">Sem fundo</button>
+              <button data-rmbg="cover" title="Remover imagem de fundo" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
             </div>
             <div class="grid2">
               <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="cover" min="0" max="100" value="50"></label>
@@ -493,9 +507,9 @@
             <div class="field">Logo da Paradigma
               <div class="logopick" data-logopick="cover">
                 <button type="button" data-logokind="none" aria-pressed="true"><span>Nenhum</span></button>
-                <button type="button" data-logokind="icone"><span>Ícone</span></button>
-                <button type="button" data-logokind="full"><span>Completo</span></button>
-                <button type="button" data-logokind="nome"><span>Nome</span></button>
+                <button type="button" data-logokind="icone" title="Ícone"><span>Ícone</span></button>
+                <button type="button" data-logokind="full" title="Completo"><span>Completo</span></button>
+                <button type="button" data-logokind="nome" title="Nome"><span>Nome</span></button>
               </div>
             </div>
             <div class="grid2" data-logoopts="cover" hidden>
@@ -522,15 +536,25 @@
             <div class="row"><button data-addtxt="cover">+ Texto</button></div>
             <p class="hint" style="margin:0">Duas colunas. Clique num texto para tamanho, cor, coluna e alinhamento. Arraste pela alça <b>⠿</b> para reposicionar no eixo Y. Quantos blocos quiser.</p>
           </div>
+        </div>
+      </details>
 
-          <div class="swrow"><span>Índice + Resumo</span><button class="sw" data-sw="index" role="switch" aria-checked="true"></button></div>
-          <p class="hint" style="margin:0">O índice é gerado automaticamente dos títulos <b>H1/H2/H3</b> do miolo. O resumo é editável na própria página.</p>
+      <details open>
+        <summary class="sum-info">Índice + Resumo<button type="button" class="infoicon" title="O índice é gerado automaticamente dos títulos H1/H2/H3 do miolo. O resumo é editável na própria página.">ⓘ</button></summary>
+        <div class="body">
+          <div class="swrow"><span>Índice</span><button class="sw" data-sw="index" role="switch" aria-checked="true"></button></div>
+          <div class="swrow"><span>Resumo</span><button class="sw" data-sw="resumo" role="switch" aria-checked="true"></button></div>
+        </div>
+      </details>
 
+      <details open>
+        <summary>Contracapa</summary>
+        <div class="body">
           <div class="swrow"><span>Contracapa</span><button class="sw" data-sw="back" role="switch" aria-checked="true"></button></div>
           <div class="subctrl" data-sub="back">
             <div class="row">
               <button class="filebtn">Imagem de fundo<input type="file" data-bg="back" accept="image/*"></button>
-              <button data-rmbg="back" title="Remover imagem de fundo">Sem fundo</button>
+              <button data-rmbg="back" title="Remover imagem de fundo" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
             </div>
             <div class="grid2">
               <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="back" min="0" max="100" value="50"></label>
@@ -539,9 +563,9 @@
             <div class="field">Logo da Paradigma
               <div class="logopick" data-logopick="back">
                 <button type="button" data-logokind="none" aria-pressed="true"><span>Nenhum</span></button>
-                <button type="button" data-logokind="icone"><span>Ícone</span></button>
-                <button type="button" data-logokind="full"><span>Completo</span></button>
-                <button type="button" data-logokind="nome"><span>Nome</span></button>
+                <button type="button" data-logokind="icone" title="Ícone"><span>Ícone</span></button>
+                <button type="button" data-logokind="full" title="Completo"><span>Completo</span></button>
+                <button type="button" data-logokind="nome" title="Nome"><span>Nome</span></button>
               </div>
             </div>
             <div class="grid2" data-logoopts="back" hidden>

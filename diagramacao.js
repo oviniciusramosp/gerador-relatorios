@@ -18,7 +18,7 @@
 import { openSwatchPop } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
 import { autocropWhite } from './autocrop.js'; // trilha C (t3): recrop da margem branca de imagens
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
-import { LOGOS } from './logos.js';            // trilha D (t8): logos tingíveis (currentColor) — mesma fonte dos gráficos
+import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
@@ -110,7 +110,10 @@ function seedDoc() {
     back: { on: true, bg: null, bgX: 50, bgY: 50, logo: defaultLogo(), items: [
       coverItem('paradigma.education', 18, 'full', 'center', null, 360),
     ] },
-    index: { on: true, resumo: '<p>Escreva aqui o resumo do relatório.</p>' },
+    // t2.11: índice (lista de títulos) e resumo agora ligam/desligam independente —
+    // resumoOn é o switcher novo; ambos vivem na mesma página física (index.on segue
+    // sendo o gate de existência da página, ver assemblePages/renderIndexPage).
+    index: { on: true, resumoOn: true, resumo: '<p>Escreva aqui o resumo do relatório.</p>' },
   };
 }
 
@@ -125,6 +128,11 @@ function load() {
     if (cfg.cover) state.doc.cover = cfg.cover;
     if (cfg.back) state.doc.back = cfg.back;
     if (cfg.index) state.doc.index = cfg.index;
+    // migração (t2.11): LS antigo não tinha resumoOn (índice e resumo ligavam juntos,
+    // um switcher só) → se o campo não existe, assume true (preserva o comportamento:
+    // índice ligado ⇒ resumo também aparecia). Só é no-op quando cfg.index já veio com
+    // resumoOn OU quando cfg.index nem existia (seedDoc já seta resumoOn:true).
+    if (state.doc.index.resumoOn === undefined) state.doc.index.resumoOn = true;
     // migração: capas salvas antes do Y livre não têm item.y → empilha;
     // capas salvas antes do logo não têm cov.logo → default (não quebra LS antigo)
     [state.doc.cover, state.doc.back].forEach(cov => {
@@ -475,11 +483,17 @@ function renderIndexPage(toc, contentStart, number) {
     list.appendChild(row);
   }
   wrap.appendChild(list);
-  const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo'; wrap.appendChild(h2);
-  const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
-  res.dataset.ph = 'Escreva o resumo…'; res.innerHTML = state.doc.index.resumo || '';
-  if (editing) { res.contentEditable = 'true'; res.spellcheck = true; res.lang = 'pt-BR'; }
-  wrap.appendChild(res);
+  // t2.11: resumoOn é independente de on (que já gateia a página inteira em
+  // assemblePages — só chega até aqui se index.on for true); aqui dentro, resumoOn
+  // decide só se o BLOCO de resumo aparece (a lista de títulos acima é sempre a
+  // "índice", sem gate próprio dentro da página já existente).
+  if (state.doc.index.resumoOn) {
+    const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo'; wrap.appendChild(h2);
+    const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
+    res.dataset.ph = 'Escreva o resumo…'; res.innerHTML = state.doc.index.resumo || '';
+    if (editing) { res.contentEditable = 'true'; res.spellcheck = true; res.lang = 'pt-BR'; }
+    wrap.appendChild(res);
+  }
   page.appendChild(wrap);
   return page;
 }
@@ -1298,7 +1312,9 @@ function addCoverText(kind) {
 // imagem de fundo (data URL) — respeita o padding via CSS
 function setCoverBg(kind, file) {
   const r = new FileReader();
-  r.onload = () => { (kind === 'back' ? state.doc.back : state.doc.cover).bg = r.result; render(); };
+  // t2.9: syncSpecialUI() revela o botão-ícone de lixeira (data-rmbg) agora que bg != null
+  // (a leitura do arquivo é assíncrona — não dá pra sincronizar isso no handler de 'change').
+  r.onload = () => { (kind === 'back' ? state.doc.back : state.doc.cover).bg = r.result; syncSpecialUI(); render(); };
   r.readAsDataURL(file);
 }
 
@@ -1507,34 +1523,20 @@ async function pickFile() {
   setBlocks(parseMarkdown(await f.text()));
 }
 
-function importGdoc(url) {
-  const m = /\/document\/d\/([\w-]+)/.exec(url) || /^([\w-]{20,})$/.exec(String(url).trim());
-  if (!m) { alert('URL do Google Docs inválida — cole o link do documento.'); return; }
-  fileHandle = null; idb.del('fh');
-  state.doc.source = { kind: 'gdoc', id: m[1], label: 'Google Docs' };
-  syncNow(/*fresh*/ true);
-}
-
+// t2.1: Google Docs saiu (import + sincronização agora só por arquivo local). O ramo
+// 'gdoc' que existia aqui (fetch /api/gdoc, setBlocks via blocksFromHtml) foi removido;
+// state.doc.source só assume kind:'file' daqui pra frente.
 async function syncNow(fresh = false) {
   const s = state.doc.source;
   if (!s) return;
   const dirty = state.doc.blocks.some(b => (b.html && b.html.trim()) || b.type === 'image');
   if (!fresh && dirty && !confirm('Sincronizar substitui o conteúdo atual pelo do documento de origem. Continuar?')) return;
   try {
-    if (s.kind === 'gdoc') {
-      const r = await fetch('/api/gdoc?id=' + s.id);
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
-      const html = await r.text();
-      const t = /<title>(.*?)<\/title>/.exec(html);
-      if (t && t[1]) s.label = 'Google Docs · ' + t[1].replace(/\s*-\s*(Google\s*)?(Docs|Documentos).*$/i, '');
-      setBlocks(blocksFromHtml(html));
-    } else {
-      if (!fileHandle) { await pickFile(); return; }   // handle perdido → escolher de novo
-      if (await fileHandle.queryPermission() !== 'granted'
-        && await fileHandle.requestPermission() !== 'granted') throw new Error('permissão de leitura negada');
-      const f = await fileHandle.getFile();
-      setBlocks(parseMarkdown(await f.text()));
-    }
+    if (!fileHandle) { await pickFile(); return; }   // handle perdido → escolher de novo
+    if (await fileHandle.queryPermission() !== 'granted'
+      && await fileHandle.requestPermission() !== 'granted') throw new Error('permissão de leitura negada');
+    const f = await fileHandle.getFile();
+    setBlocks(parseMarkdown(await f.text()));
   } catch (e) { alert('Sincronização falhou: ' + (e.message || e)); }
 }
 
@@ -1630,8 +1632,6 @@ document.getElementById('file').addEventListener('change', (e) => {
   r.onload = () => { fileHandle = null; state.doc.source = { kind: 'file', label: f.name }; setBlocks(parseMarkdown(r.result)); };
   r.readAsText(f); e.target.value = '';
 });
-document.getElementById('btnGdoc').addEventListener('click', () => importGdoc(document.getElementById('gdocUrl').value));
-document.getElementById('gdocUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') importGdoc(e.target.value); });
 document.getElementById('imgfile').addEventListener('change', (e) => {
   const f = e.target.files[0]; if (f) addImageFile(f, pendingImgPlacement);
   pendingImgPlacement = null; e.target.value = '';
@@ -1645,9 +1645,6 @@ document.getElementById('btnNew').addEventListener('click', () => {
   syncSpecialUI();
   setBlocks(state.doc.blocks);
 });
-document.getElementById('btnSample').addEventListener('click', () => {
-  state.doc.blocks = parseMarkdown(SAMPLE); state.activeId = state.doc.blocks[0].id; render();
-});
 document.getElementById('footText').addEventListener('input', (e) => { state.doc.footText = e.target.value; render(); });
 document.getElementById('headText').addEventListener('input', (e) => { state.doc.headText = e.target.value; render(); });
 document.getElementById('firstPage').addEventListener('input', (e) => { state.doc.firstPage = +e.target.value || 0; render(); });
@@ -1658,9 +1655,16 @@ function syncSubCtrl() {
   document.querySelectorAll('.subctrl[data-sub]').forEach(el => { el.hidden = !specialObj(el.dataset.sub).on; });
 }
 function syncSpecialUI() {
-  document.querySelectorAll('.sw[data-sw]').forEach(sw => sw.setAttribute('aria-checked', String(specialObj(sw.dataset.sw).on)));
+  // t2.11: 'resumo' não é mais um specialObj com .on próprio — é state.doc.index.resumoOn.
+  document.querySelectorAll('.sw[data-sw]').forEach(sw => {
+    const key = sw.dataset.sw;
+    const checked = key === 'resumo' ? state.doc.index.resumoOn : specialObj(key).on;
+    sw.setAttribute('aria-checked', String(checked));
+  });
   document.querySelectorAll('[data-bgx]').forEach(s => { s.value = specialObj(s.dataset.bgx).bgX ?? 50; });
   document.querySelectorAll('[data-bgy]').forEach(s => { s.value = specialObj(s.dataset.bgy).bgY ?? 50; });
+  // t2.9: "Sem fundo" (lixeira) só aparece quando há imagem de fundo selecionada.
+  document.querySelectorAll('[data-rmbg]').forEach(b => { b.hidden = specialObj(b.dataset.rmbg).bg == null; });
   syncSubCtrl();
   syncLogoUI();
 }
@@ -1695,17 +1699,35 @@ function applyCoverBgPos(kind) {
   if (bg) bg.style.backgroundPosition = `${cov.bgX ?? 50}% ${cov.bgY ?? 50}%`;
 }
 document.querySelectorAll('.sw[data-sw]').forEach(sw => sw.addEventListener('click', () => {
-  const obj = specialObj(sw.dataset.sw);
-  obj.on = !obj.on; sw.setAttribute('aria-checked', String(obj.on));
+  // t2.11: 'resumo' mora em state.doc.index.resumoOn (não tem specialObj/.on próprio) —
+  // menor mudança correta é um caso especial aqui em vez de generalizar specialObj().
+  if (sw.dataset.sw === 'resumo') {
+    state.doc.index.resumoOn = !state.doc.index.resumoOn;
+    sw.setAttribute('aria-checked', String(state.doc.index.resumoOn));
+  } else {
+    const obj = specialObj(sw.dataset.sw);
+    obj.on = !obj.on; sw.setAttribute('aria-checked', String(obj.on));
+  }
   syncSubCtrl(); render();
 }));
+// t2.10: tooltip nativo (title=) no ícone "ⓘ" ao lado de "Índice + Resumo" — preventDefault
+// no click evita que a ativação do botão borbulhe pro <summary> e togglar o <details> junto.
+document.querySelector('.infoicon')?.addEventListener('click', (e) => e.preventDefault());
 document.querySelectorAll('[data-bg]').forEach(inp => inp.addEventListener('change', (e) => {
   const f = e.target.files[0]; if (f) setCoverBg(inp.dataset.bg, f); e.target.value = '';
 }));
-document.querySelectorAll('[data-rmbg]').forEach(btn => btn.addEventListener('click', () => { specialObj(btn.dataset.rmbg).bg = null; render(); }));
+document.querySelectorAll('[data-rmbg]').forEach(btn => btn.addEventListener('click', () => { specialObj(btn.dataset.rmbg).bg = null; syncSpecialUI(); render(); }));
 document.querySelectorAll('[data-addtxt]').forEach(btn => btn.addEventListener('click', () => addCoverText(btn.dataset.addtxt)));
 document.querySelectorAll('[data-bgx]').forEach(s => s.addEventListener('input', (e) => { specialObj(s.dataset.bgx).bgX = +e.target.value; applyCoverBgPos(s.dataset.bgx); save(); scheduleCommit(); }));
 document.querySelectorAll('[data-bgy]').forEach(s => s.addEventListener('input', (e) => { specialObj(s.dataset.bgy).bgY = +e.target.value; applyCoverBgPos(s.dataset.bgy); save(); scheduleCommit(); }));
+// t3.1: ícone real do logo (Ícone/Completo/Nome) no picker, no lugar do rótulo de texto —
+// estático (não depende de estado), então injeta uma vez só; "Nenhum" continua texto.
+// o <span> de texto é substituído pelo <svg aria-hidden> (via logoPickSvg); o title=
+// no HTML preserva o nome acessível do botão (senão ficaria mudo pra leitor de tela).
+document.querySelectorAll('[data-logopick] button[data-logokind]').forEach(b => {
+  const kind = b.dataset.logokind;
+  if (kind !== 'none') b.innerHTML = logoPickSvg(kind);
+});
 // ── logo da Paradigma na capa/contracapa (trilha D) — picker + posição/alinhamento/cor/tamanho ──
 document.querySelectorAll('[data-logopick]').forEach(pick => pick.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-logokind]'); if (!b) return;
@@ -1784,21 +1806,6 @@ function downloadMd() {
 }
 document.getElementById('btnMd').addEventListener('click', downloadMd);
 addEventListener('resize', () => { if (state.zoom === 'fit') applyZoom(); });
-
-const SAMPLE = `# Relatório de mercado
-## Perpétuos on-chain
-
-A Paradigma acompanha a migração da liquidez de derivativos para as DEXs de perpétuos. O volume nos últimos trimestres mostra uma casa de pesquisa atenta ao que o mercado sinaliza, não ao ruído.
-
-- Volume total cresce trimestre a trimestre
-- A participação das DEXs sobe de forma consistente
-- Taxas acumuladas seguem o mesmo sentido
-
-> A tese continua a mesma: acompanhar o dado, publicar a ideia.
-
-## Próximos passos
-
-O próximo bloco de conteúdo detalha a leitura por protocolo, com os gráficos gerados na ferramenta de Gráficos deste mesmo gerador.`;
 
 // ──────────────── barra flutuante de formatação (estilo Notion) ─────────────
 const fmtbar = document.getElementById('fmtbar');
