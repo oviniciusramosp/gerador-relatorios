@@ -22,6 +22,7 @@ import { LOGOS } from './logos.js';            // trilha D (t8): logos tingívei
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
+import { serializeDoc, deserializeDoc } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.json)
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
@@ -1494,16 +1495,64 @@ function setBlocks(blocks) {
   closeImgPanel(); renderSourceChip(); render();
 }
 
+// nome termina em .json (cobre ".pdgm.json" e um ".json" solto, caso alguém
+// renomeie o arquivo) → caminho de documento completo; senão → .md/.txt de sempre.
+const isDocJson = (name) => String(name).toLowerCase().endsWith('.json');
+
+// MESMA migração que load() aplica em cfg.cover/cfg.back (capas salvas antes do
+// Y livre não têm item.y → empilha; antes do logo não têm cov.logo → default).
+// Duplicada aqui (não em load()) de propósito: seedDoc/load são da Trilha A —
+// abrir um .pdgm.json é região da Trilha C. Mesma REGRA, sem inventar nova; se
+// load() mudar a migração, replicar aqui.
+function migrateSpecialPages(doc) {
+  [doc.cover, doc.back].forEach(cov => {
+    if (!cov) return;
+    if (!cov.logo) cov.logo = defaultLogo();
+    if (!cov.items) return;
+    let yy = 40;
+    cov.items.forEach(it => { if (typeof it.y !== 'number') { it.y = yy; yy += 60; } });
+  });
+}
+
+// aplica um doc COMPLETO (vindo de deserializeDoc) como o novo state.doc — igual
+// ao #btnNew (troca o documento inteiro + resincroniza a UI), mas preservando
+// tudo que veio no arquivo em vez de abrir em branco. Object.assign sobre um
+// seedDoc() novo cobre campo ausente (arquivo de versão futura ou editado à mão)
+// sem precisar listar cada campo — mesmo espírito genérico do doc-format.js.
+function applyDocFile(doc) {
+  state.doc = Object.assign(seedDoc(), doc);
+  migrateSpecialPages(state.doc);
+  fileHandle = null; idb.del('fh');   // .pdgm.json não é origem sincronizável (sem "Salvar no arquivo" de volta)
+  document.getElementById('footText').value = state.doc.footText;
+  document.getElementById('headText').value = state.doc.headText || '';
+  document.getElementById('firstPage').value = state.doc.firstPage;
+  syncSpecialUI();
+  setBlocks(state.doc.blocks);   // → render() → save()+scheduleCommit() (mesmo padrão do #btnNew)
+}
+
+// texto bruto de um .pdgm.json → parse + valida envelope + aplica. Compartilhado
+// entre pickFile() (File System Access API) e o listener de #file (fallback).
+function openDocFile(text) {
+  let doc;
+  try { doc = deserializeDoc(JSON.parse(text)); } catch { doc = null; }
+  if (!doc) { alert('Arquivo .pdgm.json inválido ou corrompido.'); return; }
+  applyDocFile(doc);
+}
+
 async function pickFile() {
   if (!window.showOpenFilePicker) { document.getElementById('file').click(); return; }
   let h;
   try {
-    [h] = await showOpenFilePicker({ types: [{ description: 'Texto', accept: { 'text/plain': ['.md', '.markdown', '.txt'] } }] });
+    [h] = await showOpenFilePicker({ types: [
+      { description: 'Texto', accept: { 'text/plain': ['.md', '.markdown', '.txt'] } },
+      { description: 'Documento Paradigma', accept: { 'application/json': ['.pdgm.json', '.json'] } },
+    ] });
   } catch { return; }                        // usuário cancelou
+  const f = await h.getFile();
+  if (isDocJson(h.name)) { openDocFile(await f.text()); return; }
   fileHandle = h;
   state.doc.source = { kind: 'file', label: h.name };
   idb.set('fh', h);
-  const f = await h.getFile();
   setBlocks(parseMarkdown(await f.text()));
 }
 
@@ -1627,7 +1676,10 @@ document.getElementById('btnFile').addEventListener('click', pickFile);
 document.getElementById('file').addEventListener('change', (e) => {
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
-  r.onload = () => { fileHandle = null; state.doc.source = { kind: 'file', label: f.name }; setBlocks(parseMarkdown(r.result)); };
+  r.onload = () => {
+    if (isDocJson(f.name)) { openDocFile(r.result); return; }   // .pdgm.json: documento completo, não é markdown
+    fileHandle = null; state.doc.source = { kind: 'file', label: f.name }; setBlocks(parseMarkdown(r.result));
+  };
   r.readAsText(f); e.target.value = '';
 });
 document.getElementById('btnGdoc').addEventListener('click', () => importGdoc(document.getElementById('gdocUrl').value));
@@ -1782,7 +1834,19 @@ function downloadMd() {
   a.click();
   URL.revokeObjectURL(a.href);
 }
-document.getElementById('btnMd').addEventListener('click', downloadMd);
+// "Salvar" (trilha C t3.2): baixa o DOCUMENTO INTEIRO (blocos + capa/contracapa +
+// logo + índice/resumo + cabeçalho/rodapé + nº 1ª página + origem) como
+// .pdgm.json — sem perda, ao contrário do .md acima (só o texto). Reabre pelo
+// mesmo caminho de pickFile()/#file (ver openDocFile/applyDocFile acima).
+function saveDocFile() {
+  const blob = new Blob([JSON.stringify(serializeDoc(state.doc))], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (state.doc.source?.label || 'diagramacao').replace(/\.[^.]+$/, '') + '.pdgm.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+document.getElementById('btnMd').addEventListener('click', saveDocFile);
 addEventListener('resize', () => { if (state.zoom === 'fit') applyZoom(); });
 
 const SAMPLE = `# Relatório de mercado
