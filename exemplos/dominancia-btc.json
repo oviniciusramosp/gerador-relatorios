@@ -1,0 +1,13 @@
+{
+  "type": "area",
+  "title": "Dominância do bitcoin",
+  "subtitle": "Participação do bitcoin no valor total do mercado cripto",
+  "source": "Fonte: dados de exemplo • jul/2026",
+  "labels": ["2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"],
+  "series": [
+    { "name": "Dominância", "data": [68, 62, 41, 39, 48, 54, 58, 61] }
+  ],
+  "y": { "format": "pct", "min": 0, "max": 80 },
+  "annotations": [{ "at": "2021", "text": "Pico das altcoins" }],
+  "labelMode": "ends"
+}

@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gráficos · Gerador de Relatórios Paradigma</title>
+<link rel="stylesheet" href="paradigma.css">
+<style>
+  body { height: 100dvh; display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
+
+  header {
+    display: flex; align-items: baseline; gap: 1rem;
+    padding: .8rem 1.1rem; border-bottom: 1px solid var(--hair);
+  }
+  header h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  header .crumb { color: var(--muted); font-size: .74rem; font-stretch: 85%; }
+  header nav { margin-left: auto; display: flex; gap: .4rem; }
+
+  main { display: grid; grid-template-columns: 330px 1fr; min-height: 0; }
+
+  aside {
+    border-right: 1px solid var(--hair);
+    overflow-y: auto; padding: 1rem; display: grid; gap: .9rem; align-content: start;
+  }
+  aside::-webkit-scrollbar { width: 8px; }
+  aside::-webkit-scrollbar-thumb { background: var(--hair-strong); border-radius: 4px; }
+
+  details > summary {
+    cursor: pointer; list-style: none; font-size: .68rem; font-weight: 600;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--lilac);
+    font-stretch: 85%; padding: .3rem 0; user-select: none;
+  }
+  details > summary::before { content: "▸ "; display: inline-block; transition: transform .12s; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  details > .body { display: grid; gap: .55rem; padding: .5rem 0 .9rem; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+
+  /* picker de tipo com ícone */
+  .typepick { display: grid; grid-template-columns: repeat(4, 1fr); gap: .3rem; }
+  .typepick button {
+    display: grid; justify-items: center; gap: .2rem; padding: .45rem .2rem;
+    border: 1px solid var(--hair); border-radius: var(--r); background: transparent;
+    color: var(--muted); cursor: pointer; font-stretch: 85%; font-size: .64rem;
+  }
+  .typepick button svg { width: 24px; height: 16px; }
+  .typepick button:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .typepick button[aria-pressed="true"] {
+    border-color: var(--violet); color: var(--ink);
+    background: color-mix(in srgb, var(--violet) 18%, transparent);
+  }
+
+  /* switch de mostrar label */
+  .labelrow { display: flex; gap: .55rem; align-items: end; }
+  .labelrow .field { flex: 1; min-width: 0; }
+  .lblswitch {
+    flex: 0 0 auto; width: 2.1rem; height: 1.2rem; margin-bottom: .3rem; padding: 0;
+    border-radius: 999px; border: 1px solid var(--hair-strong);
+    background: color-mix(in srgb, var(--lilac) 10%, transparent); position: relative; cursor: pointer;
+  }
+  .lblswitch::after {
+    content: ""; position: absolute; top: 50%; left: 2px; transform: translateY(-50%);
+    width: .85rem; height: .85rem; border-radius: 50%; background: var(--muted); transition: left .12s, background .12s;
+  }
+  .lblswitch[aria-checked="true"] { background: var(--violet); border-color: var(--violet); }
+  .lblswitch[aria-checked="true"]::after { left: calc(100% - .85rem - 2px); background: #fff; }
+  .toggle { display: flex; align-items: center; gap: .45rem; font-size: .78rem; color: var(--muted); cursor: pointer; }
+
+  textarea { width: 100%; min-height: 130px; resize: vertical; font-family: ui-monospace, "SF Mono", monospace; font-size: .72rem; line-height: 1.5; }
+
+  .serie {
+    display: grid; grid-template-columns: auto 1fr auto; gap: .55rem; align-items: center;
+    border: 1px solid var(--hair); border-radius: var(--r); padding: .4rem .55rem;
+  }
+  .serie .serie-opts { grid-column: 1 / -1; display: flex; gap: .35rem; }
+  .serie .mini { font-size: .68rem; padding: .22rem .4rem; flex: 1; min-width: 0; }
+  .serie .sname { border: 0; background: none; padding: .2rem; min-width: 0; color: var(--ink); }
+  .serie .swatch { width: 1.5rem; height: 1.5rem; }
+  /* .colorfield e o popover .swatch-pop/.sp-* vêm do componente compartilhado swatch.js */
+
+  /* ---------- editor de arraste (pontos/barras) ---------- */
+  #editLayer { position: absolute; inset: 0; z-index: 4; touch-action: none; pointer-events: none; }
+  #editLayer.on { pointer-events: auto; cursor: crosshair; }
+  #editLayer.can-drag { cursor: grab; }
+  #editLayer.can-edit { cursor: text; }
+  #editLayer.dragging { cursor: grabbing; }
+  /* input inline pra renomear rótulo de eixo direto no gráfico */
+  .label-edit {
+    position: absolute; z-index: 8; transform: translate(-50%, -50%);
+    padding: .1rem .35rem; font-size: .82rem; text-align: center;
+    border: 1px solid var(--violet); border-radius: 5px;
+    background: var(--ground); color: var(--ink); box-shadow: 0 8px 24px -10px #000;
+  }
+  #editToggle { font-stretch: 85%; }
+  #editToggle.on { background: var(--violet); border-color: var(--violet); font-weight: 600; }
+  .iconbtn { padding: .3rem .55rem; font-size: 1rem; line-height: 1; }
+  .iconbtn:disabled { opacity: .35; cursor: default; }
+  .edit-handle { fill: color-mix(in srgb, var(--ink) 70%, transparent); stroke: var(--violet); stroke-width: 2; pointer-events: none; }
+  .edit-handle.hot { fill: var(--ink); }
+  #dragTip {
+    position: absolute; z-index: 6; pointer-events: none;
+    padding: .2rem .5rem; border-radius: 5px; font-size: .8rem; font-weight: 600;
+    background: var(--violet); color: #fff; white-space: nowrap;
+    transform: translate(-50%, -140%);
+  }
+  #dragTip[hidden] { display: none; }
+
+  /* ---------- palco ---------- */
+  section.stage {
+    position: relative;
+    display: grid; grid-template-rows: 1fr auto; min-height: 0;
+    background:
+      radial-gradient(ellipse 70% 50% at 50% 130%, color-mix(in srgb, var(--violet) 26%, transparent), transparent 72%),
+      var(--ground);
+  }
+  /* overlay do "Converter com IA" — cobre o palco pra ninguém achar que travou */
+  #iaOverlay {
+    position: absolute; inset: 0; z-index: 5;
+    display: grid; place-items: center;
+    background: color-mix(in srgb, var(--ground) 78%, transparent);
+    backdrop-filter: blur(2px);
+  }
+  #iaOverlay[hidden] { display: none; }
+  .ia-card {
+    display: grid; justify-items: center; gap: .7rem; text-align: center;
+    padding: 1.6rem 2rem; border: 1px solid var(--hair-strong); border-radius: 10px;
+    background: color-mix(in srgb, var(--lilac) 7%, var(--ground));
+    box-shadow: 0 24px 70px -30px #000;
+  }
+  .ia-spinner {
+    width: 2.2rem; height: 2.2rem; border-radius: 50%;
+    border: 3px solid var(--hair); border-top-color: var(--violet);
+    animation: iaspin .8s linear infinite;
+  }
+  @keyframes iaspin { to { transform: rotate(360deg); } }
+  .ia-title { margin: 0; font-weight: 600; font-size: 1.05rem; }
+  .ia-sub { margin: 0; color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; }
+  #iaOverlay.err .ia-spinner { display: none; }
+  #iaOverlay.err .ia-title { color: #FF6B6B; }
+  #iaClose { margin-top: .3rem; }
+  .canvas { display: grid; place-items: center; padding: 1.4rem; min-height: 0; overflow: auto; }
+  .framewrap { position: relative; max-width: 100%; max-height: 100%; line-height: 0; }
+  .framewrap > .frame { max-width: 100%; max-height: 100%; box-shadow: 0 24px 70px -30px #000; border-radius: 4px; overflow: hidden; }
+  .canvas svg { display: block; max-width: 100%; height: auto; }
+  /* onion-skin: original sobre o gráfico, mesma caixa, pra comparar na mão */
+  #ghost { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill;
+    pointer-events: none; border-radius: 4px; }
+  #ghost.movable { pointer-events: auto; cursor: grab; z-index: 7; outline: 2px dashed var(--mint); }
+  #ghost.movable.grabbing { cursor: grabbing; }
+  #ghostOp { width: 90px; }
+  #ghostMove.on { background: var(--mint); border-color: var(--mint); color: var(--ground); font-weight: 600; }
+
+  .bar {
+    display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+    padding: .7rem 1.1rem; border-top: 1px solid var(--hair);
+    background: color-mix(in srgb, var(--ground) 88%, black);
+  }
+  .bar .sep { flex: 1; }
+  .hint { font-size: .72rem; color: var(--muted); font-stretch: 90%; }
+
+  /* chat flutuante com a IA da extração (mesma sessão) */
+  #iaFab {
+    position: fixed; right: 1.3rem; bottom: 1.3rem; z-index: 50;
+    width: 3.3rem; height: 3.3rem; border-radius: 50%; padding: 0;
+    display: grid; place-items: center;
+    background: var(--violet); color: #fff; border: 0;
+    box-shadow: 0 12px 32px -8px #000; cursor: pointer;
+  }
+  #iaFab:hover { filter: brightness(1.12); }
+  #iaPanel {
+    position: fixed; right: 1.3rem; bottom: 1.3rem; z-index: 51;
+    width: min(360px, calc(100vw - 2rem)); height: min(520px, calc(100vh - 2rem));
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--ground); border: 1px solid var(--hair-strong); border-radius: 14px;
+    box-shadow: 0 28px 70px -22px #000;
+  }
+  .ia-head {
+    display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+    padding: .6rem .85rem; border-bottom: 1px solid var(--hair);
+    font-size: .82rem; color: var(--ink); background: color-mix(in srgb, var(--lilac) 6%, transparent);
+  }
+  .ia-head .hint { display: inline; }
+  #iaMin { background: transparent; border: 0; color: var(--muted); cursor: pointer;
+    font-size: 1.4rem; line-height: 1; padding: 0 .4rem; }
+  #iaMin:hover { color: var(--ink); }
+  #iaLog { flex: 1; display: flex; flex-direction: column; gap: .4rem; padding: .8rem; overflow-y: auto; }
+  .ia-msg { font-size: .78rem; line-height: 1.4; padding: .4rem .6rem; border-radius: 9px; max-width: 88%; white-space: pre-wrap; }
+  .ia-user { align-self: flex-end; background: color-mix(in srgb, var(--violet) 22%, transparent); color: var(--ink); }
+  .ia-bot { align-self: flex-start; background: color-mix(in srgb, var(--lilac) 10%, transparent); color: var(--muted); }
+  .ia-bot.err { color: #FF6B6B; background: color-mix(in srgb, #FF6B6B 12%, transparent); }
+  .ia-bot.pending { animation: iaPulse 1.1s ease-in-out infinite; }
+  @keyframes iaPulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+  .ia-foot { display: flex; gap: .4rem; padding: .65rem .75rem; border-top: 1px solid var(--hair); }
+  #iaMsg { flex: 1; min-width: 0; }
+
+  #drop.over { outline: 2px dashed var(--mint); outline-offset: -6px; }
+  [hidden] { display: none !important; }
+
+  /* ---------- extrator ---------- */
+  dialog {
+    width: min(1240px, 94vw); max-height: 92dvh; padding: 0;
+    background: var(--ground); color: var(--ink);
+    border: 1px solid var(--hair-strong); border-radius: 10px;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.68); }
+  .dlg-head {
+    display: flex; align-items: start; gap: 1rem; justify-content: space-between;
+    padding: .9rem 1.1rem; border-bottom: 1px solid var(--hair);
+  }
+  .dlg-body { display: grid; grid-template-columns: 1fr 340px; gap: 1rem; padding: 1rem; overflow: auto; max-height: calc(92dvh - 68px); }
+  .dlg-side { display: grid; gap: .7rem; align-content: start; }
+  .stagewrap { min-width: 0; }
+  #cv {
+    max-width: 100%; display: block; border-radius: var(--r);
+    border: 1px solid var(--hair); cursor: crosshair; touch-action: none;
+    background: repeating-conic-gradient(#1a1729 0 25%, #14111f 0 50%) 0 0/16px 16px;
+  }
+  .verdict { font-size: .78rem; font-stretch: 90%; margin: .4rem 0 0; display: flex; align-items: center; gap: .4rem; }
+  .verdict::before { content: ""; width: .6rem; height: .6rem; border-radius: 50%; flex: 0 0 auto; background: var(--muted); }
+  .verdict.ok::before { background: var(--mint); }
+  .verdict.atencao::before { background: #E8B029; }
+  .verdict.ruim::before { background: #FF6B6B; }
+  .gridout { font-size: .72rem; color: var(--muted); margin-top: .5rem; display: grid; gap: .15rem; }
+  .gridout .warn { color: #E8B029; }
+  #preview .err { color: #FF6B6B; }
+  .gridout table { border-collapse: collapse; width: 100%; }
+  .gridout td { padding: .05rem .3rem; font-variant-numeric: tabular-nums; }
+  .gridout td:last-child { text-align: right; color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gráficos</h1>
+  <span class="crumb">Gerador de Relatórios · Paradigma</span>
+  <nav>
+    <button id="btnSvg">Baixar SVG</button>
+    <button id="btnPng" class="primary">Baixar PNG</button>
+  </nav>
+</header>
+
+<main id="drop">
+  <aside>
+    <details open>
+      <summary>Dados</summary>
+      <div class="body">
+        <label class="field">
+          Dados em CSV (1ª coluna = rótulos, 1ª linha = nomes das séries)
+          <textarea id="tsv" spellcheck="false"></textarea>
+        </label>
+        <div class="row">
+          <button id="btnIA" class="primary">Converter imagem em gráfico…</button>
+          <button id="btnCsv" title="Baixar os dados em CSV">Baixar CSV</button>
+        </div>
+        <p class="hint" id="iaHint">Escolha uma imagem de gráfico — o Claude lê o eixo e os dados e monta o gráfico no padrão da casa. Depois <b>arraste os pontos (ou o topo das barras)</b> no gráfico à direita pra ajustar.</p>
+
+        <details>
+          <summary>Candles por API (Binance / Hyperliquid)</summary>
+          <div class="body">
+            <div class="grid2">
+              <label class="field">Corretora
+                <select id="cdVenue"><option value="binance">Binance</option><option value="hyperliquid">Hyperliquid</option></select>
+              </label>
+              <label class="field">Ativo
+                <input id="cdSymbol" type="text" placeholder="BTCUSDT" spellcheck="false">
+              </label>
+              <label class="field">Intervalo
+                <select id="cdInterval">
+                  <option value="1h">1 hora</option>
+                  <option value="4h">4 horas</option>
+                  <option value="1d" selected>1 dia</option>
+                  <option value="1w">1 semana</option>
+                </select>
+              </label>
+              <label class="field">Volume
+                <select id="cdVol"><option value="1">Mostrar (eixo dir.)</option><option value="0">Ocultar</option></select>
+              </label>
+              <label class="field">De
+                <input id="cdStart" type="date">
+              </label>
+              <label class="field">Até
+                <input id="cdEnd" type="date">
+              </label>
+            </div>
+            <button id="btnCandles" class="primary">Buscar candles</button>
+            <p class="hint">Binance: par completo (BTCUSDT). Hyperliquid: só a moeda (HYPE, BTC). API pública, sem chave.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Importar de HTML/SVG</summary>
+          <div class="body">
+            <label class="field">
+              Cole o HTML do elemento (no site: botão-direito no gráfico → Inspecionar → botão-direito no nó → Copy → Copy element)
+              <textarea id="htmlIn" spellcheck="false" placeholder="&lt;div data-chart-id=…&gt; … &lt;/div&gt;"></textarea>
+            </label>
+            <button id="btnImportHtml">Importar</button>
+            <p class="hint">SVG (recharts e afins): lê a curva e os eixos e reconstrói os valores reais — sem IA, na hora. Só cola o HTML, não a URL (o navegador não lê outro domínio).</p>
+          </div>
+        </details>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Formato</summary>
+      <div class="body">
+        <div class="field">Tipo
+          <div class="typepick" id="typePicker">
+            <button type="button" data-type="line" title="Linha"><svg viewBox="0 0 24 16"><polyline points="1,13 7,7 13,10 23,2" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>Linha</span></button>
+            <button type="button" data-type="area" title="Área"><svg viewBox="0 0 24 16"><path d="M1 13 7 7 13 10 23 2 23 15 1 15Z" fill="currentColor" opacity=".35"/><polyline points="1,13 7,7 13,10 23,2" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>Área</span></button>
+            <button type="button" data-type="bar" title="Barra"><svg viewBox="0 0 24 16"><rect x="2" y="8" width="4" height="7" fill="currentColor"/><rect x="10" y="4" width="4" height="11" fill="currentColor"/><rect x="18" y="10" width="4" height="5" fill="currentColor"/></svg><span>Barra</span></button>
+            <button type="button" data-type="hbar" title="Barra horizontal"><svg viewBox="0 0 24 16"><rect x="1" y="2" width="14" height="3" fill="currentColor"/><rect x="1" y="7" width="20" height="3" fill="currentColor"/><rect x="1" y="12" width="9" height="3" fill="currentColor"/></svg><span>Barra H</span></button>
+            <button type="button" data-type="stacked" title="Empilhado"><svg viewBox="0 0 24 16"><rect x="4" y="9" width="6" height="6" fill="currentColor"/><rect x="4" y="4" width="6" height="4" fill="currentColor" opacity=".55"/><rect x="14" y="7" width="6" height="8" fill="currentColor"/><rect x="14" y="3" width="6" height="3" fill="currentColor" opacity=".55"/></svg><span>Empilhado</span></button>
+            <button type="button" data-type="stacked100" title="Empilhado 100%"><svg viewBox="0 0 24 16"><rect x="4" y="1" width="6" height="14" fill="currentColor" opacity=".4"/><rect x="4" y="7" width="6" height="8" fill="currentColor"/><rect x="14" y="1" width="6" height="14" fill="currentColor" opacity=".4"/><rect x="14" y="5" width="6" height="10" fill="currentColor"/></svg><span>100%</span></button>
+            <button type="button" data-type="donut" title="Rosca"><svg viewBox="0 0 24 16"><circle cx="12" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="4"/></svg><span>Rosca</span></button>
+            <button type="button" data-type="pie" title="Pizza (com % nas fatias)"><svg viewBox="0 0 24 16"><circle cx="12" cy="8" r="7" fill="currentColor" opacity=".4"/><path d="M12 8 L12 1 A7 7 0 0 1 18.8 10.2 Z" fill="currentColor"/></svg><span>Pizza</span></button>
+            <button type="button" data-type="candle" title="Candlestick (O/H/L/C)"><svg viewBox="0 0 24 16"><line x1="5" y1="1" x2="5" y2="15" stroke="currentColor"/><rect x="3" y="4" width="4" height="6" fill="currentColor"/><line x1="12" y1="2" x2="12" y2="14" stroke="currentColor"/><rect x="10" y="5" width="4" height="7" fill="currentColor" opacity=".55"/><line x1="19" y1="1" x2="19" y2="13" stroke="currentColor"/><rect x="17" y="3" width="4" height="6" fill="currentColor"/></svg><span>Candle</span></button>
+          </div>
+        </div>
+        <label class="field">Tema
+          <select id="theme"><option value="light">Claro</option><option value="dark">Escuro</option></select>
+        </label>
+        <div class="labelrow">
+          <button type="button" class="lblswitch" id="showTitle" role="switch" aria-checked="false" title="Mostrar no gráfico"></button>
+          <label class="field">Título<input id="title" type="text"></label>
+        </div>
+        <div class="labelrow">
+          <button type="button" class="lblswitch" id="showSubtitle" role="switch" aria-checked="false" title="Mostrar no gráfico"></button>
+          <label class="field">Subtítulo<input id="subtitle" type="text"></label>
+        </div>
+        <div class="labelrow">
+          <button type="button" class="lblswitch" id="showSource" role="switch" aria-checked="false" title="Mostrar no gráfico"></button>
+          <label class="field">Fonte do dado<input id="source" type="text" placeholder="Fonte: Glassnode • jul/2026"></label>
+        </div>
+        <div class="field">Logo da Paradigma
+          <div class="typepick" id="wmPicker">
+            <button type="button" data-logo="none" aria-pressed="true" title="Sem logo"><span>Nenhum</span></button>
+            <button type="button" data-logo="icone" title="Só o ícone"><span>Ícone</span></button>
+            <button type="button" data-logo="full" title="Ícone + nome (horizontal)"><span>Completo</span></button>
+            <button type="button" data-logo="nome" title="Nome (Paradigma Education)"><span>Nome</span></button>
+          </div>
+        </div>
+        <div class="grid2" id="wmOpts" hidden>
+          <label class="field">Posição
+            <select id="wmPos">
+              <option value="footer">Rodapé (opaco)</option>
+              <option value="header">Cabeçalho (opaco)</option>
+              <option value="center">Centro (marca d'água)</option>
+            </select>
+          </label>
+          <label class="field">Cor do logo
+            <button type="button" class="colorfield" id="wmColor" title="Escolher cor do logo"></button>
+          </label>
+          <label class="field" id="wmRegionField">Região
+            <select id="wmRegion">
+              <option value="externo">Externo ao gráfico</option>
+              <option value="interno">Interno ao gráfico</option>
+            </select>
+          </label>
+          <label class="field" id="wmAlignField">Lado
+            <select id="wmAlign">
+              <option value="right">Direita</option>
+              <option value="left">Esquerda</option>
+            </select>
+          </label>
+          <label class="field">Opacidade <span class="hint" id="wmOpVal"></span>
+            <input type="range" id="wmOpacity" min="0" max="100" value="100">
+          </label>
+          <label class="field">Escala <span class="hint" id="wmScaleVal"></span>
+            <input type="range" id="wmScale" min="40" max="260" value="100">
+          </label>
+        </div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Séries</summary>
+      <div class="body"><div id="series"></div></div>
+    </details>
+
+    <details>
+      <summary>Eixos e rótulos</summary>
+      <div class="body">
+        <div class="grid2">
+          <label class="field">Formato do valor
+            <select id="yformat">
+              <option value="num">Número</option>
+              <option value="compact">Compacto (mil/mi/bi)</option>
+              <option value="pct">Porcentagem</option>
+              <option value="usd">US$</option>
+              <option value="brl">R$</option>
+            </select>
+          </label>
+          <label class="field">Rótulos diretos
+            <select id="labelMode">
+              <option value="ends">Pontas</option>
+              <option value="max">Máximo</option>
+              <option value="all">Todos</option>
+              <option value="none">Nenhum</option>
+            </select>
+          </label>
+          <label class="field">Grade
+            <select id="grid"><option value="y">Horizontal</option><option value="x">Vertical</option><option value="both">Ambas</option><option value="none">Nenhuma</option></select>
+          </label>
+          <label class="field">Legenda
+            <select id="legend"><option value="top">Topo</option><option value="bottom">Base</option><option value="none">Nenhuma</option></select>
+          </label>
+          <label class="field">Mín. do eixo<input id="ymin" type="number" placeholder="auto"></label>
+          <label class="field">Máx. do eixo<input id="ymax" type="number" placeholder="auto"></label>
+          <label class="field">Título eixo Y<input id="ytitle" type="text"></label>
+          <label class="field">1 rótulo a cada<input id="xevery" type="number" min="1" value="1"></label>
+          <label class="field">Prefixo<input id="yprefix" type="text" placeholder="ex.: ~"></label>
+          <label class="field">Sufixo<input id="ysuffix" type="text" placeholder="ex.: BTC"></label>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Traço e tipografia</summary>
+      <div class="body">
+        <label class="field">Espessura da linha <span id="swVal"></span><input id="strokeWidth" type="range" min="1" max="8" step=".5"></label>
+        <label class="field">Marcador nos pontos <span id="dotVal"></span><input id="dotSize" type="range" min="0" max="16" step="2"></label>
+        <label class="field">Escala da fonte <span id="fsVal"></span><input id="fontScale" type="range" min=".7" max="1.6" step=".05"></label>
+        <label class="toggle"><input id="smooth" type="checkbox"> Suavizar curva</label>
+        <label class="toggle"><input id="transparent" type="checkbox"> Fundo transparente</label>
+        <div class="grid2">
+          <label class="field">Largura<input id="width" type="number" step="20"></label>
+          <label class="field">Altura<input id="height" type="number" step="20"></label>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Spec JSON</summary>
+      <div class="body">
+        <textarea id="json" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="btnApply">Aplicar JSON</button>
+          <button id="btnCopy">Copiar</button>
+        </div>
+      </div>
+    </details>
+
+  </aside>
+
+  <section class="stage">
+    <div class="canvas">
+      <div class="framewrap">
+        <div class="frame" id="out"></div>
+        <img id="ghost" alt="Imagem original sobreposta" hidden>
+        <div id="editLayer"></div>
+        <div id="dragTip" hidden></div>
+      </div>
+    </div>
+    <div id="iaOverlay" hidden>
+      <div class="ia-card">
+        <div class="ia-spinner" aria-hidden="true"></div>
+        <p class="ia-title">Lendo o gráfico com o Claude…</p>
+        <p class="ia-sub" id="iaTimer">pode levar de 20&nbsp;s a 1&nbsp;min</p>
+        <button id="iaClose" hidden>Fechar</button>
+      </div>
+    </div>
+    <div class="bar">
+      <button id="editToggle">✎ Editar</button>
+      <button id="undo" class="iconbtn" title="Desfazer (⌘Z)" hidden>↶</button>
+      <button id="redo" class="iconbtn" title="Refazer (⇧⌘Z)" hidden>↷</button>
+      <span class="hint" id="editHint" hidden>arraste os pontos · clique num rótulo dos eixos (X ou Y) renomeia · 2 cliques adiciona · botão-direito remove</span>
+      <span class="sep"></span>
+      <label class="toggle">PNG em <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>×</label>
+      <span class="hint" id="dims"></span>
+      <label class="toggle" id="ghostCtl" hidden title="Sobrepõe a imagem original pra você comparar na mão">
+        <input type="checkbox" id="ghostOn"> Sobrepor original
+        <input type="range" id="ghostOp" min="10" max="90" value="45">
+        <span class="hint" id="ghostVal">45%</span>
+      </label>
+      <button id="ghostMove" class="iconbtn" hidden title="Ajustar a sobreposição na mão (arrastar move · roda escala · 2 cliques reseta)">✥ Ajustar</button>
+      <span class="hint" id="status"></span>
+    </div>
+  </section>
+</main>
+
+
+<input id="fileIA" type="file" accept="image/*" hidden>
+
+<!-- chat flutuante com a IA da extração: FAB abre, botão – minimiza -->
+<button id="iaFab" hidden title="Conversar com a IA da extração" aria-label="Conversar com a IA da extração">
+  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.9-.9L3 21l1.9-5.6A8.5 8.5 0 1 1 21 11.5z"/></svg>
+</button>
+<div id="iaPanel" hidden role="dialog" aria-label="Chat com a IA da extração">
+  <div class="ia-head">
+    <span>IA da extração <span class="hint">— ainda vê a imagem</span></span>
+    <button id="iaMin" title="Minimizar" aria-label="Minimizar">–</button>
+  </div>
+  <div id="iaLog"></div>
+  <div class="ia-foot">
+    <input id="iaMsg" type="text" placeholder="ex.: o valor de março é 55 mil">
+    <button id="iaSend" class="primary">Enviar</button>
+  </div>
+</div>
+
+<script type="module" src="graficos.js"></script>
+</body>
+</html>

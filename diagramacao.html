@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Diagramação · Gerador de Relatórios Paradigma</title>
+<link rel="stylesheet" href="paradigma.css">
+<style>
+  /* ===================== app shell (tema escuro, igual gráficos) ===================== */
+  body { height: 100dvh; display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
+
+  header {
+    display: flex; align-items: baseline; gap: 1rem;
+    padding: .8rem 1.1rem; border-bottom: 1px solid var(--hair);
+  }
+  header h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  header .crumb { color: var(--muted); font-size: .74rem; font-stretch: 85%; }
+  header nav { margin-left: auto; display: flex; gap: .4rem; align-items: center; }
+  header nav button:disabled { opacity: .38; cursor: default; }
+  header nav button:disabled:hover { background: color-mix(in srgb, var(--lilac) 7%, transparent); }
+
+  main { display: grid; grid-template-columns: 320px 1fr; min-height: 0; }
+
+  aside {
+    border-right: 1px solid var(--hair);
+    overflow-y: auto; padding: 1rem; display: grid; gap: .9rem; align-content: start;
+  }
+  aside::-webkit-scrollbar { width: 8px; }
+  aside::-webkit-scrollbar-thumb { background: var(--hair-strong); border-radius: 4px; }
+
+  details > summary {
+    cursor: pointer; list-style: none; font-size: .68rem; font-weight: 600;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--lilac);
+    font-stretch: 85%; padding: .3rem 0; user-select: none;
+  }
+  details > summary::before { content: "▸ "; display: inline-block; transition: transform .12s; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  details > .body { display: grid; gap: .55rem; padding: .5rem 0 .9rem; }
+
+  .hint { font-size: .72rem; color: var(--muted); font-stretch: 90%; line-height: 1.45; margin: 0; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+
+  /* segment control (Documento / Conteúdo) */
+  .segment {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px;
+    background: color-mix(in srgb, var(--lilac) 8%, transparent);
+    border: 1px solid var(--hair); border-radius: 9px;
+  }
+  .segment button {
+    border: 0; background: transparent; color: var(--muted); padding: .45rem;
+    border-radius: 6px; font-size: .78rem; font-weight: 600; font-stretch: 85%; cursor: pointer;
+  }
+  .segment button:hover { background: color-mix(in srgb, var(--lilac) 12%, transparent); color: var(--ink); }
+  .segment button[aria-selected="true"] { background: var(--violet); color: #fff; }
+  .pane[hidden] { display: none; }
+  .pane { display: grid; gap: .9rem; align-content: start; }
+
+  /* switch (páginas especiais) */
+  .swrow { display: flex; align-items: center; justify-content: space-between; gap: .5rem; font-size: .82rem; }
+  .sw { position: relative; width: 34px; height: 20px; border-radius: 999px; border: 0; cursor: pointer;
+    background: var(--hair-strong); transition: background .12s; padding: 0; flex: none; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; transition: transform .12s; }
+  .sw[aria-checked="true"] { background: var(--violet); }
+  .sw[aria-checked="true"]::after { transform: translateX(14px); }
+  .subctrl { display: grid; gap: .5rem; padding: 0 0 .2rem 0; }
+  .subctrl[hidden] { display: none; }
+
+  /* seletor de tipo de bloco — lista com ícone + label */
+  .blocktypes { display: grid; gap: .25rem; }
+  .blocktypes button {
+    display: flex; align-items: center; gap: .55rem; text-align: left;
+    padding: .38rem .45rem; border: 1px solid var(--hair); border-radius: var(--r);
+    background: transparent; color: var(--muted); cursor: pointer; font-stretch: 85%; font-size: .78rem;
+  }
+  .blocktypes button .ico {
+    flex: none; width: 22px; height: 22px; display: grid; place-items: center;
+    border: 1px solid var(--hair); border-radius: 5px; color: var(--lilac);
+    font-size: 12px; line-height: 1;
+  }
+  .blocktypes button .ico svg { width: 15px; height: 15px; display: block; }
+  .blocktypes button .sc {
+    margin-left: auto; color: var(--muted); font-size: .66rem; opacity: .8;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;
+  }
+  .blocktypes button:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .blocktypes button:hover .ico { color: var(--ink); }
+  .blocktypes button[aria-pressed="true"] {
+    border-color: var(--violet); color: var(--ink);
+    background: color-mix(in srgb, var(--violet) 16%, transparent);
+  }
+  .blocktypes button[aria-pressed="true"] .ico { border-color: var(--violet); color: var(--ink); }
+
+  .filebtn { position: relative; overflow: hidden; }
+  .filebtn input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+  /* chip da origem vinculada (arquivo local ou Google Docs) */
+  #srcRow {
+    display: flex; gap: .4rem; align-items: center;
+    border: 1px solid var(--hair-strong); border-radius: var(--r); padding: .45rem .55rem;
+    background: color-mix(in srgb, var(--mint) 6%, transparent);
+  }
+  #srcRow[hidden] { display: none; }
+  #srcRow .src-label {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: .74rem; color: var(--muted);
+  }
+  #srcRow button { padding: .3rem .55rem; font-size: .74rem; }
+
+  /* ===================== palco / preview ===================== */
+  .stage {
+    min-width: 0; overflow: auto; position: relative;
+    background:
+      radial-gradient(ellipse 60% 40% at 50% 0%, color-mix(in srgb, var(--violet) 12%, transparent), transparent 70%),
+      color-mix(in srgb, var(--lilac) 4%, var(--ground));
+    padding: 2rem; display: flex; flex-direction: column; align-items: center; gap: 1.4rem;
+  }
+  .stage::-webkit-scrollbar { width: 10px; height: 10px; }
+  .stage::-webkit-scrollbar-thumb { background: var(--hair-strong); border-radius: 5px; }
+
+  /* embrulho que aplica o zoom sem quebrar o fluxo de scroll */
+  #pages { display: flex; flex-direction: column; align-items: center; gap: 1.4rem;
+    transform-origin: top center; }
+
+  /* ===================== a PÁGINA (miolo) — 1:1 em px, conforme spec ===================== */
+  .page {
+    /* tudo daqui pra dentro é o material impresso: fundo branco, texto preto */
+    position: relative;
+    width: 595px; height: 842px; background: #fff; color: #000;
+    box-shadow: 0 24px 60px -24px rgba(0,0,0,.7);
+    font-family: "Plex", "IBM Plex Sans", system-ui, sans-serif;
+    /* só temos o Plex variável (sem itálico real) — deixar o browser sintetizar itálico
+       nas legendas; o resto é peso real do variable font */
+    font-synthesis: style;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  /* moldura: linha de topo e de rodapé (1px), recuadas 48px lateral */
+  .page .rule { position: absolute; left: 48px; right: 48px; height: 1px; background: #000; }
+  .page .rule.top { top: 40px; }
+  .page .rule.bot { top: 802px; }          /* 842 - 40 */
+
+  /* área de conteúdo: 2 colunas dentro de [88 .. 754] no eixo Y */
+  .page .content { position: absolute; left: 48px; right: 48px; top: 88px; height: 666px; }
+  .page .col-left  { position: absolute; left: 0;   top: 0; width: 258px; height: 100%; }
+  .page .col-right { position: absolute; left: 282px; top: 0; width: 217px; height: 100%; } /* 258+24 */
+
+  /* rodapé: 4px abaixo da linha de baixo */
+  .page .foot { position: absolute; left: 48px; right: 48px; top: 806px; height: 14px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    font-size: 8px; line-height: 14px; letter-spacing: -0.01em; }
+  .page .foot .pnum { color: #3DE8A0; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .page .foot .site { color: #828080; }
+
+  /* cabeçalho corrido (topo, acima da linha) */
+  .page .runhead { position: absolute; left: 48px; right: 48px; top: 24px; height: 12px;
+    font-size: 7px; font-weight: 700; letter-spacing: .04em; color: #4E4E4E; text-transform: uppercase; }
+
+  /* ---------- página de índice (Índice + Resumo) ---------- */
+  .page .idx-content { position: absolute; left: 48px; right: 48px; top: 88px; bottom: 88px; overflow: hidden; }
+  .page .idx-title { font-weight: 700; font-size: 24px; line-height: 31px; color: #000; margin: 0 0 12px; letter-spacing: -0.01em; }
+  .page .idx-title + .toc { margin-bottom: 24px; }
+  .page .toc { display: grid; gap: 5px; margin-bottom: 24px; }
+  .page .toc-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    font-size: 9px; line-height: 12px; color: #4E4E4E; }
+  .page .toc-row.lvl2 { padding-left: 14px; }
+  .page .toc-row.lvl3 { padding-left: 28px; }
+  .page .toc-row.lvl1 { color: #000; }
+  .page .toc-label { display: inline-flex; gap: 6px; min-width: 0; }
+  .page .toc-num { color: #29E899; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
+  .page .toc-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .page .toc-pg { color: #828080; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
+  .page .toc-empty { font-size: 9px; color: #9a9a9a; font-style: italic; }
+  .page .idx-resumo { font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: justify; outline: none; }
+  .page .idx-resumo p { margin: 0 0 8px; }
+
+  /* ---------- capa / contracapa ---------- */
+  .page.cover-page { overflow: hidden; }
+  /* fundo full-bleed (cobre a capa inteira, borda a borda) e reposicionável */
+  .page.cover-page .cover-bg { position: absolute; inset: 0; background-size: cover; background-position: center; }
+  /* conteúdo respeita o padding (48h/40v); itens posicionados por coluna (x) + y livre (absolutos) */
+  .page.cover-page .cover-area { position: absolute; left: 48px; right: 48px; top: 40px; bottom: 40px; }
+  .page.cover-page .cover-item { position: absolute; color: #000; line-height: 1.15; letter-spacing: -0.01em; outline: none; font-weight: 700; }
+  .page.editing.cover-page .cover-item:hover { background: color-mix(in srgb, #4E39FF 6%, transparent); }
+  .page.editing.cover-page .cover-item.cover-sel { outline: 2px solid #4E39FF; outline-offset: 3px; border-radius: 2px; }
+  .page.editing.cover-page .cover-item:empty::before { content: attr(data-ph); color: #bbb; }
+
+  /* ---------- tipografia do miolo (exata da spec) ---------- */
+  .page .b { margin: 0; letter-spacing: -0.01em; outline: none; }
+  /* gap entre blocos é contextual → calculado no JS (gapBefore) e aplicado como
+     margin-top inline no render; os --b-gap abaixo não são mais lidos. */
+  .page h1.b { font-weight: 700; font-size: 24px; line-height: 31px; color: #000; --b-gap: 12px; }
+  .page h2.b { font-weight: 700; font-size: 20px; line-height: 26px; color: #000; --b-gap: 10px; }
+  .page p.b  { font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: justify; }
+  .page blockquote.b {
+    font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: left;
+    border-left: 2px solid #29E899; padding-left: 8px;
+  }
+  .page .li.b {
+    font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E;
+    padding-left: 12px; position: relative;
+  }
+  .page .li.b::before { content: "•"; position: absolute; left: 2px; color: #29E899; }
+  .page h3.b { font-weight: 700; font-size: 16px; line-height: 21px; color: #000; --b-gap: 8px; }
+  .page h4.b { font-weight: 700; font-size: 13px; line-height: 17px; color: #000; --b-gap: 6px; }
+  .page .ol.b {
+    font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E;
+    padding-left: 16px; position: relative;
+  }
+  .page .ol.b::before {
+    content: attr(data-num); position: absolute; left: 0; color: #29E899;
+    font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .page .divider.b { height: 1px; min-height: 1px; background: #D9D9D9; }
+
+  /* linha-guia do snap ao reposicionar imagem (alinha ao bloco da esquerda) */
+  .page .snap-guide { position: absolute; left: 0; right: 0; height: 1px; background: #4E39FF; display: none; pointer-events: none; z-index: 5; }
+
+  /* link colado sobre texto: sublinhado, mesma cor do texto (clicável no PDF) */
+  .page .b a, .page figcaption a { color: inherit; text-decoration: underline; text-underline-offset: 1px; }
+
+  /* figuras (imagens): full = as duas colunas; inline = coluna esquerda; right = coluna direita */
+  .page figure.fig { margin: 0; }
+  .page figure.fig .figtitle {
+    font-weight: 700; font-size: 8px; line-height: 14px; color: #828080;
+    text-align: left; margin: 0 0 4px; letter-spacing: -0.01em;
+  }
+  .page figure.fig img { display: block; width: 100%; border-radius: 4px; }
+  .page figure.fig figcaption {
+    font-style: italic; font-weight: 400; font-size: 8px; line-height: 14px; color: #828080;
+    text-align: justify; margin-top: 8px; letter-spacing: -0.01em;
+  }
+  .page figure.fig-full   { --b-gap: 10px; }
+  .page figure.fig-inline { --b-gap: 8px; }
+
+  /* imagem ancorada na coluna direita (posição livre no eixo Y, arrastável) */
+  .page .rimg { position: absolute; left: 0; width: 100%; cursor: grab; }
+  .page .rimg.dragging { cursor: grabbing; }
+  .page .rimg .drag-badge {
+    position: absolute; top: -14px; left: 0; font-size: 8px; color: #828080;
+    opacity: 0; transition: opacity .1s;
+  }
+  .page.editing .rimg:hover .drag-badge { opacity: 1; }
+
+  /* estados de edição */
+  .page.editing .b:hover { background: color-mix(in srgb, #4E39FF 5%, transparent); }
+  /* linha vazia ocupa 1 linha (parágrafo em branco é conteúdo); placeholder só no foco */
+  .page .b:empty:not(.divider), .page .figtitle:empty, .page figcaption:empty { min-height: 1lh; }
+  .page.editing .b:empty:focus::before { content: attr(data-ph); color: #bbb; }
+  .page.editing .figtitle:empty::before, .page.editing figcaption:empty::before { content: attr(data-ph); color: #bbb; }
+  .page.editing .col-left { outline: 1px dashed color-mix(in srgb,#4E39FF 22%, transparent); outline-offset: 4px; }
+  /* borda no bloco ativo — mostra a quem o menu lateral se refere */
+  .page.editing .b.active-block { outline: 2px solid color-mix(in srgb, #4E39FF 40%, transparent); outline-offset: 3px; border-radius: 2px; }
+  .page.editing .imgsel img { outline: 2px solid #4E39FF; outline-offset: 2px; }
+  /* divisor: clicável e com borda roxa quando selecionado */
+  .page.editing .divider.b { cursor: pointer; }
+  .page.editing .divider.b.divsel { outline: 2px solid #4E39FF; outline-offset: 3px; border-radius: 2px; }
+
+  /* coluna direita: no hover, uma coluna tracejada (mesma altura da esquerda) com um "+" ao centro */
+  .page.editing .col-right { border-radius: 4px; transition: background .12s; }
+  .page.editing .col-right::after {
+    content: "+"; position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%);
+    text-align: center; font-size: 32px; font-weight: 300; line-height: 1; color: #4E39FF;
+    opacity: 0; transition: opacity .12s; pointer-events: none;
+  }
+  .page.editing .col-right:hover:not(:has(.rimg:hover)) {
+    background: color-mix(in srgb, #4E39FF 5%, transparent);
+    outline: 1px dashed color-mix(in srgb, #4E39FF 22%, transparent); outline-offset: 4px;
+  }
+  .page.editing .col-right:hover:not(:has(.rimg:hover))::after { opacity: .55; }
+
+  /* barra flutuante de formatação (estilo Notion: aparece sobre a seleção) */
+  #fmtbar {
+    position: fixed; z-index: 30; display: flex; gap: 2px; align-items: center;
+    padding: 3px; border: 1px solid var(--hair-strong); border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+    box-shadow: 0 12px 40px -12px #000;
+  }
+  #fmtbar[hidden] { display: none; }
+  #fmtbar button {
+    padding: .28rem .55rem; font-size: .8rem; border: 0; background: transparent;
+    border-radius: 5px; color: var(--muted); cursor: pointer;
+  }
+  #fmtbar button:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); color: var(--ink); }
+  #fmtbar button.on { color: var(--ink); background: color-mix(in srgb, var(--violet) 34%, transparent); }
+  #fmtbar .sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--hair-strong); }
+  /* em legenda/título de imagem não faz sentido trocar tipo de bloco */
+  #fmtbar.caption-mode .typebtn, #fmtbar.caption-mode .sep { display: none; }
+
+  /* menus flutuantes: adicionar imagem (clique na coluna direita) + editar imagem selecionada */
+  #addImgMenu, #imgPanel, #coverPanel {
+    position: fixed; z-index: 40; display: grid; gap: .55rem; width: 232px;
+    padding: .7rem; border: 1px solid var(--hair-strong); border-radius: 10px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+    box-shadow: 0 16px 50px -16px #000;
+  }
+  #addImgMenu[hidden], #imgPanel[hidden], #coverPanel[hidden] { display: none; }
+
+  /* botões de posição da imagem (ícone + label) */
+  .placebtns { display: grid; gap: .3rem; margin-top: .3rem; }
+  .placebtns button {
+    display: flex; align-items: center; gap: .5rem; text-align: left;
+    padding: .35rem .5rem; border: 1px solid var(--hair); border-radius: var(--r);
+    background: transparent; color: var(--muted); cursor: pointer; font-size: .76rem; font-stretch: 85%;
+  }
+  .placebtns button svg { width: 16px; height: 16px; flex: none; color: var(--lilac); }
+  .placebtns button:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .placebtns button.on { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
+  .placebtns button.on svg { color: var(--ink); }
+
+  /* alça de arraste dos blocos (estilo Notion) + linha de solta */
+  #bhandle { position: fixed; z-index: 45; width: 16px; height: 18px; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); cursor: grab; font-size: 12px; border-radius: 4px; user-select: none; }
+  #bhandle:hover { background: color-mix(in srgb, var(--lilac) 18%, transparent); color: var(--ink); }
+  #bhandle[hidden] { display: none; }
+  #dropline { position: fixed; z-index: 44; height: 2px; background: #4E39FF; border-radius: 2px; pointer-events: none; }
+  #dropline[hidden] { display: none; }
+  body.grabbing, body.grabbing * { cursor: grabbing !important; }
+  /* menu de escolha: Imagem | Gráfico */
+  #addImgMenu .am-choices { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  #addImgMenu .am-choices[hidden], #addImgMenu .am-image[hidden] { display: none; }
+  #addImgMenu .am-choices button {
+    display: grid; justify-items: center; gap: .35rem; padding: .8rem .4rem;
+    border: 1px solid var(--hair); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+    font-size: .76rem; font-stretch: 85%;
+  }
+  #addImgMenu .am-choices button svg { width: 22px; height: 22px; color: var(--lilac); }
+  #addImgMenu .am-choices button:hover { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 12%, transparent); }
+  #addImgMenu .am-image { display: grid; gap: .55rem; }
+
+  /* modal do gráfico (iframe da página de gráficos, modo embed) */
+  #chartModal { position: fixed; inset: 0; z-index: 60; }
+  #chartModal[hidden] { display: none; }
+  #chartModal .cm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+  #chartModal .cm-panel {
+    position: absolute; inset: 3vh 3vw; display: flex; flex-direction: column;
+    background: var(--ground); border: 1px solid var(--hair-strong); border-radius: 12px; overflow: hidden;
+    box-shadow: 0 30px 80px -20px #000;
+  }
+  #chartModal .cm-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: .55rem .8rem; border-bottom: 1px solid var(--hair);
+    font-size: .78rem; font-weight: 600; font-stretch: 85%; color: var(--lilac);
+  }
+  #chartModal .cm-bar button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 1rem; padding: .2rem .5rem; border-radius: 6px; }
+  #chartModal .cm-bar button:hover { background: color-mix(in srgb, var(--lilac) 14%, transparent); color: var(--ink); }
+  #chartModal iframe { flex: 1; width: 100%; border: 0; background: var(--ground); }
+
+  /* selo "página em branco a partir daqui" (quebra manual) */
+  .page .breakmark {
+    position: absolute; left: 0; right: 0; border-top: 1px dashed #29E899;
+    font-size: 8px; color: #29E899; text-align: right; pointer-events: none;
+  }
+
+  .empty { color: var(--muted); font-size: .85rem; margin: 4rem auto; text-align: center; max-width: 34ch; line-height: 1.6; }
+
+  /* ===================== impressão → PDF ===================== */
+  @media print {
+    @page { size: 595px 842px; margin: 0; }
+    header, aside { display: none !important; }
+    body { height: auto; display: block; overflow: visible; }
+    main { display: block; }
+    .stage { padding: 0; background: #fff; display: block; overflow: visible; }
+    #pages { transform: none !important; gap: 0; }
+    .page { box-shadow: none; break-after: page; }
+    .page.editing .b:hover, .page.editing .col-left { background: none; outline: none; }
+    .page.editing .imgsel img, .page.editing .b.active-block, .page.editing .divider.b.divsel { outline: none; }
+    .page.editing .col-right::after { display: none; }
+    .page.cover-page .cover-item.cover-sel { outline: none; }
+    .breakmark, .drag-badge, #fmtbar, #addImgMenu, #imgPanel, #coverPanel, #chartModal, .snap-guide, #bhandle, #dropline { display: none !important; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Diagramação</h1>
+  <span class="crumb">Gerador de Relatórios · Paradigma — miolo</span>
+  <nav>
+    <button id="btnUndo" title="Desfazer (⌘Z)" disabled>↩︎</button>
+    <button id="btnRedo" title="Refazer (⌘⇧Z)" disabled>↪︎</button>
+    <button id="btnMd" title="Baixar o texto em Markdown">Baixar .md</button>
+    <button id="btnPrint" class="primary" title="Gerar e baixar o PDF (igual à visualização)">Baixar PDF</button>
+  </nav>
+</header>
+
+<main>
+  <aside>
+    <div class="segment" id="segment" role="tablist">
+      <button data-seg="documento" aria-selected="true">Documento</button>
+      <button data-seg="conteudo" aria-selected="false">Conteúdo</button>
+    </div>
+
+    <div class="pane" data-pane="documento">
+      <details open>
+        <summary>Documento</summary>
+        <div class="body">
+          <div id="srcRow" hidden></div>
+          <button id="btnFile">Importar arquivo (.md, .txt)</button>
+          <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
+          <label class="field">URL do Google Docs
+            <span class="row" style="flex-wrap:nowrap">
+              <input type="url" id="gdocUrl" placeholder="https://docs.google.com/document/d/…" style="flex:1;min-width:0">
+              <button id="btnGdoc">Conectar</button>
+            </span>
+          </label>
+          <p class="hint">O documento abre <b>em branco</b>. Importar <b>vincula</b> a origem — use <b>Sincronizar</b> pra puxar o conteúdo novo quando quiser. Google Docs precisa estar compartilhado como “qualquer pessoa com o link”. Colar (⌘V) do Docs/Word também funciona.</p>
+          <div class="row">
+            <button id="btnNew">Novo / limpar</button>
+            <button id="btnSample">Exemplo</button>
+          </div>
+        </div>
+      </details>
+
+      <details open>
+        <summary>Páginas especiais</summary>
+        <div class="body">
+          <div class="swrow"><span>Capa</span><button class="sw" data-sw="cover" role="switch" aria-checked="true"></button></div>
+          <div class="subctrl" data-sub="cover">
+            <div class="row">
+              <button class="filebtn">Imagem de fundo<input type="file" data-bg="cover" accept="image/*"></button>
+              <button data-rmbg="cover" title="Remover imagem de fundo">Sem fundo</button>
+            </div>
+            <div class="grid2">
+              <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="cover" min="0" max="100" value="50"></label>
+              <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="cover" min="0" max="100" value="50"></label>
+            </div>
+            <div class="row"><button data-addtxt="cover">+ Texto</button></div>
+            <p class="hint" style="margin:0">Duas colunas. Clique num texto para tamanho, cor, coluna e alinhamento. Arraste pela alça <b>⠿</b> para reposicionar no eixo Y. Quantos blocos quiser.</p>
+          </div>
+
+          <div class="swrow"><span>Índice + Resumo</span><button class="sw" data-sw="index" role="switch" aria-checked="true"></button></div>
+          <p class="hint" style="margin:0">O índice é gerado automaticamente dos títulos <b>H1/H2/H3</b> do miolo. O resumo é editável na própria página.</p>
+
+          <div class="swrow"><span>Contracapa</span><button class="sw" data-sw="back" role="switch" aria-checked="true"></button></div>
+          <div class="subctrl" data-sub="back">
+            <div class="row">
+              <button class="filebtn">Imagem de fundo<input type="file" data-bg="back" accept="image/*"></button>
+              <button data-rmbg="back" title="Remover imagem de fundo">Sem fundo</button>
+            </div>
+            <div class="grid2">
+              <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="back" min="0" max="100" value="50"></label>
+              <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="back" min="0" max="100" value="50"></label>
+            </div>
+            <div class="row"><button data-addtxt="back">+ Texto</button></div>
+          </div>
+        </div>
+      </details>
+
+      <details open>
+        <summary>Cabeçalho & rodapé</summary>
+        <div class="body">
+          <label class="field">Cabeçalho (topo das páginas)
+            <input type="text" id="headText" placeholder="HYPERLIQUID: A CASA… — PARADIGMA EDUCATION — JULHO 2026">
+          </label>
+          <label class="field">Texto do rodapé (direita)
+            <input type="text" id="footText" value="paradigma.education">
+          </label>
+          <div class="grid2">
+            <label class="field">Nº da 1ª página
+              <input type="number" id="firstPage" value="1" min="0" step="1">
+            </label>
+            <label class="field">Zoom
+              <select id="zoom">
+                <option value="fit">Ajustar</option>
+                <option value="1" selected>100%</option>
+                <option value="0.75">75%</option>
+                <option value="0.5">50%</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="pane" data-pane="conteudo" hidden>
+      <details open>
+        <summary>Bloco</summary>
+        <div class="body">
+          <div class="blocktypes" id="blocktypes">
+            <button data-type="h1"><span class="ico" style="font-size:15px;font-weight:800">H</span><span class="lbl">H1</span><span class="sc">#</span></button>
+            <button data-type="h2"><span class="ico" style="font-size:13px;font-weight:800">H</span><span class="lbl">H2</span><span class="sc">##</span></button>
+            <button data-type="h3"><span class="ico" style="font-size:11px;font-weight:700">H</span><span class="lbl">H3</span><span class="sc">###</span></button>
+            <button data-type="h4"><span class="ico" style="font-size:10px;font-weight:700">H</span><span class="lbl">H4</span><span class="sc">####</span></button>
+            <button data-type="p"><span class="ico">¶</span><span class="lbl">Parágrafo</span></button>
+            <button data-type="li"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="2.5" cy="4" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r="1.1" fill="currentColor" stroke="none"/><path d="M6 4h8M6 8h8M6 12h8"/></svg></span><span class="lbl">Lista de Pontos</span><span class="sc">-</span></button>
+            <button data-type="ol"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><text x="0" y="6" font-size="6" fill="currentColor" stroke="none" font-weight="700">1</text><text x="0" y="13" font-size="6" fill="currentColor" stroke="none" font-weight="700">2</text><path d="M6 4.5h8M6 11h8"/></svg></span><span class="lbl">Lista Numérica</span><span class="sc">1.</span></button>
+            <button data-type="quote"><span class="ico">❝</span><span class="lbl">Citação</span><span class="sc">&gt;</span></button>
+            <button data-type="image"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M3 12l3.4-3.2 2.4 2.2 2.2-2 2 1.8"/></svg></span><span class="lbl">Imagem</span></button>
+            <button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button>
+            <button data-type="pagebreak" title="Quebra de página (⌘⏎)"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h8v3H4zM4 11h8v3H4z"/><path d="M1.5 8h3M6.5 8h3M12 8h2.5"/></svg></span><span class="lbl">Quebra de Página</span><span class="sc">⌘⏎</span></button>
+          </div>
+        </div>
+      </details>
+    </div>
+  </aside>
+
+  <section class="stage" id="stage">
+    <div id="pages"></div>
+  </section>
+</main>
+
+<div id="addImgMenu" hidden>
+  <div class="am-choices">
+    <button data-opt="image">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="4" width="15" height="12" rx="1.5"/><circle cx="7" cy="8" r="1.4"/><path d="M3.5 15l4.5-4 3 2.6 2.8-2.4 2.7 2.3"/></svg>
+      <span>Imagem</span>
+    </button>
+    <button data-opt="chart">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v14h14"/><rect x="5.5" y="10" width="2.6" height="4.5" fill="currentColor" stroke="none"/><rect x="9.5" y="7" width="2.6" height="7.5" fill="currentColor" stroke="none"/><rect x="13.5" y="4.5" width="2.6" height="10" fill="currentColor" stroke="none"/></svg>
+      <span>Gráfico</span>
+    </button>
+  </div>
+  <div class="am-image" hidden>
+    <button class="filebtn" id="btnImg">
+      Escolher arquivo…
+      <input type="file" id="imgfile" accept="image/*">
+    </button>
+    <label class="field">Posição
+      <select id="imgPlacement">
+        <option value="right">Coluna direita (arrastável no eixo Y)</option>
+        <option value="full">Largura total (as duas colunas)</option>
+        <option value="inline">Entre parágrafos (coluna esquerda)</option>
+      </select>
+    </label>
+    <p class="hint" style="margin:0">Depois é só clicar na imagem pra editar título, legenda, cantos ou removê-la.</p>
+  </div>
+</div>
+
+<div id="chartModal" hidden>
+  <div class="cm-backdrop"></div>
+  <div class="cm-panel">
+    <div class="cm-bar"><span>Extrair / montar gráfico</span><button id="cmClose" title="Fechar">✕</button></div>
+    <iframe id="cmFrame" title="Extrair gráfico"></iframe>
+  </div>
+</div>
+
+<div id="fmtbar" hidden>
+  <button class="typebtn" data-t="h1" title="H1">H1</button>
+  <button class="typebtn" data-t="h2" title="H2" style="font-size:.7rem">H2</button>
+  <button class="typebtn" data-t="h3" title="H3" style="font-size:.64rem">H3</button>
+  <button class="typebtn" data-t="p" title="Parágrafo">¶</button>
+  <button class="typebtn" data-t="li" title="Lista de Pontos">•</button>
+  <button class="typebtn" data-t="ol" title="Lista Numérica" style="font-size:.7rem">1.</button>
+  <button class="typebtn" data-t="quote" title="Citação">❝</button>
+  <span class="sep"></span>
+  <button class="markbtn" data-cmd="bold" title="Negrito (⌘B)" style="font-weight:700">B</button>
+  <button class="markbtn" data-cmd="italic" title="Itálico (⌘I)" style="font-style:italic">I</button>
+  <button class="markbtn" data-cmd="underline" title="Sublinhado (⌘U)" style="text-decoration:underline">U</button>
+  <button class="markbtn" data-cmd="strikeThrough" title="Tachado" style="text-decoration:line-through">S</button>
+</div>
+
+<script type="module" src="diagramacao.js"></script>
+</body>
+</html>

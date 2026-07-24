@@ -1,0 +1,78 @@
+/* Tokens da Paradigma — compartilhados pelas 3 ferramentas do gerador.
+   Cores da marca: ground #0E0C1B · violet #4E39FF · lilac #BAB1FF · mint #29E899
+   Slots de série são versões *steppadas* dessas cores (ver chart.js / README). */
+
+@font-face {
+  font-family: "Plex";
+  src: url("fonts/IBMPlexSans-Var.ttf") format("truetype-variations");
+  font-weight: 100 700;
+  font-stretch: 62% 100%;
+  font-display: block;
+}
+
+:root {
+  --ground: #0E0C1B;
+  --violet: #4E39FF;
+  --lilac:  #BAB1FF;
+  --mint:   #29E899;
+  --ink:    #FFFFFF;
+
+  --hair:        color-mix(in srgb, var(--lilac) 18%, transparent);
+  --hair-strong: color-mix(in srgb, var(--lilac) 34%, transparent);
+  --muted:       color-mix(in srgb, var(--lilac) 78%, transparent);
+
+  --r: 6px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "Plex", system-ui, sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- controles (usados pelas 3 ferramentas) ---------- */
+
+.eyebrow {
+  font-size: .68rem; font-weight: 600; font-stretch: 85%;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--lilac); margin: 0 0 .6rem;
+}
+
+label.field {
+  display: grid; gap: .3rem;
+  font-size: .74rem; font-stretch: 85%; color: var(--muted);
+}
+
+input, select, textarea, button {
+  font: inherit; color: var(--ink);
+  background: color-mix(in srgb, var(--lilac) 7%, transparent);
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  padding: .42rem .6rem;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: 2px solid var(--violet); outline-offset: 1px;
+}
+input[type="color"] { padding: 2px; height: 2rem; cursor: pointer; }
+input[type="range"] { padding: 0; border: 0; background: none; accent-color: var(--violet); }
+input[type="checkbox"] { accent-color: var(--violet); width: 1rem; height: 1rem; padding: 0; }
+
+button { cursor: pointer; font-stretch: 85%; }
+button:hover { background: color-mix(in srgb, var(--lilac) 14%, transparent); }
+button.primary {
+  background: var(--violet); border-color: var(--violet);
+  font-weight: 600; letter-spacing: .01em;
+}
+button.primary:hover { background: color-mix(in srgb, var(--violet) 84%, white); }
+
+.row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
+.card {
+  border: 1px solid var(--hair); border-radius: var(--r);
+  padding: .9rem; background: color-mix(in srgb, var(--lilac) 4%, transparent);
+}

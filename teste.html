@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Teste do renderer · Paradigma</title>
+<link rel="stylesheet" href="paradigma.css">
+<style>
+  body { padding: 1.5rem; }
+  h1 { font-size: 1.1rem; }
+  #log { font-family: ui-monospace, monospace; font-size: .8rem; white-space: pre; margin: 1rem 0; }
+  .ok { color: var(--mint); } .bad { color: #FF6B6B; }
+  .gal { display: grid; grid-template-columns: repeat(auto-fill, minmax(430px, 1fr)); gap: 1rem; }
+  .gal figure { margin: 0; border: 1px solid var(--hair); border-radius: 6px; overflow: hidden; }
+  .gal svg { display: block; width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<h1>Teste do renderer</h1>
+<div id="log">rodando…</div>
+<div class="gal" id="gal"></div>
+
+<script type="module">
+import { renderChart } from './chart.js';
+import { num } from './tabela.js';
+import { trace, toSeries, parseX, makeLabels, assessTrace, detectGridlines, checkCalibration, parseValue } from './extrair.js';
+
+// ── parseValue: calibração como o usuário digita (casa com o rótulo do eixo) ──
+const pvCasos = [
+  ['1.5b', 1.5e9], ['1,5 bi', 1.5e9], ['688.2B', 688.2e9], ['2.51T', 2.51e12],
+  ['900m', 900e6], ['1.09T', 1.09e12], ['US$ 1.500', 1500], ['79.7B', 79.7e9],
+  ['0', 0], ['100%', 100], ['1500000000', 1.5e9], ['1,09t', 1.09e12], ['', NaN], ['abc', NaN],
+];
+const pvFalhas = pvCasos.filter(([e, w]) => {
+  const g = parseValue(e);
+  if (Number.isNaN(w)) return !Number.isNaN(g);
+  return Math.abs(g - w) > Math.max(1e-6, Math.abs(w) * 1e-9);   // tolera erro de float
+}).map(([e, w]) => `parseValue("${e}") = ${parseValue(e)}, esperado ${w}`);
+
+// ── extração de curva a partir de imagem ─────────────────────────────────────
+// Desenha um gráfico sintético com geometria conhecida (grade, marca d'água,
+// preenchimento de área e um tooltip com um ponto da MESMA cor da série) e
+// confere se a extração recupera os valores originais.
+const EX = { x: 80, y: 40, w: 780, h: 400, top: 1500, bot: 0, cor: '#4FC3F7' };
+const verdade = (i) => {                                   // valor real na coluna i
+  const t = i / (EX.w - 1);
+  return 1500 * (0.06 + 0.94 * t ** 1.7) * (1 + 0.05 * Math.sin(t * 22))
+       + (t > 0.55 && t < 0.57 ? 120 : 0);                 // pico real, não pode sumir
+};
+const exFalhas = [];
+{
+  const c = document.createElement('canvas');
+  c.width = 940; c.height = 500;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.fillStyle = '#0d1117'; g.fillRect(0, 0, c.width, c.height);
+  g.strokeStyle = '#2b3340'; g.lineWidth = 1;                       // grade
+  for (let k = 0; k <= 5; k++) { const y = EX.y + (EX.h * k) / 5; g.beginPath(); g.moveTo(EX.x, y); g.lineTo(EX.x + EX.w, y); g.stroke(); }
+  g.fillStyle = '#8b949e'; g.font = '30px sans-serif'; g.fillText('DefiLlama', 380, 260);  // marca d'água
+
+  const py = (i) => EX.y + EX.h * (1 - (verdade(i) - EX.bot) / (EX.top - EX.bot));
+  const grad = g.createLinearGradient(0, EX.y, 0, EX.y + EX.h);      // preenchimento de área
+  grad.addColorStop(0, 'rgba(79,195,247,.45)'); grad.addColorStop(1, 'rgba(79,195,247,0)');
+  g.beginPath(); g.moveTo(EX.x, EX.y + EX.h);
+  for (let i = 0; i < EX.w; i++) g.lineTo(EX.x + i, py(i));
+  g.lineTo(EX.x + EX.w - 1, EX.y + EX.h); g.closePath(); g.fillStyle = grad; g.fill();
+  g.beginPath();                                                      // a linha
+  for (let i = 0; i < EX.w; i++) (i ? g.lineTo : g.moveTo).call(g, EX.x + i, py(i));
+  g.strokeStyle = EX.cor; g.lineWidth = 3; g.stroke();
+
+  g.fillStyle = '#f6f8fa'; g.fillRect(600, 200, 190, 70);             // tooltip
+  g.fillStyle = EX.cor; g.beginPath(); g.arc(620, 245, 5, 0, 7); g.fill();
+
+  const img = g.getImageData(0, 0, c.width, c.height);
+  const traced = trace(img, EX, EX.cor, { tol: 14 });
+  const { ys, gaps } = traced;
+  const got = toSeries(ys, { samples: EX.w, rect: EX, yTop: EX.top, yBottom: EX.bot });
+
+  const erros = got.map((v, i) => (v == null ? null : Math.abs(v - verdade(i)))).filter((v) => v != null);
+  const faltando = got.filter((v) => v == null).length;
+  const medio = erros.reduce((a, b) => a + b, 0) / erros.length;
+  const pior = Math.max(...erros);
+  const range = EX.top - EX.bot;
+  // o pico real (coluna ~435) precisa sobreviver ao rastreio
+  const iPico = Math.round(EX.w * 0.56);
+  const picoOk = Math.abs(got[iPico] - verdade(iPico)) < range * 0.03;
+
+  // o tooltip tapa a curva; interpolar o vão é aceitável, sumir com ele não.
+  // Borda (1ª/última coluna) pode ficar sem ponto — não há âncora dos dois lados.
+  if (faltando > 2) exFalhas.push(`extração: ${faltando} colunas sem ponto`);
+  if (gaps === 0 || gaps > EX.w * 0.1) exFalhas.push(`extração: ${gaps} colunas interpoladas (esperado: um vão pequeno no tooltip)`);
+  if (medio > range * 0.01) exFalhas.push(`extração: erro médio ${(medio / range * 100).toFixed(2)}% (limite 1%)`);
+  // pior caso ~8% fica localizado no degrau vertical de 2 colunas deste teste —
+  // ambiguidade sub-pixel numa parede quase vertical, que gráfico real não tem.
+  // O limite ainda pega captura de tooltip (dava 9%+) e falha grosseira.
+  if (pior > range * 0.09) exFalhas.push(`extração: pior erro ${(pior / range * 100).toFixed(2)}% (limite 9%) — tooltip provavelmente capturado`);
+  if (!picoOk) exFalhas.push('extração: o pico real foi perdido');
+
+  const fig = document.createElement('figure');
+  fig.append(c);
+  const ov = c.getContext('2d');                                      // sobrepõe o rastreio
+  ov.beginPath();
+  ys.forEach((y, i) => { if (y != null) (i ? ov.lineTo : ov.moveTo).call(ov, EX.x + i, y); });
+  ov.strokeStyle = '#ffffff'; ov.lineWidth = 1; ov.stroke();
+  document.getElementById('gal').append(fig);
+  window.__ex = { medio: medio / range, pior: pior / range, faltando, gaps };
+
+  // NÍVEL 1 — o traço bom deve passar; cor ausente deve reprovar
+  const bom = assessTrace(traced, EX);
+  if (!['ok', 'atencao'].includes(bom.verdict)) exFalhas.push(`nível 1: traço bom foi avaliado como "${bom.verdict}" (${bom.notes.join('; ')})`);
+  const ruim = assessTrace(trace(img, EX, '#FF00FF', { tol: 14 }), EX);   // magenta não existe na imagem
+  if (ruim.verdict !== 'ruim') exFalhas.push(`nível 1: cor ausente deveria reprovar, deu "${ruim.verdict}"`);
+
+  // NÍVEL 2 — acha as grades internas (y=120,200,280,360) e valida a calibração
+  const linhas = detectGridlines(img, EX);
+  const esperado = [120, 200, 280, 360];
+  const casou = esperado.every((ey) => linhas.some((y) => Math.abs(y - ey) <= 3));
+  if (!casou || linhas.length < 4 || linhas.length > 6) exFalhas.push(`nível 2: grades achadas [${linhas}] ≠ esperado ~[${esperado}]`);
+  const calOk = checkCalibration(linhas, EX, 1500, 0);
+  if (calOk.warn.length) exFalhas.push(`nível 2: grade uniforme não deveria alertar (${calOk.warn.join('; ')})`);
+  // grade proposital fora de espaçamento deve alertar (eixo log / rect torto)
+  const calWarn = checkCalibration([100, 150, 300, 380], EX, 1500, 0);
+  if (!calWarn.warn.length) exFalhas.push('nível 2: grade desigual deveria alertar e não alertou');
+  window.__niveis = { verdictBom: bom.verdict, verdictRuim: ruim.verdict, grades: linhas.length };
+}
+
+// rótulos do eixo X
+const xFalhas = [
+  [makeLabels('jan/2025', 'jun/2026', 4).join('|'), 'Jan/25|Jul/25|Dez/25|Jun/26'],
+  [makeLabels('2023', '2026', 4).join('|'), '2023|2024|2025|2026'],
+  [String(parseX('23/07/2023')?.kind), 'date'],
+  [String(parseX('Jul 2024')?.kind), 'date'],
+  [String(parseX('banana')), 'null'],
+].filter(([g, w]) => g !== w).map(([g, w]) => `rótulo X: "${g}" ≠ "${w}"`);
+
+// ── parser de número colado de planilha ──────────────────────────────────────
+const numCasos = [
+  ['1.240', 1240], ['1.520', 1520], ['880', 880], ['12.345.678', 12345678],
+  ['3.14', 3.14], ['0.500', 0.5], ['1.240,75', 1240.75], ['1,240.75', 1240.75],
+  ['12,5', 12.5], ['1,234,567', 1234567], ['R$ 1.500,00', 1500], ['US$ 68.500', 68500],
+  ['12,5%', 12.5], ['(1.200)', -1200], ['-8', -8], ['', null], ['—', null], ['abc', null],
+];
+const numFalhas = numCasos.filter(([e, w]) => num(e) !== w).map(([e, w]) => `num("${e}") = ${num(e)}, esperado ${w}`);
+
+const base = {
+  labels: ['2020', '2021', '2022', '2023', '2024', '2025'],
+  series: [
+    { name: 'bitcoin', data: [29000, 46000, 16500, 42000, 93000, 68500] },
+    { name: 'ether',   data: [ 7300,  3700,  1200,  2300,  3400,  2600] },
+    { name: 'solana',  data: [  1.5,   170,    10,   101,   190,   140] },
+  ],
+  source: 'Fonte: dados de exemplo',
+};
+
+const casos = [
+  ['line',       { ...base, type: 'line', title: 'Linha', y: { format: 'compact' } }],
+  ['line 1 sér', { ...base, series: [base.series[0]], type: 'line', title: 'Linha, 1 série', smooth: true, dotSize: 8, y: { format: 'usd' } }],
+  ['area',       { ...base, series: [base.series[0]], type: 'area', title: 'Área', y: { format: 'compact' } }],
+  ['bar',        { ...base, type: 'bar', title: 'Barra agrupada', y: { format: 'pct' },
+                   series: [{ name: 'Pro', data: [42, 55, 38, 61, 70, 66] }, { name: 'Light', data: [30, 38, 25, 44, 52, 49] }, { name: 'Free', data: [12, 18, 9, 21, 27, 24] }] }],
+  ['hbar',       { ...base, series: [base.series[0]], type: 'hbar', title: 'Barra horizontal', y: { format: 'compact' } }],
+  ['stacked',    { ...base, type: 'stacked', title: 'Empilhado', y: { format: 'compact' } }],
+  ['stacked100', { ...base, type: 'stacked100', title: 'Empilhado 100%' }],
+  ['donut',      { ...base, type: 'donut', title: 'Rosca', series: [{ name: 'peso', data: [42, 27, 18, 9, 4] }], labels: ['Bitcoin', 'Ether', 'Solana', 'Stablecoins', 'Outros'], y: { format: 'pct' } }],
+  ['claro',      { ...base, theme: 'light', type: 'bar', title: 'Tema claro', y: { format: 'compact' } }],
+  ['negativos',  { ...base, type: 'bar', title: 'Com negativos', series: [{ name: 'variação', data: [12, -8, -34, 61, 15, -22] }], y: { format: 'pct' } }],
+  ['1 ponto',    { ...base, type: 'line', title: 'Um ponto só', labels: ['2025'], series: [{ name: 'x', data: [10] }] }],
+  ['buracos',    { ...base, type: 'line', title: 'Com buracos', series: [{ name: 'x', data: [10, null, 30, null, 50, 60] }] }],
+  ['anotação',   { ...base, series: [base.series[0]], type: 'area', title: 'Com anotação', annotations: [{ at: '2022', text: 'Bear' }], y: { format: 'compact' } }],
+];
+
+const falhas = [];
+for (const [nome, spec] of casos) {
+  let svg = '';
+  try {
+    svg = renderChart(spec);
+    if (/NaN|Infinity|undefined/.test(svg)) throw new Error('coordenada inválida no SVG');
+    if (!/<path|<rect|<line/.test(svg)) throw new Error('nenhuma marca desenhada');
+    // o SVG precisa ser XML válido — senão o export pra PNG falha silenciosamente
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    if (doc.querySelector('parsererror')) throw new Error('SVG malformado');
+  } catch (e) {
+    falhas.push(`${nome}: ${e.message}`);
+  }
+  const fig = document.createElement('figure');
+  fig.innerHTML = svg || `<p class="bad" style="padding:1rem">${nome} falhou</p>`;
+  gal.append(fig);
+}
+
+const todas = [...pvFalhas, ...exFalhas, ...xFalhas, ...numFalhas, ...falhas];
+const e = window.__ex;
+log.innerHTML = todas.length
+  ? `<span class="bad">${todas.length} falha(s):\n  ${todas.join('\n  ')}</span>`
+  : `<span class="ok">✓ extração de curva — erro médio ${(e.medio * 100).toFixed(2)}%, pior ${(e.pior * 100).toFixed(2)}%, `
+    + `${e.gaps} coluna(s) interpoladas sob o tooltip, pico preservado, ponto do tooltip descartado`
+    + `\n✓ nível 1 (aderência) — traço bom "${window.__niveis.verdictBom}", cor ausente "${window.__niveis.verdictRuim}"`
+    + `\n✓ nível 2 (grades) — ${window.__niveis.grades} linhas achadas, calibração uniforme sem alerta, desigual alertada`
+    + `\n✓ ${xFalhas.length === 0 ? 5 : 0} casos de rótulo do eixo X`
+    + `\n✓ ${pvCasos.length} casos de calibração (1.5b, 2.51T, US$ 1.500…)`
+    + `\n✓ ${numCasos.length} casos de parsing de número`
+    + `\n✓ ${casos.length} gráficos renderizados sem coordenada inválida</span>`;
+</script>
+</body>
+</html>

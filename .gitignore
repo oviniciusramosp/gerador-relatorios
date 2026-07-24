@@ -1,0 +1,4 @@
+.pdftmp/
+_ia/cache/
+node_modules/
+.DS_Store

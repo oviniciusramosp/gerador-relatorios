@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gerador de Relatórios · Paradigma</title>
+<link rel="stylesheet" href="paradigma.css">
+<style>
+  body { min-height: 100dvh; display: grid; place-items: center; padding: 2rem;
+    background: radial-gradient(ellipse 80% 55% at 50% 118%, var(--violet), color-mix(in srgb, var(--violet) 25%, transparent) 52%, transparent 74%), var(--ground); }
+  main { width: min(760px, 100%); }
+  h1 { font-size: 2.6rem; font-weight: 600; letter-spacing: -.03em; margin: 0 0 .4rem; }
+  .lead { color: var(--muted); margin: 0 0 2.4rem; font-stretch: 90%; }
+  ol { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; counter-reset: n; }
+  li a, li > div {
+    display: grid; grid-template-columns: 2rem 1fr auto; align-items: center; gap: 1rem;
+    padding: 1rem 1.1rem; border: 1px solid var(--hair); border-radius: var(--r);
+    color: inherit; text-decoration: none;
+  }
+  li a:hover { border-color: var(--hair-strong); background: color-mix(in srgb, var(--lilac) 7%, transparent); }
+  .n { color: var(--mint); font-variant-numeric: tabular-nums; font-size: .85rem; }
+  .t { font-weight: 600; }
+  .d { display: block; font-weight: 400; color: var(--muted); font-size: .82rem; font-stretch: 90%; margin-top: .15rem; }
+  .tag { font-size: .64rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  li > div { opacity: .45; }
+</style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Paradigma</p>
+  <h1>Gerador de Relatórios</h1>
+  <p class="lead">Três ferramentas, um padrão visual. Tokens e renderer compartilhados — ver <code>README.md</code>.</p>
+  <ol>
+    <li><div><span class="n">01</span><span class="t">Texto<span class="d">Edição sincronizada com um arquivo do vault</span></span><span class="tag">a fazer</span></div></li>
+    <li><a href="graficos.html"><span class="n">02</span><span class="t">Gráficos<span class="d">Imagem ou planilha → SVG/PNG no padrão da casa</span></span><span class="tag">pronto</span></a></li>
+    <li><a href="diagramacao.html"><span class="n">03</span><span class="t">Diagramação<span class="d">Miolo do relatório → editor e PDF no padrão da casa</span></span><span class="tag">em progresso</span></a></li>
+  </ol>
+</main>
+</body>
+</html>

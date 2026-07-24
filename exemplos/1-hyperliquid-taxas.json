@@ -1,0 +1,14 @@
+{
+  "type": "area",
+  "title": "Hyperliquid: Taxas Coletadas",
+  "subtitle": "Taxas acumuladas desde o início, em dólar",
+  "source": "Fonte: DefiLlama • jun/2026",
+  "theme": "dark",
+  "labels": ["jan/25","fev/25","mar/25","abr/25","mai/25","jun/25","jul/25","ago/25","set/25","out/25","nov/25","dez/25","jan/26","fev/26","mar/26","abr/26","mai/26","jun/26"],
+  "series": [
+    { "name": "Taxas", "data": [0,45000000,95000000,145000000,195000000,255000000,320000000,405000000,505000000,620000000,720000000,815000000,905000000,1000000000,1085000000,1185000000,1290000000,1400000000] }
+  ],
+  "y": { "format": "compact", "prefix": "US$ ", "min": 0, "max": 1500000000, "ticks": 5 },
+  "x": { "every": 3 },
+  "labelMode": "ends"
+}

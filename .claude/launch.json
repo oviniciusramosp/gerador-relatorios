@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gerador",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.mjs"],
+      "port": 5180,
+      "autoPort": true
+    },
+    {
+      "name": "gerador-alt",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.mjs"],
+      "port": 5181,
+      "autoPort": true
+    }
+  ]
+}

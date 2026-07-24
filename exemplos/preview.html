@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Prévia das 4 conversões</title>
+<link rel="stylesheet" href="../paradigma.css">
+<style>
+  body { padding: 1.5rem; }
+  .gal { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  figure { margin: 0; border: 1px solid var(--hair); border-radius: 6px; overflow: hidden; }
+  svg { display: block; width: 100%; height: auto; }
+  h1 { font-size: 1rem; }
+</style>
+</head>
+<body>
+<h1>4 conversões · confira contra as imagens originais</h1>
+<div class="gal" id="gal"></div>
+<script type="module">
+import { renderChart } from '../chart.js';
+const files = ['1-hyperliquid-taxas','2-dex-market-share','3-volume-perpetuos','4-hyperliquid-volume'];
+for (const f of files) {
+  const spec = await (await fetch(`./${f}.json`)).json();
+  const fig = document.createElement('figure');
+  fig.innerHTML = renderChart(spec);
+  gal.append(fig);
+}
+</script>
+</body>
+</html>
