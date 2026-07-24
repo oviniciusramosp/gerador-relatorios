@@ -29,7 +29,7 @@ export function num(raw) {
 }
 
 // quebra uma linha respeitando aspas de CSV ("a,b" vira um campo só; "" = aspa)
-function splitRow(line, delim) {
+export function splitRow(line, delim) {
   const out = []; let cur = '', q = false;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];

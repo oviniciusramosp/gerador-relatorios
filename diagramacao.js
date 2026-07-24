@@ -20,6 +20,8 @@ import { autocropWhite } from './autocrop.js'; // trilha C (t3): recrop da marge
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS } from './logos.js';            // trilha D (t8): logos tingíveis (currentColor) — mesma fonte dos gráficos
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
+import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
+import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
@@ -59,13 +61,15 @@ function gapBefore(b, prev) {
   if (b.type === 'h1') return 48;                                      // = padding da página
   if (b.type === 'h2') return pt === 'h1' ? PARA_LH : 32;              // colado no H1, senão 32
   if (b.type === 'h3') return (pt === 'h1' || pt === 'h2') ? PARA_LH : 24;
-  if ((b.type === 'li' && pt === 'li') || (b.type === 'ol' && pt === 'ol')) return LIST_GAP;
+  // itens consecutivos da MESMA lista (pontos/numérica/checklist) ficam compactos
+  if ((b.type === 'li' && pt === 'li') || (b.type === 'ol' && pt === 'ol') || (b.type === 'check' && pt === 'check')) return LIST_GAP;
   return PARA_LH;                                                       // demais blocos: 1 linha
 }
 
 const HEAD_TYPES = new Set(['h1', 'h2', 'h3', 'h4']);
-const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'ol', 'quote']);  // blocos editáveis
-const PH = { h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4', p: 'Escreva…', li: 'Item', ol: 'Item', quote: 'Citação' };
+// 'check' (checklist, trilha B t7) é editável e reusa buildText; 'table' NÃO é text (célula própria)
+const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'ol', 'quote', 'check']);  // blocos editáveis
+const PH = { h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4', p: 'Escreva…', li: 'Item', ol: 'Item', quote: 'Citação', check: 'Item' };
 const URL_RE = /^(https?:\/\/|www\.)[^\s]+$/i;
 
 // ─────────────────────────── estado ─────────────────────────────────────────
@@ -210,7 +214,9 @@ const mF = measurer.querySelector('.mcol.f');
 
 function measure(b) {
   const el = buildBlock(b, /*editing*/ false);
-  const col = (b.type === 'image' && b.placement === 'full') ? mF : mL;
+  // tabela (trilha B t6) é full-width como a imagem 'full' → mede na coluna cheia, senão a
+  // altura (e a paginação) sai errada por medir num container estreito demais.
+  const col = ((b.type === 'image' && b.placement === 'full') || b.type === 'table') ? mF : mL;
   col.appendChild(el);
   const h = el.getBoundingClientRect().height;
   col.removeChild(el);
@@ -219,10 +225,12 @@ function measure(b) {
 
 // ─────────────────────────── construção de elementos ────────────────────────
 function buildText(b, editing) {
+  const isCheck = b.type === 'check';                                   // trilha B (t7)
   const tag = HEAD_TYPES.has(b.type) ? b.type
-    : b.type === 'quote' ? 'blockquote' : (b.type === 'li' || b.type === 'ol') ? 'div' : 'p';
+    : b.type === 'quote' ? 'blockquote' : (b.type === 'li' || b.type === 'ol' || isCheck) ? 'div' : 'p';
   const el = document.createElement(tag);
-  el.className = 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
+  // o texto do checklist é '.ck-txt' (SEM a classe 'b' — a moldura/hover/outline vai no envelope)
+  el.className = isCheck ? 'ck-txt' : 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
   el.dataset.id = b.id;
   el.dataset.ph = PH[b.type] || '';
   if (b.type === 'ol') el.dataset.num = (b._num || 1) + '.';   // número calculado por numberLists()
@@ -231,7 +239,21 @@ function buildText(b, editing) {
     el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR';  // corretor nativo PT-BR
     if (b.id === state.activeId) el.classList.add('active-block');
   }
-  return el;
+  if (!isCheck) return el;
+  // trilha B (t7): checklist = envelope [checkbox][texto]. O checkbox é irmão NÃO-editável
+  // (contentEditable=false, FORA do .ck-txt), então b.html continua sendo só o texto — o
+  // sync do input, o toMarkdown e o measure ficam limpos, sem o markup do <input> no html.
+  const wrap = document.createElement('div');
+  wrap.className = 'b check' + (b.checked ? ' checked' : '');
+  wrap.dataset.id = b.id;                        // '.col-left > [data-id]' (alça/drag) acha o envelope
+  const box = document.createElement('input');
+  box.type = 'checkbox'; box.className = 'ck-box'; box.checked = !!b.checked;
+  box.contentEditable = 'false'; box.tabIndex = -1;
+  if (editing) box.addEventListener('change', () => {   // togglar só a classe — sem rebuild no meio do clique
+    b.checked = box.checked; wrap.classList.toggle('checked', box.checked); save(); scheduleCommit();
+  });
+  wrap.append(box, el);
+  return wrap;
 }
 
 function imgHeight(b, colW) { return b.nw ? colW * (b.nh / b.nw) : colW * 0.6; }
@@ -266,6 +288,14 @@ function buildFigure(b, colW, editing) {
   return fig;
 }
 
+// trilha B (t6): callbacks que o bloco Tabela usa — commit (edição de célula, sem rebuild),
+// rerender (mudou a estrutura da tabela) e removeBlock (apagar a tabela inteira).
+const tableCtx = {
+  commit: () => { save(); scheduleCommit(); },
+  rerender: () => render(),
+  removeBlock: (id) => { const i = idxOf(id); if (i >= 0) state.doc.blocks.splice(i, 1); state.sel = null; render(); },
+};
+
 // bloco genérico (usado na medição e no fluxo da coluna esquerda / largura total)
 function buildBlock(b, editing) {
   if (b.type === 'image') {
@@ -286,6 +316,7 @@ function buildBlock(b, editing) {
     d.innerHTML = '<span class="e-pbreak-lbl">— quebra de página · arraste —</span>';
     return d;
   }
+  if (b.type === 'table') return buildTableEl(b, editing, tableCtx);   // trilha B (t6)
   return buildText(b, editing);
 }
 
@@ -628,8 +659,8 @@ function enterAtCaret(host, b) {
   const c = captureCaret();
   const [before, after] = splitHtmlAt(host, c ? c.offset : (host.textContent.length));
 
-  // lista/citação vazia + Enter → vira parágrafo (sai da lista)
-  if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote') && !before.trim() && !after.trim()) {
+  // lista/citação/checklist vazia + Enter → vira parágrafo (sai da lista) — trilha B (t7) incluiu 'check'
+  if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote' || b.type === 'check') && !before.trim() && !after.trim()) {
     b.type = 'p'; b.html = '';
     render({ id: b.id, role: 'block', offset: 0 });
     return;
@@ -696,6 +727,21 @@ pagesEl.addEventListener('input', (e) => {
   const mkType = (tk) => tk === '#' ? 'h1' : tk === '##' ? 'h2' : tk === '###' ? 'h3' : tk === '####' ? 'h4'
     : tk === '>' ? 'quote' : /^\d+\.$/.test(tk) ? 'ol' : 'li';
   let m;
+  // trilha B (t1): "/" no INÍCIO do bloco → menu popover de tipos (estilo Notion). Só dispara
+  // com "/" seguido de não-espaços (o filtro); um espaço fecha, como no Notion. Não colide com
+  // os atalhos "#/>/-/1./---" (nenhum começa com "/") nem com "/" no meio de uma frase (t[0]≠'/').
+  if (TEXT_TYPES.has(b.type) && t[0] === '/' && /^\/(\S*)$/.test(t)) {
+    b.html = host.innerHTML; save();            // mantém o "/filtro" e o caret; o menu só escolhe
+    slash.open(b.id, t.slice(1));
+    return;
+  }
+  if (slash.isOpen()) slash.close();            // deixou de ser "/…" → fecha o menu
+  // trilha B (t7): "[] " / "[ ] " / "[x] " no início de um p → checklist (segue os atalhos md abaixo)
+  if (b.type === 'p' && (m = t.match(/^\[([ xX]?)\] ([\s\S]*)$/))) {
+    b.type = 'check'; b.checked = /[xX]/.test(m[1]); b.html = escapeHtml(m[2]);
+    render({ id: b.id, role: 'block', offset: 0 }); syncTypeUI('check');
+    return;
+  }
   // (1) commit: "marcador + espaço" → vira o tipo e CONSOME o marcador
   if ((b.type === 'p' || b._auto) && (m = t.match(/^(#{1,4}|>|[-*]|\d+\.) ([\s\S]*)$/))) {
     b.type = mkType(m[1]); b.html = escapeHtml(m[2]); delete b._auto;
@@ -726,6 +772,27 @@ pagesEl.addEventListener('input', (e) => {
   syncTypeUI(b.type);
   // reflow depois de pausar de digitar (evita rebuild a cada tecla)
   clearTimeout(inputT); inputT = setTimeout(() => render(), 180);
+});
+
+// trilha B (t1): menu "/" — a lista de tipos sai da MESMA paleta #blocktypes (rótulo+ícone),
+// sem duplicar nada. Aplicar reusa setActiveType()/insertSeparatorButton()/addImageViaPalette().
+const slash = initSlashMenu({
+  defs: [...document.querySelectorAll('#blocktypes button')].map(btn => ({
+    type: btn.dataset.type,
+    label: (btn.querySelector('.lbl') || {}).textContent || btn.dataset.type,
+    icon: (btn.querySelector('.ico') || {}).innerHTML || '',
+  })),
+  onPick: (def, id) => {
+    const b = id && blockOf(id); if (!b) return;
+    state.activeId = b.id;
+    b.html = '';                                // tira o "/filtro" digitado do bloco
+    if (def.type === 'pagebreak' || def.type === 'divider' || def.type === 'image') {
+      render({ id: b.id, role: 'block', offset: 0 });   // limpa o DOM e devolve o caret ao bloco vazio
+      if (def.type === 'image') addImageViaPalette(); else insertSeparatorButton(def.type);
+    } else {
+      setActiveType(def.type);                  // reusa a troca de tipo (já renderiza + foca)
+    }
+  },
 });
 
 pagesEl.addEventListener('focusin', (e) => {
@@ -1377,6 +1444,13 @@ function lastEditedPage() {
 }
 
 // ─────────────────────────── export markdown ────────────────────────────────
+// trilha B (t6): tabela em markdown pipe (| a | b |\n| --- | --- |\n| 1 | 2 |)
+function tableMd(rows, strip) {
+  if (!rows || !rows.length) return '';
+  const line = (r) => '| ' + r.map(c => strip(c) || '').join(' | ') + ' |';
+  const sep = '| ' + rows[0].map(() => '---').join(' | ') + ' |';
+  return [line(rows[0]), sep, ...rows.slice(1).map(line)].join('\n');
+}
 function toMarkdown() {
   const strip = (h) => { const d = document.createElement('div'); d.innerHTML = h || ''; return d.textContent; };
   return state.doc.blocks.map(b => {
@@ -1387,6 +1461,8 @@ function toMarkdown() {
       case 'h4': return '#### ' + strip(b.html);
       case 'li': return '- ' + strip(b.html);
       case 'ol': return (b._num || 1) + '. ' + strip(b.html);
+      case 'check': return (b.checked ? '- [x] ' : '- [ ] ') + strip(b.html);   // trilha B (t7)
+      case 'table': return tableMd(b.rows, strip);                              // trilha B (t6)
       case 'quote': return '> ' + strip(b.html);
       case 'divider': return '\n---\n';
       case 'pagebreak': return '\n<!-- quebra de página -->\n';
