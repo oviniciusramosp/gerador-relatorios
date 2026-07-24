@@ -435,6 +435,14 @@
   .page .check.b.checked .ck-txt { text-decoration: line-through; color: #9A9A9A; }
   .page .ck-txt:empty { min-height: 1lh; }
   .page.editing .ck-txt:empty:focus::before { content: attr(data-ph); color: #bbb; }
+
+  /* trilha E: zoom migrou pra dentro do <nav> do header — herda o estilo genérico de
+     input/select/button (paradigma.css); header e aside usam o MESMO fundo escuro (--ground,
+     herdado do body, confirmado no CSS — não há tema claro na sidebar), então nada de cor
+     precisa mudar, só um separador sutil (mesmo desenho do #fmtbar .sep) pra destacar o zoom
+     dos botões de histórico/ação ao lado. */
+  header nav select#zoom { font-size: .82rem; }
+  header nav .hsep { width: 1px; align-self: stretch; margin: 0 .15rem; background: var(--hair-strong); }
 </style>
 </head>
 <body>
@@ -442,9 +450,18 @@
   <h1>Diagramação</h1>
   <span class="crumb">Gerador de Relatórios · Paradigma — miolo</span>
   <nav>
+    <!-- trilha E: zoom saiu do details "Cabeçalho & rodapé" (sidebar) e mora aqui agora;
+         mesmo id (#zoom) — o listener em diagramacao.js busca por id, não por posição -->
+    <select id="zoom" title="Zoom da visualização">
+      <option value="fit">Ajustar</option>
+      <option value="1" selected>100%</option>
+      <option value="0.75">75%</option>
+      <option value="0.5">50%</option>
+    </select>
+    <span class="hsep"></span>
     <button id="btnUndo" title="Desfazer (⌘Z)" disabled>↩︎</button>
     <button id="btnRedo" title="Refazer (⌘⇧Z)" disabled>↪︎</button>
-    <button id="btnMd" title="Baixar o texto em Markdown">Baixar .md</button>
+    <button id="btnMd" title="Salvar uma cópia editável (.pdgm.json)">Salvar</button>
     <button id="btnPrint" class="primary" title="Gerar e baixar o PDF (igual à visualização)">Baixar PDF</button>
   </nav>
 </header>
@@ -576,22 +593,12 @@
           <label class="field">Cabeçalho (topo das páginas)
             <input type="text" id="headText" placeholder="HYPERLIQUID: A CASA… — PARADIGMA EDUCATION — JULHO 2026">
           </label>
+          <label class="field">Nº da 1ª página
+            <input type="number" id="firstPage" value="1" min="0" step="1">
+          </label>
           <label class="field">Texto do rodapé (direita)
             <input type="text" id="footText" value="paradigma.education">
           </label>
-          <div class="grid2">
-            <label class="field">Nº da 1ª página
-              <input type="number" id="firstPage" value="1" min="0" step="1">
-            </label>
-            <label class="field">Zoom
-              <select id="zoom">
-                <option value="fit">Ajustar</option>
-                <option value="1" selected>100%</option>
-                <option value="0.75">75%</option>
-                <option value="0.5">50%</option>
-              </select>
-            </label>
-          </div>
         </div>
       </details>
     </div>
