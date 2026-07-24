@@ -1243,6 +1243,20 @@ document.getElementById('cmClose').addEventListener('click', closeChartModal);
 chartModal.querySelector('.cm-backdrop').addEventListener('click', closeChartModal);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !chartModal.hidden) closeChartModal(); });
 
+// trilha D: import de gráfico (IA) depende de /api/convert e /api/refine, que só
+// existem com o server.mjs rodando — no GitHub Pages (estático) não há backend.
+// GET rápido (timeout curto) em /api/health decide: falhou (rede, 404, timeout,
+// ou file://) → sem backend → esconde só a opção "Gráfico" do menu de Adicionar
+// Imagem (Imagem continua normal). Sem mensagem de erro — só não oferece o que
+// quebraria. AbortSignal.timeout: nativo, sem AbortController/setTimeout manual.
+async function gateChartByBackend() {
+  let ok = false;
+  try { ok = (await fetch('/api/health', { signal: AbortSignal.timeout(1500) })).ok; }
+  catch {}                                     // rede/servidor ausente ou timeout
+  if (!ok) addImgMenu.querySelector('[data-opt="chart"]').hidden = true;
+}
+gateChartByBackend();
+
 // recebe o SVG do gráfico (postMessage do iframe) → vira imagem na coluna direita
 addEventListener('message', (e) => {
   if (e.origin !== location.origin) return;
@@ -1870,7 +1884,7 @@ document.querySelectorAll('[data-logosize]').forEach(s => s.addEventListener('in
 }));
 document.getElementById('zoom').addEventListener('change', (e) => { state.zoom = e.target.value === 'fit' ? 'fit' : +e.target.value; applyZoom(); });
 
-// ── exportar PDF (WYSIWYG, vetorial, com links) — sem o diálogo de imprimir ──
+// ── exportar PDF (WYSIWYG, vetorial, com links) — via window.print() nativo ──
 let _fontUri;
 async function plexFontFace() {
   if (!_fontUri) {
@@ -1887,13 +1901,33 @@ function exportPagesHtml() {
   editing = prev;
   return tmp.outerHTML;
 }
-async function exportPdf() {
+// trilha D: iframe oculto reusado a cada exportação — NÃO display:none (alguns
+// motores de print pulam layout de frame display:none); fica fora da viewport
+// com um tamanho real (~A4 a 96dpi) em vez de 0×0, pelo mesmo motivo.
+let _printFrame;
+function printFrame() {
+  if (_printFrame) return _printFrame;
+  const f = document.createElement('iframe');
+  f.setAttribute('aria-hidden', 'true');
+  f.tabIndex = -1;   // fora da ordem de tab (o relatório pode ter <a>, que é focável)
+  f.style.cssText = 'position:fixed; left:-10000px; top:0; width:794px; height:1123px; border:0;';
+  document.body.appendChild(f);
+  return (_printFrame = f);
+}
+// PDF nativo: monta o MESMO HTML auto-contido que ia pro POST /api/pdf (server
+// headless) e manda pro iframe oculto — o print-to-pdf do PRÓPRIO navegador do
+// usuário é vetorial, respeita @page/color-adjust, e funciona em qualquer host
+// estático (GitHub Pages não tem server). Popup foi descartado: bloqueador de
+// pop-up é permissão extra; iframe não depende de nada além do DOM local.
+async function printPdf() {
   const btn = document.getElementById('btnPrint');
   const label = btn.textContent; btn.disabled = true; btn.textContent = 'Gerando PDF…';
   try {
     const [css, fontFace] = await Promise.all([fetch('paradigma.css').then(r => r.text()), plexFontFace()]);
     const diagStyle = [...document.querySelectorAll('head style')].map(s => s.textContent).join('\n');
+    const fname = (state.doc.source?.label || 'relatorio').replace(/\.[^.]+$/, '');
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<title>${escapeHtml(fname)}</title>
 <style>${fontFace}</style><style>${css}</style><style>${diagStyle}</style>
 <style>
   /* A4 real: as páginas são desenhadas em 595×842 "px" que representam pt (A4) →
@@ -1904,18 +1938,30 @@ async function exportPdf() {
   #pages { display: block; transform: none !important; margin: 0 !important; }
   .page { box-shadow: none !important; margin: 0 !important; zoom: 1.3333333; break-after: page; }
   .page:last-child { break-after: auto; }
+  /* o print do navegador some com fundo/cor por padrão (só sai marcando "gráficos
+     de fundo" na caixa do usuário) — força sempre, cobre capa/contracapa (imagem
+     de fundo), checklist/callout (preenchimento) e cor de texto/highlight */
+  html, body, .page, .page * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 </style></head><body>${exportPagesHtml()}</body></html>`;
-    const r = await fetch('/api/pdf', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ html }) });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
-    const blob = await r.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = (state.doc.source?.label || 'relatorio').replace(/\.[^.]+$/, '') + '.pdf';
-    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+
+    const frame = printFrame();
+    await new Promise((resolve) => { frame.onload = resolve; frame.srcdoc = html; });
+    const w = frame.contentWindow, d = frame.contentDocument;
+    // a @font-face injetada (Plex embutida) carrega em paralelo ao parse — o load
+    // do iframe não garante que ela já foi aplicada (fonte não atrasa o load como
+    // <img> atrasa); document.fonts.ready fecha essa brecha antes do print
+    if (d.fonts) await d.fonts.ready;
+    // dupla rAF: settle do layout/repaint (zoom:1.333, quebras de página, e o
+    // possível re-layout pós-fonte acima) antes de disparar o diálogo de impressão
+    await new Promise((r) => w.requestAnimationFrame(() => w.requestAnimationFrame(r)));
+    w.focus();   // sem foco, o Chrome às vezes abre o diálogo pra página PAI, não pro iframe
+    w.print();
   } catch (e) { alert('Falha ao gerar PDF: ' + (e.message || e)); }
+  // sem callback confiável de "print terminou" (o diálogo do SO não devolve promise) →
+  // reabilita o botão logo após chamar print(), não espera o usuário fechar o diálogo
   finally { btn.disabled = false; btn.textContent = label; }
 }
-document.getElementById('btnPrint').addEventListener('click', exportPdf);
+document.getElementById('btnPrint').addEventListener('click', printPdf);
 function downloadMd() {
   const blob = new Blob([toMarkdown()], { type: 'text/markdown' });
   const a = document.createElement('a');

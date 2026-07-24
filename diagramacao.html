@@ -491,6 +491,11 @@
      dos botões de histórico/ação ao lado. */
   header nav select#zoom { font-size: .82rem; }
   header nav .hsep { width: 1px; align-self: stretch; margin: 0 .15rem; background: var(--hair-strong); }
+
+  /* trilha D: sem backend (GitHub Pages), o gate esconde a opção "Gráfico" do
+     menu de Adicionar Imagem (ver gateChartByBackend em diagramacao.js) — sem
+     isso a grade de 2 colunas deixa um buraco vazio no lugar do botão escondido */
+  #addImgMenu .am-choices:has(button[data-opt="chart"][hidden]) { grid-template-columns: 1fr; }
 </style>
 </head>
 <body>
