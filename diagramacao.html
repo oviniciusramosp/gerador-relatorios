@@ -298,15 +298,17 @@
   }
   #addImgMenu[hidden], #imgPanel[hidden], #coverPanel[hidden] { display: none; }
 
-  /* botões de posição da imagem (ícone + label) */
+  /* botões de posição da imagem (ícone + label). .fieldbtn (trilha H, t1) reusa as MESMAS
+     declarações via seletor combinado — botões Título/Legenda do painel de imagem, mesmo visual
+     mas fora do grupo (não são mutuamente exclusivos, por isso sem os estados .on). */
   .placebtns { display: grid; gap: .3rem; margin-top: .3rem; }
-  .placebtns button {
+  .placebtns button, .fieldbtn {
     display: flex; align-items: center; gap: .5rem; text-align: left;
     padding: .35rem .5rem; border: 1px solid var(--hair); border-radius: var(--r);
     background: transparent; color: var(--muted); cursor: pointer; font-size: .76rem; font-stretch: 85%;
   }
-  .placebtns button svg { width: 16px; height: 16px; flex: none; color: var(--lilac); }
-  .placebtns button:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .placebtns button svg, .fieldbtn svg { width: 16px; height: 16px; flex: none; color: var(--lilac); }
+  .placebtns button:hover, .fieldbtn:hover { border-color: var(--hair-strong); color: var(--ink); }
   .placebtns button.on { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
   .placebtns button.on svg { color: var(--ink); }
 
@@ -435,6 +437,22 @@
   .page .check.b.checked .ck-txt { text-decoration: line-through; color: #9A9A9A; }
   .page .ck-txt:empty { min-height: 1lh; }
   .page.editing .ck-txt:empty:focus::before { content: attr(data-ph); color: #bbb; }
+
+  /* trilha H (t2): "Posição"/"Coluna" são <div class="field"> (columnField é um grupo de botões,
+     não faz sentido semântico de <label>) — o global label.field (paradigma.css) só casa com a TAG
+     label, então não pegava. Replica a MESMA declaração aqui, escopada aos dois popovers (não mexe
+     no seletor global, que a sidebar A e os gráficos também usam). */
+  #imgPanel .field, #coverPanel .field { display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); }
+  /* trilha H (t3): linha "rótulo + valor" do slider (Cantos raio / Tamanho) — valor px empurrado
+     pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de baixo, como
+     já era). (t4) botão de reset discreto colado ao lado do valor, dentro do mesmo grupo à direita. */
+  #imgPanel .field-row, #coverPanel .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #imgPanel .field-val, #coverPanel .field-val { display: inline-flex; align-items: center; gap: .3rem; }
+  #imgPanel .resetbtn, #coverPanel .resetbtn {
+    border: 0; background: transparent; padding: 0 .1rem; margin: 0;
+    color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
+  }
+  #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover { color: var(--ink); }
 </style>
 </head>
 <body>
