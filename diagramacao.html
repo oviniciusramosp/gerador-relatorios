@@ -370,8 +370,10 @@
     .page.editing .col-right::after { display: none; }
     .page.cover-page .cover-item.cover-sel { outline: none; }
     .breakmark, .drag-badge, #fmtbar, #addImgMenu, #imgPanel, #coverPanel, #chartModal, .snap-guide, #bhandle, #dropline { display: none !important; }
+    #linkedit { display: none !important; }
   }
 
+<<<<<<< HEAD
   /* trilha C: linha de checkbox no painel de imagem (recorte de margem branca) */
   .checkrow { display: flex; align-items: center; gap: .4rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); cursor: pointer; }
   .checkrow input[type="checkbox"] { flex: none; }
@@ -388,6 +390,30 @@
     background: transparent; color: var(--muted); cursor: pointer; font-size: .72rem; font-stretch: 85%; }
   .logopick button:hover { border-color: var(--hair-strong); color: var(--ink); }
   .logopick button[aria-pressed="true"] { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
+  /* trilha A: botões de cor/highlight/link no fmtbar + mini-editor de URL */
+  #fmtbar .colorbtn { font-weight: 700; line-height: 1; }
+  /* dica visual: "A" com barra embaixo = cor do texto; "A" com fundo = destaque */
+  #fmtbar .cb-fore { border-bottom: 3px solid #29E899; border-radius: 3px; padding-bottom: calc(.28rem - 3px); }
+  #fmtbar .cb-back { background: #FFF3A3; color: #23292F; }
+  #fmtbar .cb-back:hover { background: #FFE875; color: #23292F; }
+  #fmtbar .linkbtn { font-size: .72rem; }
+  #linkedit {
+    position: fixed; z-index: 31; display: flex; gap: 4px; align-items: center;
+    padding: 4px; border: 1px solid var(--hair-strong); border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+    box-shadow: 0 12px 40px -12px #000;
+  }
+  #linkedit[hidden] { display: none; }
+  #linkedit input {
+    width: 15rem; padding: .3rem .5rem; border: 1px solid var(--hair-strong);
+    border-radius: 5px; background: var(--ground); color: var(--ink); font-size: .78rem;
+  }
+  #linkedit button {
+    padding: .3rem .5rem; font-size: .74rem; border: 0; border-radius: 5px;
+    background: transparent; color: var(--muted); cursor: pointer;
+  }
+  #linkedit button:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); color: var(--ink); }
+  #linkedit #linkApply { color: var(--ink); }
 </style>
 </head>
 <body>
@@ -624,6 +650,19 @@
   <button class="markbtn" data-cmd="italic" title="Itálico (⌘I)" style="font-style:italic">I</button>
   <button class="markbtn" data-cmd="underline" title="Sublinhado (⌘U)" style="text-decoration:underline">U</button>
   <button class="markbtn" data-cmd="strikeThrough" title="Tachado" style="text-decoration:line-through">S</button>
+  <span class="sep"></span>
+  <!-- trilha A (t5): cor do texto (foreColor) e destaque/fundo (hiliteColor) via swatch -->
+  <button class="colorbtn cb-fore" data-cmd="foreColor" title="Cor do texto">A</button>
+  <button class="colorbtn cb-back" data-cmd="hiliteColor" title="Destaque (cor de fundo)">A</button>
+  <!-- trilha A (t2): editor de link -->
+  <button class="linkbtn" data-cmd="link" title="Link">🔗</button>
+</div>
+
+<!-- trilha A (t2): mini-editor de URL inline (abre ancorado na seleção) -->
+<div id="linkedit" hidden>
+  <input id="linkUrl" type="url" placeholder="https://…" spellcheck="false" aria-label="URL do link">
+  <button id="linkApply" title="Aplicar link">✓</button>
+  <button id="linkRemove" title="Remover link" hidden>Remover</button>
 </div>
 
 <script type="module" src="diagramacao.js"></script>
