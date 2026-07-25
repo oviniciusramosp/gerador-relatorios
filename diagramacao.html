@@ -319,6 +319,9 @@
     box-shadow: 0 16px 50px -16px #000;
   }
   #addImgMenu[hidden], #imgPanel[hidden], #coverPanel[hidden] { display: none; }
+  /* ação indisponível no contexto atual (ex.: travar numa página sem bloco de texto próprio) —
+     o title= explica o porquê no hover */
+  #imgPanel button:disabled { opacity: .4; cursor: default; }
 
   /* botões de posição da imagem (ícone + label). .fieldbtn (trilha H, t1) reusa as MESMAS
      declarações via seletor combinado — botões Título/Legenda do painel de imagem, mesmo visual

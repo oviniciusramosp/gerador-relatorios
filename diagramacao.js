@@ -1302,25 +1302,58 @@ function snapTargets(colLeft) {
   return out;
 }
 
+// página do miolo sob o cursor. Por GEOMETRIA, não por elementFromPoint: o próprio item
+// arrastado mora debaixo do cursor e roubaria o hit-test. Só o eixo Y importa — sair de lado
+// não deve trocar de página.
+function contentPageAt(clientY) {
+  for (const p of pagesEl.querySelectorAll('.page[data-page]')) {
+    const r = p.getBoundingClientRect();
+    if (clientY >= r.top && clientY <= r.bottom) return p;
+  }
+  return null;
+}
+// leva o item arrastado pra coluna direita de outra página, no meio do arraste. Reparentar o
+// nó é o que faz ele SEGUIR o cursor entre páginas em vez de ficar preso na página de origem.
+function dragToPage(page) {
+  showSnapGuide(drag.content, null);          // a guia é por página; some da que ficou pra trás
+  page.querySelector('.col-right').appendChild(drag.wrap);
+  drag.page = page;
+  drag.pageIdx = +page.dataset.page || 0;
+  drag.content = page.querySelector('.content');
+  drag.snaps = snapTargets(drag.content.querySelector('.col-left'));   // alvos são os da página nova
+}
+
 pagesEl.addEventListener('pointerdown', (e) => {
   const wrap = e.target.closest && e.target.closest('.rimg');
   if (!wrap || e.target.closest('[contenteditable]')) return;
   e.preventDefault();                        // não vira seleção de texto nem mousedown
   const b = blockOf(wrap.dataset.id);
   const content = wrap.closest('.content');
-  const colLeft = content && content.querySelector('.col-left');
-  const snaps = snapTargets(colLeft);
-  drag = { b, wrap, content, snaps, startY: e.clientY, startTop: parseFloat(wrap.style.top) || 0, z: currentZoom(), _y: null };
+  const page = wrap.closest('.page');
+  const z = currentZoom();
+  // guardamos ONDE dentro do item o usuário pegou (em px de página), não um delta de tela: com
+  // isso o Y sai sempre de "cursor − topo da área de conteúdo DESTA página", e trocar de página
+  // no meio do arraste é só trocar qual .content é medido.
+  const grabDY = (e.clientY - wrap.getBoundingClientRect().top) / z;
+  drag = {
+    b, wrap, content, page, grabDY, z, _y: null,
+    pageIdx: +page.dataset.page || 0, page0: +page.dataset.page || 0,
+    snaps: snapTargets(content && content.querySelector('.col-left')),
+  };
   wrap.classList.add('dragging'); wrap.setPointerCapture(e.pointerId);
   setImgSel(b.id);                           // seleção por classe — nada de render() aqui
 });
-pagesEl.addEventListener('pointermove', (e) => {
+// move/up no DOCUMENT (e não no pagesEl): reparentar o nó derruba o pointer capture, e um
+// listener preso ao pagesEl perderia o resto do gesto se o cursor saísse do palco.
+document.addEventListener('pointermove', (e) => {
   if (!drag) return;
-  const dy = (e.clientY - drag.startY) / drag.z;
-  let y = drag.startTop + dy;
+  const pg = contentPageAt(e.clientY);
+  if (pg && pg !== drag.page) dragToPage(pg);
+  const cr = drag.content.getBoundingClientRect();
+  let y = (e.clientY - cr.top) / drag.z - drag.grabDY;
   const maxY = CONTENT_H - drag.wrap.offsetHeight;
   y = Math.min(Math.max(y, 0), Math.max(0, maxY));
-  // snap: alinha ao topo do bloco mais próximo da coluna esquerda
+  // snap: alinha ao topo (ou a qualquer linha) do bloco mais próximo da coluna esquerda
   let hit = null, best = SNAP;
   for (const s of drag.snaps) { const d = Math.abs(s - y); if (d < best) { best = d; hit = s; } }
   if (hit != null) y = hit;
@@ -1328,25 +1361,33 @@ pagesEl.addEventListener('pointermove', (e) => {
   drag.wrap.style.top = y + 'px';
   drag._y = y;
 });
-pagesEl.addEventListener('pointerup', (e) => {
+document.addEventListener('pointerup', (e) => {
   if (!drag) return;
   const d = drag, wrap = d.wrap, b = d.b;
   wrap.classList.remove('dragging'); showSnapGuide(d.content, null);
-  // solto sobre a coluna esquerda? → sai da direita e entra no fluxo como imagem
-  wrap.style.pointerEvents = 'none';
+  // solto sobre a coluna esquerda? → sai da direita e entra no fluxo como imagem.
+  // O próprio item E o painel flutuante saem do hit-test: em janela estreita o painel vira pro
+  // lado esquerdo da imagem e cobre a coluna de texto, e o drop falhava em silêncio.
+  const chrome = [wrap, imgPanel].filter(Boolean);
+  chrome.forEach(el => { el.style.pointerEvents = 'none'; });
   const under = document.elementFromPoint(e.clientX, e.clientY);
-  wrap.style.pointerEvents = '';
+  chrome.forEach(el => { el.style.pointerEvents = ''; });
   drag = null;
   if (under && under.closest && under.closest('.col-left')) { applyDrop(b.id, dropTargetAt(e.clientX, e.clientY)); return; }
+  b.page = d.pageIdx;                        // pode ter mudado de página no meio do arraste
   if (d._y != null) {
     b.y = Math.round(d._y);
     // travada: o arraste não solta a âncora, RE-ancora no bloco mais próximo do novo Y (o
     // snap pode ter grudado num bloco diferente do original) — mesma regra do botão cadeado.
     if (b.anchor) {
       const alvo = nearestByTop(leftBlocksOnPage(b.page | 0), b.y);
+      // página sem bloco no fluxo (só coluna direita): manter a âncora antiga puxaria a imagem
+      // de volta pra página do bloco velho no próximo render — destrava em vez de teleportar.
       if (alvo) b.anchor = { id: alvo.id, dy: b.y - alvo._top };
+      else delete b.anchor;
     }
   }
+  if (d.pageIdx !== d.page0) render();        // mudou de página → repagina (o DOM já está certo, isto normaliza)
   save(); scheduleCommit();
 });
 
@@ -1535,6 +1576,11 @@ function openImgPanel() {
     document.body.appendChild(imgPanel);
   }
   const radius = b.radius ?? 4;
+  // travar exige um bloco do FLUXO que comece nesta página. Uma página que só mostra a
+  // continuação de um parágrafo (bloco cortado) não tem âncora possível: o _top do bloco vive
+  // na página onde ele começou, e ancorar ali jogaria a imagem de volta pra lá. Sem candidato,
+  // o botão fica desabilitado em vez de virar um clique que não faz nada.
+  const travavel = !!b.anchor || leftBlocksOnPage(b.page | 0).length > 0;
   imgPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Imagem</div>
     <div class="row" style="gap:.4rem">
@@ -1542,7 +1588,7 @@ function openImgPanel() {
       <button type="button" class="fieldbtn" data-a="caption">${b.caption != null ? MINUS_SVG : PLUS_SVG}<span>Legenda</span></button>
     </div>
     <div class="field">Posição<div data-slot="col"></div></div>
-    ${placementOf(b) === 'right' ? `<button type="button" class="fieldbtn" data-a="lock">${b.anchor ? UNLOCK_SVG : LOCK_SVG}<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span></button>` : ''}
+    ${placementOf(b) === 'right' ? `<button type="button" class="fieldbtn" data-a="lock"${travavel ? '' : ' disabled title="Esta página não tem bloco de texto próprio para prender a imagem (só a continuação de um parágrafo que começa numa página anterior)."'}>${b.anchor ? UNLOCK_SVG : LOCK_SVG}<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span></button>` : ''}
     <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv">${radius}px</span><button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
       <input type="range" data-a="radius" min="0" max="24" step="1" value="${radius}">
     </label>
