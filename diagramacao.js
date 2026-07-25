@@ -52,6 +52,7 @@ function columnField(cur, vals, onPick) {
   return wrap;
 }
 const COL_L = 258, GAP = 24, COL_R = 217;
+const TOC_SHORT_W = 345;   // largura do índice no modo "Curto" (o 'full' usa as 2 colunas)
 const COL_FULL = COL_L + GAP + COL_R;             // 499 — largura das 2 colunas
 
 // b.placement ('inline' | 'full' | 'right') vale pra QUALQUER bloco, não só imagem:
@@ -127,7 +128,13 @@ function seedDoc() {
     // t2.11: índice (lista de títulos) e resumo agora ligam/desligam independente —
     // resumoOn é o switcher novo; ambos vivem na mesma página física (index.on segue
     // sendo o gate de existência da página, ver assemblePages/renderIndexPage).
-    index: { on: true, resumoOn: true, resumo: '<p>Escreva aqui o resumo do relatório.</p>' },
+    // levels: quais níveis de título entram no índice · color: 'padrao' | 'cinza' ·
+    // width: 'curto' (coluna de 345px) | 'full' · resumoWidth: 'full' | 'left' (coluna de 258px)
+    index: {
+      on: true, resumoOn: true, levels: { h1: true, h2: true, h3: false, h4: false },
+      color: 'padrao', width: 'curto', resumoWidth: 'full',
+      resumo: '<p>Escreva aqui o resumo do relatório.</p>',
+    },
   };
 }
 
@@ -151,6 +158,12 @@ function load() {
     // índice ligado ⇒ resumo também aparecia). Só é no-op quando cfg.index já veio com
     // resumoOn OU quando cfg.index nem existia (seedDoc já seta resumoOn:true).
     if (state.doc.index.resumoOn === undefined) state.doc.index.resumoOn = true;
+    // migração: LS/arquivo salvo antes das opções do índice não tem esses campos. O default de
+    // width é 'curto', então documentos antigos passam a abrir com o índice estreito — é o
+    // padrão pedido, não um acidente.
+    const idx = state.doc.index;
+    if (!idx.levels) idx.levels = { h1: true, h2: true, h3: false, h4: false };
+    idx.color ||= 'padrao'; idx.width ||= 'curto'; idx.resumoWidth ||= 'full';
     // migração: capas salvas antes do Y livre não têm item.y → empilha;
     // capas salvas antes do logo não têm cov.logo → default (não quebra LS antigo)
     [state.doc.cover, state.doc.back].forEach(cov => {
@@ -757,19 +770,23 @@ function renderContentPage(pg, contentIdx, number, moreAfter) {
   return page;
 }
 
-// índice automático: 1 linha por H1/H2/H3, numeração hierárquica, nº da página à direita
+// índice automático: 1 linha por título, numeração hierárquica, nº da página à direita.
+// Quais níveis ENTRAM é escolha do usuário (state.doc.index.levels) — mas o tocNum roda pra
+// TODOS os títulos e o filtro vem depois: assim desligar o H2 não renumera os H1 (o contador
+// hierárquico continua vendo o documento inteiro, que é o que o leitor espera).
 function buildToc(content) {
-  const rows = []; const c = [0, 0, 0];
+  const rows = []; const c = [0, 0, 0, 0];   // um slot por nível h1..h4 (tocNum lê a profundidade daqui)
+  const levels = state.doc.index.levels || { h1: true, h2: true };
   content.forEach((pg, ci) => {
     for (const f of pg.left) {
       if (f.clipTop) continue;          // continuação de bloco cortado: já contada na página de cima
       const b = f.b;
-      const lvl = b.type === 'h1' ? 1 : b.type === 'h2' ? 2 : b.type === 'h3' ? 3 : 0;
+      const lvl = b.type === 'h1' ? 1 : b.type === 'h2' ? 2 : b.type === 'h3' ? 3 : b.type === 'h4' ? 4 : 0;
       if (!lvl) continue;
       // trilha C (t4): se o título já vem numerado ("1.2 - X"), usa o número lido
       // e remove o prefixo do texto; senão, contador hierárquico. tocNum muta c[].
       const { num, text } = tocNum(lvl, stripHtml(b.html), c);
-      rows.push({ num, level: lvl, text, pageIdx: ci });
+      if (levels['h' + lvl]) rows.push({ num, level: lvl, text, pageIdx: ci });
     }
   });
   return rows;
@@ -781,12 +798,20 @@ function renderIndexPage(toc, contentStart, number) {
   // t2.11 (bug): a página existe se Índice OU Resumo estiver ligado (ver assemblePages) — os
   // dois blocos agora precisam de gate PRÓPRIO aqui dentro, senão desligar só o Índice também
   // apaga o título+lista mas o Resumo continuava vindo "de graça" sem checar seu próprio .on.
-  if (state.doc.index.on) {
+  const idx = state.doc.index;
+  if (idx.on) {
     const h1 = document.createElement('div'); h1.className = 'idx-title'; h1.textContent = 'Índice'; wrap.appendChild(h1);
-    const list = document.createElement('div'); list.className = 'toc';
+    const list = document.createElement('div');
+    list.className = 'toc' + (idx.color === 'cinza' ? ' toc-cinza' : '');
+    // 'curto': a linha inteira (número + título + página) cabe em 345px — o nº da página sobe
+    // pra junto do texto em vez de morar lá na borda da segunda coluna.
+    if ((idx.width || 'curto') === 'curto') list.style.width = TOC_SHORT_W + 'px';
     if (!toc.length) {
       const empty = document.createElement('div'); empty.className = 'toc-empty';
-      empty.textContent = 'O índice aparece aqui conforme você adiciona títulos (H1/H2/H3) ao miolo.';
+      const ligados = Object.keys(idx.levels || {}).filter(k => idx.levels[k]).map(k => k.toUpperCase());
+      empty.textContent = ligados.length
+        ? `O índice aparece aqui conforme você adiciona títulos (${ligados.join('/')}) ao miolo.`
+        : 'Nenhum nível de título ligado — escolha H1 e/ou H2 no painel Documento.';
       list.appendChild(empty);
     }
     for (const r of toc) {
@@ -797,9 +822,10 @@ function renderIndexPage(toc, contentStart, number) {
     }
     wrap.appendChild(list);
   }
-  if (state.doc.index.resumoOn) {
+  if (idx.resumoOn) {
     const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo'; wrap.appendChild(h2);
     const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
+    if (idx.resumoWidth === 'left') res.style.width = COL_L + 'px';   // mesma coluna esquerda do miolo
     res.dataset.ph = 'Escreva o resumo…'; res.innerHTML = state.doc.index.resumo || '';
     if (editing) { res.contentEditable = 'true'; res.spellcheck = true; res.lang = 'pt-BR'; }
     wrap.appendChild(res);
@@ -2229,7 +2255,11 @@ document.getElementById('firstPage').addEventListener('input', (e) => { state.do
 // ── páginas especiais: switches + controles de capa/contracapa ──
 const specialObj = (key) => key === 'cover' ? state.doc.cover : key === 'back' ? state.doc.back : state.doc.index;
 function syncSubCtrl() {
-  document.querySelectorAll('.subctrl[data-sub]').forEach(el => { el.hidden = !specialObj(el.dataset.sub).on; });
+  // 'resumo' não tem specialObj/.on próprio — mora em index.resumoOn (mesmo caso especial de syncSpecialUI)
+  document.querySelectorAll('.subctrl[data-sub]').forEach(el => {
+    const k = el.dataset.sub;
+    el.hidden = !(k === 'resumo' ? state.doc.index.resumoOn : specialObj(k).on);
+  });
 }
 function syncSpecialUI() {
   // t2.11: 'resumo' não é mais um specialObj com .on próprio — é state.doc.index.resumoOn.
@@ -2238,6 +2268,11 @@ function syncSpecialUI() {
     const checked = key === 'resumo' ? state.doc.index.resumoOn : specialObj(key).on;
     sw.setAttribute('aria-checked', String(checked));
   });
+  // opções do índice (níveis / cores / larguras): abrir um .pdgm tem que trazer a UI junto
+  document.querySelectorAll('.sw[data-idxlvl]').forEach(sw => {
+    sw.setAttribute('aria-checked', String(!!(state.doc.index.levels || {})[sw.dataset.idxlvl]));
+  });
+  document.querySelectorAll('select[data-idxopt]').forEach(s => { s.value = state.doc.index[s.dataset.idxopt]; });
   document.querySelectorAll('[data-bgx]').forEach(s => { s.value = specialObj(s.dataset.bgx).bgX ?? 50; });
   document.querySelectorAll('[data-bgy]').forEach(s => { s.value = specialObj(s.dataset.bgy).bgY ?? 50; });
   // t2.9: "Sem fundo" (lixeira) só aparece quando há imagem de fundo selecionada.
@@ -2286,6 +2321,16 @@ document.querySelectorAll('.sw[data-sw]').forEach(sw => sw.addEventListener('cli
     obj.on = !obj.on; sw.setAttribute('aria-checked', String(obj.on));
   }
   syncSubCtrl(); render();
+}));
+// níveis de título que entram no índice (H1/H2) — switch próprio, fora do specialObj
+document.querySelectorAll('.sw[data-idxlvl]').forEach(sw => sw.addEventListener('click', () => {
+  const lv = (state.doc.index.levels ||= { h1: true, h2: true }), k = sw.dataset.idxlvl;
+  lv[k] = !lv[k]; sw.setAttribute('aria-checked', String(lv[k]));
+  render();
+}));
+// cores / largura do índice / largura do resumo: o value do <select> É o valor guardado
+document.querySelectorAll('select[data-idxopt]').forEach(s => s.addEventListener('change', () => {
+  state.doc.index[s.dataset.idxopt] = s.value; render();
 }));
 // t2.10: tooltip nativo (title=) no ícone "ⓘ" ao lado de "Índice + Resumo" — preventDefault
 // no click evita que a ativação do botão borbulhe pro <summary> e togglar o <details> junto.

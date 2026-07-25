@@ -154,12 +154,17 @@
     font-size: 9px; line-height: 12px; color: #4E4E4E; }
   .page .toc-row.lvl2 { padding-left: 14px; }
   .page .toc-row.lvl3 { padding-left: 28px; }
+  .page .toc-row.lvl4 { padding-left: 42px; }
   .page .toc-row.lvl1 { color: #000; }
   .page .toc-label { display: inline-flex; gap: 6px; min-width: 0; }
   .page .toc-num { color: #29E899; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
   .page .toc-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .page .toc-pg { color: #828080; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
   .page .toc-empty { font-size: 9px; color: #9a9a9a; font-style: italic; }
+  /* esquema "Cinza": número, título e página na mesma cor. Precisa citar .lvl1 e .toc-num/.toc-pg
+     um a um — cada um crava a própria cor acima, e herança não passa por cima de cor declarada. */
+  .page .toc-cinza .toc-row, .page .toc-cinza .toc-row.lvl1,
+  .page .toc-cinza .toc-num, .page .toc-cinza .toc-pg { color: #A9A9A9; }
   .page .idx-resumo { font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: justify; outline: none; }
   .page .idx-resumo p { margin: 0 0 8px; }
 
@@ -674,10 +679,38 @@
       </details>
 
       <details open>
-        <summary class="sum-info">Índice + Resumo<button type="button" class="infoicon" title="O índice é gerado automaticamente dos títulos H1/H2/H3 do miolo. O resumo é editável na própria página.">ⓘ</button></summary>
+        <summary class="sum-info">Índice + Resumo<button type="button" class="infoicon" title="O índice é gerado automaticamente dos títulos do miolo — escolha abaixo quais níveis entram. O resumo é editável na própria página.">ⓘ</button></summary>
         <div class="body">
           <div class="swrow"><span>Índice</span><button class="sw" data-sw="index" role="switch" aria-checked="true"></button></div>
+          <div class="subctrl" data-sub="index">
+            <div class="swrow"><span>Título H1</span><button class="sw" data-idxlvl="h1" role="switch" aria-checked="true"></button></div>
+            <div class="swrow"><span>Título H2</span><button class="sw" data-idxlvl="h2" role="switch" aria-checked="true"></button></div>
+            <div class="swrow"><span>Título H3</span><button class="sw" data-idxlvl="h3" role="switch" aria-checked="false"></button></div>
+            <div class="swrow"><span>Título H4</span><button class="sw" data-idxlvl="h4" role="switch" aria-checked="false"></button></div>
+            <div class="grid2">
+              <label class="field">Cores
+                <select data-idxopt="color">
+                  <option value="padrao">Padrão</option>
+                  <option value="cinza">Cinza</option>
+                </select>
+              </label>
+              <label class="field">Largura
+                <select data-idxopt="width">
+                  <option value="curto">Curto</option>
+                  <option value="full">Largura total</option>
+                </select>
+              </label>
+            </div>
+          </div>
           <div class="swrow"><span>Resumo</span><button class="sw" data-sw="resumo" role="switch" aria-checked="true"></button></div>
+          <div class="subctrl" data-sub="resumo">
+            <label class="field">Largura do resumo
+              <select data-idxopt="resumoWidth">
+                <option value="full">Largura total</option>
+                <option value="left">Coluna esquerda</option>
+              </select>
+            </label>
+          </div>
         </div>
       </details>
 

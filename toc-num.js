@@ -23,28 +23,28 @@
 // dia incomodar, exigir separador de pontuação [.\-–)] e aceitar perder "1 Intro".
 const PREFIX_RE = /^\s*(\d+(?:[.\-–]\s*\d+)*)\s*[.\-–)]?\s*/;
 
-// lvl = 1|2|3 (h1/h2/h3); text = título JÁ sem HTML; c = [c0,c1,c2] MUTÁVEL.
-// Retorna { num, text }. `num` sai normalizado com "." como único separador;
-// `text` sai sem o prefixo numérico quando ele existia.
+// lvl = 1..N (h1..h4); text = título JÁ sem HTML; c = contador MUTÁVEL, um slot por nível
+// ([0,0,0,0] pro h1..h4). Retorna { num, text }. `num` sai normalizado com "." como único
+// separador; `text` sai sem o prefixo numérico quando ele existia.
+// A profundidade sai do tamanho de `c` — hardcodar 3 níveis fazia o h4 cair no contador do h3
+// (dois títulos de níveis diferentes disputando o mesmo slot).
 export function tocNum(lvl, text, c) {
   const m = PREFIX_RE.exec(text);
   if (m) {
     const parts = m[1].split(/[.\-–]/).map(s => parseInt(s, 10)).filter(n => !Number.isNaN(n));
     // sincroniza o contador com o número lido; níveis mais fundos zeram
-    for (let i = 0; i < 3; i++) c[i] = parts[i] ?? 0;
+    for (let i = 0; i < c.length; i++) c[i] = parts[i] ?? 0;
     return { num: parts.join('.'), text: text.slice(m[0].length) };
   }
   // sem prefixo: contador hierárquico (comportamento original de buildToc)
-  if (lvl === 1) { c[0]++; c[1] = 0; c[2] = 0; }
-  else if (lvl === 2) { c[1]++; c[2] = 0; }
-  else { c[2]++; }
-  const num = lvl === 1 ? `${c[0]}` : lvl === 2 ? `${c[0]}.${c[1]}` : `${c[0]}.${c[1]}.${c[2]}`;
-  return { num, text };
+  c[lvl - 1]++;
+  for (let i = lvl; i < c.length; i++) c[i] = 0;   // entrou num nível → os mais fundos reiniciam
+  return { num: c.slice(0, lvl).join('.'), text };
 }
 
 // self-check: `node toc-num.js` (não roda ao importar no browser — sem `process`)
 function demo() {
-  const run = (titles) => { const c = [0, 0, 0]; return titles.map(([lvl, t]) => tocNum(lvl, t, c)); };
+  const run = (titles) => { const c = [0, 0, 0, 0]; return titles.map(([lvl, t]) => tocNum(lvl, t, c)); };
   const eq = (got, want, msg) => console.assert(JSON.stringify(got) === JSON.stringify(want), msg, JSON.stringify(got));
 
   // 1) sem número → contador hierárquico (comportamento antigo, intacto)
@@ -61,6 +61,19 @@ function demo() {
   eq(run([[1, '3 - Mercado'], [1, 'Conclusão'], [2, 'Extra']]),
     [{ num: '3', text: 'Mercado' }, { num: '4', text: 'Conclusão' }, { num: '4.1', text: 'Extra' }],
     'mistura sincroniza o contador');
+
+  // 4) h4 tem contador PRÓPRIO (não divide slot com o h3) e volta a zero a cada h3 novo
+  eq(run([[1, 'Tese'], [2, 'Contexto'], [3, 'Método'], [4, 'Amostra'], [4, 'Filtro'], [3, 'Limites'], [4, 'Prazo']]),
+    [{ num: '1', text: 'Tese' }, { num: '1.1', text: 'Contexto' }, { num: '1.1.1', text: 'Método' },
+     { num: '1.1.1.1', text: 'Amostra' }, { num: '1.1.1.2', text: 'Filtro' },
+     { num: '1.1.2', text: 'Limites' }, { num: '1.1.2.1', text: 'Prazo' }],
+    'h4 com contador próprio');
+
+  // 5) subir de nível zera os mais fundos (h1 novo depois de um h4)
+  eq(run([[1, 'A'], [2, 'B'], [3, 'C'], [4, 'D'], [1, 'E'], [2, 'F']]),
+    [{ num: '1', text: 'A' }, { num: '1.1', text: 'B' }, { num: '1.1.1', text: 'C' },
+     { num: '1.1.1.1', text: 'D' }, { num: '2', text: 'E' }, { num: '2.1', text: 'F' }],
+    'h1 novo reinicia os níveis fundos');
 
   console.log('toc-num: todos os asserts passaram');
 }
