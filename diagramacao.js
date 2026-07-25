@@ -97,6 +97,13 @@ const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : '
 const PARA_LH = 14;   // line-height do p.b — a "altura da linha de um parágrafo"
 const LIST_GAP = 6;   // distância atual entre itens da MESMA lista (compacta)
 function gapBefore(b, prev) {
+  // override do usuário (menu ⋮ da paleta) substitui a regra INTEIRA pro tipo — inclusive a
+  // nuance contextual (H2 colado no H1 etc.): uma vez customizado, o valor é fixo.
+  const custom = state.doc.blockStyles && state.doc.blockStyles[b.type];
+  if (custom) {
+    const v = HEAD_TYPES.has(b.type) ? custom.marginTop : custom.gap;
+    if (v != null) return v;
+  }
   const pt = prev && prev.type;
   if (b.type === 'h1') return 48;                                      // = padding da página
   if (b.type === 'h2') return pt === 'h1' ? PARA_LH : 32;              // colado no H1, senão 32
@@ -113,6 +120,37 @@ const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'ol', 'quote', 'c
 const PH = { h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4', p: 'Escreva…', li: 'Item', ol: 'Item', quote: 'Citação', check: 'Item', callout: 'Escreva…' };
 const URL_RE = /^(https?:\/\/|www\.)[^\s]+$/i;
 
+// ── estilo por TIPO de bloco, editável pelo menu ⋮ da paleta (aba Conteúdo) ──────────────────
+// state.doc.blockStyles[type] = { color, fontSize, lineHeight, letterSpacing, gap, marginTop } —
+// campos ausentes usam o padrão do app (TYPE_STYLE_DEFAULTS abaixo, que só DOCUMENTA os valores
+// que já estavam fixos na CSS/gapBefore — não são lidos no render, servem de "valor inicial do
+// slider" e de alvo do botão redefinir). Não existe override por bloco individual: editar o tipo
+// edita TODOS os blocos daquele tipo hoje E os que forem criados depois — é o "editar todos" e
+// o "padrão do projeto" ao mesmo tempo, de graça, porque todo bloco do tipo lê do MESMO lugar.
+const TYPE_STYLE_DEFAULTS = {
+  h1: { fontSize: 24, lineHeight: 31, color: '#000000', letterSpacing: -0.01, marginTop: 48 },
+  h2: { fontSize: 20, lineHeight: 26, color: '#000000', letterSpacing: -0.01, marginTop: 32 },
+  h3: { fontSize: 16, lineHeight: 21, color: '#000000', letterSpacing: -0.01, marginTop: 24 },
+  h4: { fontSize: 13, lineHeight: 17, color: '#000000', letterSpacing: -0.01, marginTop: 14 },
+  p: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
+  li: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 6 },
+  ol: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 6 },
+  check: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 6 },
+  quote: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
+  callout: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
+};
+// aplica o override (se existir) direto no elemento que RENDERIZA o texto — pro check/callout
+// isso é o .ck-txt/.co-txt (não o envelope .b.check/.b.callout), então funciona sem depender de
+// herança de CSS: inline style no nó certo sempre vence, seja qual for a regra de onde ele herdava.
+function applyTypeStyle(el, type) {
+  const o = state.doc.blockStyles && state.doc.blockStyles[type];
+  if (!o) return;
+  if (o.color) el.style.color = o.color;
+  if (o.fontSize != null) el.style.fontSize = o.fontSize + 'px';
+  if (o.lineHeight != null) el.style.lineHeight = o.lineHeight + 'px';
+  if (o.letterSpacing != null) el.style.letterSpacing = o.letterSpacing + 'em';
+}
+
 // ─────────────────────────── estado ─────────────────────────────────────────
 // O conteúdo NÃO persiste: o documento sempre abre em branco. O que persiste é
 // a configuração (rodapé, nº inicial) e a ORIGEM vinculada (arquivo/Google Docs),
@@ -124,7 +162,7 @@ const uid = () => 'b' + (Date.now().toString(36)) + (uidN++).toString(36);
 const state = {
   doc: null,          // { blocks:[], footText, firstPage, source }
   sel: null,          // id da imagem selecionada
-  zoom: 1,
+  zoom: 'fit',
   autocrop: true,     // trilha C (t3): recortar margem branca ao inserir imagem (não persiste)
 };
 
@@ -144,6 +182,12 @@ function seedDoc() {
   return {
     blocks: [mkBlock('p', '')],
     footText: 'paradigma.education', headText: '', firstPage: 1, source: null,
+    // estilo por tipo de bloco (menu ⋮ da paleta) — {} = tudo no padrão do app; ver
+    // TYPE_STYLE_DEFAULTS/applyTypeStyle/gapBefore. Vive no state.doc (não no LS_KEY pequeno)
+    // porque é adjacente ao miolo — mesmo caminho de idb.set('doc', ...) que já salva os
+    // blocks inteiros, sem precisar de migração: Object.assign(seedDoc(), doc) em applyDoc()
+    // já cobre documentos antigos sem este campo.
+    blockStyles: {},
     // páginas especiais — ligadas por padrão via switcher no painel Documento.
     // bgX/bgY = posição do fundo (Fill) em %; bgScale = zoom (100 = sem zoom, "cover" puro);
     // itens posicionados por coluna (x) + y livre.
@@ -365,6 +409,7 @@ function buildText(b, editing) {
     el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR';  // corretor nativo PT-BR
     if (b.id === state.activeId) el.classList.add('active-block');
   }
+  applyTypeStyle(el, b.type);
   if (!isCheck && !isCallout) return el;
   if (isCallout) {
     // callout = [.callout-row: ícone+texto] + [.callout-bar: trocar ícone / cor — só em edição,
@@ -607,8 +652,9 @@ function buildBlockEl(b, editing) {
     // data-id → cai no mesmo sistema de arrasto de blocos (bhandle/dropTargetAt/applyDrop):
     // arrastar a barra move o pagebreak no array e reposiciona onde a página corta.
     const d = document.createElement('div');
-    d.className = 'e-pbreak b'; d.dataset.id = b.id;
-    d.innerHTML = '<span class="e-pbreak-lbl">— quebra de página · arraste —</span>';
+    d.className = 'e-pbreak b' + (state.sel === b.id ? ' pbsel' : '');   // reaplica seleção pós-render
+    d.dataset.id = b.id;
+    d.innerHTML = '<span class="e-pbreak-lbl">QUEBRA DE PÁGINA</span>';
     return d;
   }
   if (b.type === 'table') return buildTableEl(b, editing, tableCtx);   // trilha B (t6)
@@ -1200,7 +1246,7 @@ pagesEl.addEventListener('input', (e) => {
 // trilha B (t1): menu "/" — a lista de tipos sai da MESMA paleta #blocktypes (rótulo+ícone),
 // sem duplicar nada. Aplicar reusa setActiveType()/insertSeparatorButton()/addImageViaPalette().
 const slash = initSlashMenu({
-  defs: [...document.querySelectorAll('#blocktypes button')].map(btn => ({
+  defs: [...document.querySelectorAll('#blocktypes button[data-type]')].map(btn => ({
     type: btn.dataset.type,
     label: (btn.querySelector('.lbl') || {}).textContent || btn.dataset.type,
     icon: (btn.querySelector('.ico') || {}).innerHTML || '',
@@ -1245,13 +1291,19 @@ pagesEl.addEventListener('focusin', (e) => {
 // "pular" em vez de acompanhar o mouse)
 function setImgSel(id) {
   state.sel = id;
-  pagesEl.querySelectorAll('.imgsel, .divsel, .cover-sel').forEach(el => el.classList.remove('imgsel', 'divsel', 'cover-sel'));
+  pagesEl.querySelectorAll('.imgsel, .divsel, .pbsel, .cover-sel').forEach(el => el.classList.remove('imgsel', 'divsel', 'pbsel', 'cover-sel'));
   closeCoverPanel();
   const b = id && blockOf(id);
   if (!b) { closeImgPanel(); return; }
   if (b.type === 'divider') {                    // divisor: borda roxa, sem painel
     const el = pagesEl.querySelector(`.divider[data-id="${id}"]`);
     if (el) el.classList.add('divsel');
+    closeImgPanel();
+    return;
+  }
+  if (b.type === 'pagebreak') {                  // quebra de página: mesmo tratamento do divisor
+    const el = pagesEl.querySelector(`.e-pbreak[data-id="${id}"]`);
+    if (el) el.classList.add('pbsel');
     closeImgPanel();
     return;
   }
@@ -1266,10 +1318,12 @@ pagesEl.addEventListener('mousedown', (e) => {
   const coverIt = e.target.closest && e.target.closest('.cover-item');
   const fig = e.target.closest && e.target.closest('figure.fig');
   const divider = e.target.closest && e.target.closest('.divider.b');
+  const pbreak = e.target.closest && e.target.closest('.e-pbreak');   // bug: nunca era selecionável → Backspace não achava o quê remover
   const editable = e.target.closest && e.target.closest('[contenteditable]');
   if (coverIt) selectCoverItem(coverIt.dataset.cid);
   else if (fig && !editable) setImgSel(fig.dataset.id);
   else if (divider) setImgSel(divider.dataset.id);
+  else if (pbreak) setImgSel(pbreak.dataset.id);
   else if (state.sel && !e.target.closest('#imgPanel') && !e.target.closest('#coverPanel')) setImgSel(null);
 });
 
@@ -1507,6 +1561,13 @@ pagesEl.addEventListener('pointerdown', (e) => {
   const bar = e.target.closest && e.target.closest('.e-pbreak');
   if (!bar || !bar.dataset.id) return;
   e.preventDefault();
+  // bug: o preventDefault acima suprime o 'mousedown' sintético que viria em seguida (é ele
+  // quem seleciona bloco/divisor/imagem no listener de mousedown mais abaixo) — sem selecionar,
+  // Backspace/Delete não tinha o quê remover. Some junto o blur NATIVO que um clique normal
+  // daria no texto em edição, então também tira o foco daqui à mão — sem isso o Backspace batia
+  // no guard "está editando" mesmo com o pagebreak já selecionado.
+  document.activeElement?.blur();
+  setImgSel(bar.dataset.id);
   document.body.classList.add('grabbing');
   bdrag = { id: bar.dataset.id, target: null };
 });
@@ -2291,7 +2352,7 @@ segBtns.forEach(b => b.addEventListener('click', () => setSegment(b.dataset.seg)
 
 // ─────────────────────────── UI: sidebar / controles ────────────────────────
 const btByType = {};
-document.querySelectorAll('#blocktypes button').forEach(btn => {
+document.querySelectorAll('#blocktypes button[data-type]').forEach(btn => {
   btByType[btn.dataset.type] = btn;
   btn.addEventListener('mousedown', (e) => e.preventDefault());   // não rouba o caret/seleção do bloco
   btn.addEventListener('click', () => {
@@ -2309,6 +2370,111 @@ function syncTypeUI(type) {
   Object.entries(btByType).forEach(([t, b]) => b.setAttribute('aria-pressed', String(t === type)));
   syncColUI();
 }
+
+// ── popover "⋮" da paleta: estilo do TIPO (cor/tamanho/altura de linha/espaçamento/margem) ──
+// Editar aqui edita TODOS os blocos daquele tipo no documento (e os que forem criados depois)
+// de uma vez, porque não existe override por bloco — todo bloco do tipo lê o MESMO
+// state.doc.blockStyles[type] (ver applyTypeStyle/gapBefore). Mesmo padrão de popover fixo do
+// #imgPanel/#coverPanel: criado uma vez, reaberto com innerHTML novo a cada tipo clicado.
+let blockStylePanel, blockStyleType = null;
+function openBlockStylePanel(type, anchorEl) {
+  if (!blockStylePanel) { blockStylePanel = document.createElement('div'); blockStylePanel.id = 'blockStylePanel'; document.body.appendChild(blockStylePanel); }
+  blockStyleType = type;
+  const def = TYPE_STYLE_DEFAULTS[type];
+  const cur = state.doc.blockStyles[type] || {};
+  const v = (k) => cur[k] != null ? cur[k] : def[k];
+  const isHead = HEAD_TYPES.has(type);
+  const label = (btByType[type]?.querySelector('.lbl') || {}).textContent || type;
+  blockStylePanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">Estilo · ${escapeHtml(label)}</div>
+    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${v('fontSize')}px</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para ${def.fontSize}px">↺</button></span></span>
+      <input type="range" data-a="fontSize" min="8" max="48" step="1" value="${v('fontSize')}">
+    </label>
+    <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lineHeightv">${v('lineHeight')}px</span><button type="button" class="resetbtn" data-r="lineHeight" title="Redefinir para ${def.lineHeight}px">↺</button></span></span>
+      <input type="range" data-a="lineHeight" min="8" max="56" step="1" value="${v('lineHeight')}">
+    </label>
+    <label class="field"><span class="field-row">Espaço entre letras <span class="field-val"><span data-role="letterSpacingv">${v('letterSpacing').toFixed(2)}em</span><button type="button" class="resetbtn" data-r="letterSpacing" title="Redefinir para ${def.letterSpacing}em">↺</button></span></span>
+      <input type="range" data-a="letterSpacing" min="-0.05" max="0.15" step="0.01" value="${v('letterSpacing')}">
+    </label>
+    ${isHead ? `
+    <label class="field"><span class="field-row">Margem acima (título) <span class="field-val"><span data-role="marginTopv">${v('marginTop')}px</span><button type="button" class="resetbtn" data-r="marginTop" title="Redefinir para ${def.marginTop}px">↺</button></span></span>
+      <input type="range" data-a="marginTop" min="0" max="80" step="1" value="${v('marginTop')}">
+    </label>` : `
+    <label class="field"><span class="field-row">Espaço entre parágrafos <span class="field-val"><span data-role="gapv">${v('gap')}px</span><button type="button" class="resetbtn" data-r="gap" title="Redefinir para ${def.gap}px">↺</button></span></span>
+      <input type="range" data-a="gap" min="0" max="48" step="1" value="${v('gap')}">
+    </label>`}
+    <label class="field">Cor do texto <button type="button" class="colorfield" data-a="color" style="background:${v('color')}"></button></label>`;
+  blockStylePanel.hidden = false;
+  positionBlockStylePanel(anchorEl);
+  blockStylePanel.querySelectorAll('.resetbtn').forEach(b => b.addEventListener('mousedown', (e) => e.preventDefault()));
+
+  const setField = (field, val) => {
+    const o = (state.doc.blockStyles[type] ||= {});
+    o[field] = val;
+    scheduleStyleRender();
+  };
+  const resetField = (field) => {
+    const o = state.doc.blockStyles[type];
+    if (o) { delete o[field]; if (!Object.keys(o).length) delete state.doc.blockStyles[type]; }
+    scheduleStyleRender();
+  };
+
+  blockStylePanel.querySelectorAll('input[type=range][data-a]').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const field = inp.dataset.a;
+      const val = field === 'letterSpacing' ? +inp.value : Math.round(+inp.value);
+      setField(field, val);
+      const unit = field === 'letterSpacing' ? 'em' : 'px';
+      const shown = field === 'letterSpacing' ? val.toFixed(2) : val;
+      const disp = blockStylePanel.querySelector(`[data-role="${field}v"]`);
+      if (disp) disp.textContent = shown + unit;
+    });
+  });
+  blockStylePanel.querySelectorAll('.resetbtn[data-r]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const field = btn.dataset.r;
+      resetField(field);
+      const d = def[field];
+      const inp = blockStylePanel.querySelector(`input[data-a="${field}"]`);
+      if (inp) inp.value = d;
+      const disp = blockStylePanel.querySelector(`[data-role="${field}v"]`);
+      if (disp) disp.textContent = (field === 'letterSpacing' ? d.toFixed(2) : d) + (field === 'letterSpacing' ? 'em' : 'px');
+    });
+  });
+  const cf = blockStylePanel.querySelector('[data-a="color"]');
+  cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
+    setField('color', hex); cf.style.background = hex;
+  }, v('color')));
+}
+function positionBlockStylePanel(anchorEl) {
+  if (!blockStylePanel || blockStylePanel.hidden || !anchorEl) return;
+  const r = anchorEl.getBoundingClientRect();
+  const pw = blockStylePanel.offsetWidth || 232, ph = blockStylePanel.offsetHeight || 260;
+  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  blockStylePanel.style.left = x + 'px'; blockStylePanel.style.top = y + 'px';
+}
+function closeBlockStylePanel() { if (blockStylePanel) blockStylePanel.hidden = true; blockStyleType = null; }
+// mudar tamanho/altura/margem re-paginia (blocos mudam de altura) — debounce curto pro slider
+// não travar arrastando (mesmo idioma do debounce de digitação, `inputT` mais abaixo).
+let styleRenderT;
+// só render() — o painel é uma subárvore própria (appendChild no body, fora de #pages), então
+// sobrevive ao rebuild do miolo sozinho; reabri-lo aqui destruiria o <input> no meio do arraste.
+function scheduleStyleRender() { clearTimeout(styleRenderT); styleRenderT = setTimeout(() => { render(); }, 150); }
+document.querySelectorAll('.blockmenu[data-styletype]').forEach(btn => {
+  btn.addEventListener('mousedown', (e) => e.preventDefault());   // não rouba o caret/seleção do bloco em edição
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const t = btn.dataset.styletype;
+    if (blockStyleType === t && blockStylePanel && !blockStylePanel.hidden) { closeBlockStylePanel(); return; }
+    openBlockStylePanel(t, btn);
+  });
+});
+document.addEventListener('mousedown', (e) => {                // fecha ao clicar fora (mesmo padrão do #addImgMenu)
+  if (!blockStylePanel || blockStylePanel.hidden) return;
+  if (e.target.closest('#blockStylePanel') || e.target.closest('.blockmenu')) return;
+  closeBlockStylePanel();
+}, true);
 
 // "Coluna" do bloco EM FOCO — a sidebar é o único lugar de onde texto/tabela alcançam o
 // placement (imagem tem o #imgPanel, item de capa tem o #coverPanel, ambos com o MESMO
@@ -2636,7 +2802,6 @@ async function printPdf() {
   // reabilita o botão logo após chamar print(), não espera o usuário fechar o diálogo
   finally { btn.disabled = false; btn.textContent = label; }
 }
-document.getElementById('btnPrint').addEventListener('click', printPdf);
 function downloadMd() {
   const blob = new Blob([toMarkdown()], { type: 'text/markdown' });
   const a = document.createElement('a');
@@ -2662,7 +2827,27 @@ async function saveDocFile() {
   a.click();
   URL.revokeObjectURL(a.href);
 }
-document.getElementById('btnMd').addEventListener('click', saveDocFile);
+// "Baixar" (era 2 botões — "Salvar"/.pdgm.zip e "Baixar PDF" — virou 1 com menu de 2 opções,
+// mesmo padrão de popover fixo do #addImgMenu: posiciona colado ao botão, fecha ao clicar fora).
+const downloadMenu = document.getElementById('downloadMenu');
+function openDownloadMenu() {
+  const r = document.getElementById('btnPrint').getBoundingClientRect();
+  downloadMenu.hidden = false;
+  const mw = downloadMenu.offsetWidth || 232;
+  downloadMenu.style.left = Math.max(8, r.right - mw) + 'px';
+  downloadMenu.style.top = (r.bottom + 6) + 'px';
+}
+function closeDownloadMenu() { downloadMenu.hidden = true; }
+document.getElementById('btnPrint').addEventListener('click', () => {
+  if (downloadMenu.hidden) openDownloadMenu(); else closeDownloadMenu();
+});
+document.addEventListener('mousedown', (e) => {                // fecha ao clicar fora (mesmo padrão do #addImgMenu)
+  if (downloadMenu.hidden) return;
+  if (e.target.closest('#downloadMenu') || e.target.closest('#btnPrint')) return;
+  closeDownloadMenu();
+}, true);
+downloadMenu.querySelector('[data-dl="pdf"]').addEventListener('click', () => { closeDownloadMenu(); printPdf(); });
+downloadMenu.querySelector('[data-dl="zip"]').addEventListener('click', () => { closeDownloadMenu(); saveDocFile(); });
 addEventListener('resize', () => { if (state.zoom === 'fit') applyZoom(); });
 
 // ──────────────── barra flutuante de formatação (estilo Notion) ─────────────
@@ -2872,7 +3057,7 @@ document.getElementById('btnRedo').addEventListener('mousedown', (e) => e.preven
 
 // ─────────────────────────── init ───────────────────────────────────────────
 load();
-state.zoom = 1;
+state.zoom = 'fit';
 state.activeId = state.doc.blocks[0]?.id;
 document.getElementById('footText').value = state.doc.footText;
 document.getElementById('headText').value = state.doc.headText || '';

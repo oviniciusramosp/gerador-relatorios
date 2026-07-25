@@ -9,13 +9,20 @@
   /* ===================== app shell (tema escuro, igual gráficos) ===================== */
   body { height: 100dvh; display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
 
+  /* 3 colunas (esquerda/centro/direita) — as duas de fora dividem o espaço que sobra em
+     partes IGUAIS (1fr 1fr), então a coluna do meio (largura própria, "auto") cai sempre no
+     centro exato da barra, não importa se o texto da esquerda ou os botões da direita mudam
+     de tamanho (o zoom precisa ficar centralizado sempre — não é coincidência de hoje). */
   header {
-    display: flex; align-items: baseline; gap: 1rem;
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1rem;
     padding: .8rem 1.1rem; border-bottom: 1px solid var(--hair);
   }
+  header .hleft { display: flex; align-items: baseline; gap: 1rem; min-width: 0; }
   header h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
-  header .crumb { color: var(--muted); font-size: .74rem; font-stretch: 85%; }
-  header nav { margin-left: auto; display: flex; gap: .4rem; align-items: center; }
+  header .crumb { color: var(--muted); font-size: .74rem; font-stretch: 85%;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header #zoom { justify-self: center; }
+  header nav { justify-self: end; display: flex; gap: .4rem; align-items: center; }
   header nav button:disabled { opacity: .38; cursor: default; }
   header nav button:disabled:hover { background: color-mix(in srgb, var(--lilac) 7%, transparent); }
 
@@ -85,6 +92,17 @@
     background: color-mix(in srgb, var(--violet) 16%, transparent);
   }
   .blocktypes button[aria-pressed="true"] .ico { border-color: var(--violet); color: var(--ink); }
+  /* linha = botão de tipo (ocupa o espaço todo) + botão de 3 pontos (edita o ESTILO do tipo,
+     ver #blockStylePanel). Só nos tipos de TEXTO — tabela/imagem/divisor/quebra continuam
+     bare <button>, sem essa opção (cor/tamanho/etc não fazem sentido pra eles). */
+  .blockrow { display: flex; gap: .25rem; }
+  .blockrow button[data-type] { flex: 1; min-width: 0; }
+  .blockmenu {
+    flex: none; width: 26px; display: grid; place-items: center;
+    border: 1px solid var(--hair); border-radius: var(--r);
+    background: transparent; color: var(--muted); cursor: pointer; font-size: .9rem; line-height: 1;
+  }
+  .blockmenu:hover { border-color: var(--hair-strong); color: var(--ink); background: color-mix(in srgb, var(--lilac) 10%, transparent); }
 
   .filebtn { position: relative; overflow: hidden; }
   .filebtn input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
@@ -277,6 +295,10 @@
   /* divisor: clicável e com borda roxa quando selecionado */
   .page.editing .divider.b { cursor: pointer; }
   .page.editing .divider.b.divsel { outline: 2px solid #4E39FF; outline-offset: 3px; border-radius: 2px; }
+  /* quebra de página: mesma borda roxa de seleção do divisor (clicável desde o mousedown
+     handler acima — antes não entrava na lista de closest() e Backspace não achava nada
+     pra remover; ver comentário "bug" no mousedown). */
+  .page.editing .e-pbreak.pbsel { outline: 2px solid #4E39FF; outline-offset: 3px; border-radius: 2px; }
 
   /* coluna direita: no hover, uma coluna tracejada (mesma altura da esquerda) com um "+" ao centro */
   .page.editing .col-right { border-radius: 4px; transition: background .12s; }
@@ -319,13 +341,23 @@
   #fmtbar.caption-mode .typeselect, #fmtbar.caption-mode .sep { display: none; }
 
   /* menus flutuantes: adicionar imagem (clique na coluna direita) + editar imagem selecionada */
-  #addImgMenu, #imgPanel, #coverPanel {
+  #addImgMenu, #imgPanel, #coverPanel, #downloadMenu, #blockStylePanel {
     position: fixed; z-index: 40; display: grid; gap: .55rem; width: 232px;
     padding: .7rem; border: 1px solid var(--hair-strong); border-radius: 10px;
     background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
     box-shadow: 0 16px 50px -16px #000;
   }
-  #addImgMenu[hidden], #imgPanel[hidden], #coverPanel[hidden] { display: none; }
+  #addImgMenu[hidden], #imgPanel[hidden], #coverPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden] { display: none; }
+  /* menu do botão "Baixar" (PDF/ZIP) — mesmo desenho de botão icone+label do .fieldbtn,
+     só que gap menor (é um menu, não um formulário) e sem borda própria por botão. */
+  #downloadMenu { gap: .2rem; padding: .35rem; }
+  #downloadMenu button {
+    display: flex; align-items: center; gap: .55rem; text-align: left; width: 100%;
+    padding: .5rem .55rem; border: 0; border-radius: 6px;
+    background: transparent; color: var(--ink); cursor: pointer; font-size: .82rem; font-stretch: 85%;
+  }
+  #downloadMenu button svg { width: 16px; height: 16px; flex: none; color: var(--lilac); }
+  #downloadMenu button:hover { background: color-mix(in srgb, var(--violet) 16%, transparent); }
   /* ação indisponível no contexto atual (ex.: travar numa página sem bloco de texto próprio) —
      o title= explica o porquê no hover */
   #imgPanel button:disabled { opacity: .4; cursor: default; }
@@ -397,7 +429,7 @@
     .page.editing .imgsel img, .page.editing .b.active-block, .page.editing .divider.b.divsel { outline: none; }
     .page.editing .col-right::after { display: none; }
     .page.cover-page .cover-item.cover-sel { outline: none; }
-    .drag-badge, #fmtbar, #addImgMenu, #imgPanel, #coverPanel, #chartModal, .snap-guide, #bhandle, #dropline { display: none !important; }
+    .drag-badge, #fmtbar, #addImgMenu, #imgPanel, #coverPanel, #downloadMenu, #blockStylePanel, #chartModal, .snap-guide, #bhandle, #dropline { display: none !important; }
     #linkedit { display: none !important; }
   }
 
@@ -459,13 +491,19 @@
     content: attr(data-label); position: absolute; right: 0; top: 2px;
     font-size: 8px; font-weight: 700; letter-spacing: .02em; color: #29E899;
   }
-  .page .e-pbreak {                          /* quebra MANUAL: barra arrastável, lilás = movível */
-    height: 14px; display: flex; align-items: center; justify-content: center;
-    border-radius: 3px; cursor: grab; user-select: none;
-    background: color-mix(in srgb, #4E39FF 12%, transparent);
-    border: 1px dashed color-mix(in srgb, #4E39FF 55%, transparent);
+  .page .e-pbreak {                          /* quebra MANUAL: linha em zigue-zague, arrastável */
+    height: 10px; display: flex; align-items: center; justify-content: center;
+    cursor: grab; user-select: none;
+    /* zigue-zague tileável (SVG em data URI) — currentColor não resolve dentro de um data:
+       URI de background-image (é um recurso externo, não herda variáveis da página), então
+       a cor #4E39FF vem cravada direto no SVG. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='10' viewBox='0 0 16 10'%3E%3Cpolyline points='0,2 4,8 8,2 12,8 16,2' fill='none' stroke='%234E39FF' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: repeat-x; background-position: center; background-size: 16px 10px;
   }
   .page .e-pbreak .e-pbreak-lbl {
+    /* fundo BRANCO (cor fixa da página, não var(--ground) — isto é o papel, não o app)
+       corta o zigue-zague embaixo do texto, como um "corte aqui" de cupom. */
+    background: #fff; padding: 0 6px;
     font-size: 7.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
     color: #4E39FF; pointer-events: none;
   }
@@ -512,13 +550,13 @@
   /* trilha H (t3): linha "rótulo + valor" do slider (Cantos raio / Tamanho) — valor px empurrado
      pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de baixo, como
      já era). (t4) botão de reset discreto colado ao lado do valor, dentro do mesmo grupo à direita. */
-  #imgPanel .field-row, #coverPanel .field-row { display: flex; justify-content: space-between; align-items: baseline; }
-  #imgPanel .field-val, #coverPanel .field-val { display: inline-flex; align-items: center; gap: .3rem; }
-  #imgPanel .resetbtn, #coverPanel .resetbtn {
+  #imgPanel .field-row, #coverPanel .field-row, #blockStylePanel .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #imgPanel .field-val, #coverPanel .field-val, #blockStylePanel .field-val { display: inline-flex; align-items: center; gap: .3rem; }
+  #imgPanel .resetbtn, #coverPanel .resetbtn, #blockStylePanel .resetbtn {
     border: 0; background: transparent; padding: 0 .1rem; margin: 0;
     color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
   }
-  #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover { color: var(--ink); }
+  #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover { color: var(--ink); }
 
   /* bloco Callout (estilo Notion) — caixa arredondada com fundo tingido (cor ESCOLHIDA pelo
      usuário via swatch, b.color — DEFAULT_CALLOUT_COLOR se nunca escolheu) + ícone (emoji
@@ -583,13 +621,11 @@
   .ico-pop-grid button:hover { border-color: var(--hair-strong); color: var(--ink); }
   .ico-pop-grid button.on { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
 
-  /* trilha E: zoom migrou pra dentro do <nav> do header — herda o estilo genérico de
-     input/select/button (paradigma.css); header e aside usam o MESMO fundo escuro (--ground,
-     herdado do body, confirmado no CSS — não há tema claro na sidebar), então nada de cor
-     precisa mudar, só um separador sutil (mesmo desenho do #fmtbar .sep) pra destacar o zoom
-     dos botões de histórico/ação ao lado. */
-  header nav select#zoom { font-size: .82rem; }
-  header nav .hsep { width: 1px; align-self: stretch; margin: 0 .15rem; background: var(--hair-strong); }
+  /* trilha E: zoom migrou pro header (coluna do meio, sempre centralizado) — herda o estilo
+     genérico de input/select/button (paradigma.css); header e aside usam o MESMO fundo escuro
+     (--ground, herdado do body, confirmado no CSS — não há tema claro na sidebar), então nada
+     de cor precisa mudar. */
+  header select#zoom { font-size: .82rem; }
 
   /* trilha D: sem backend (GitHub Pages), o gate esconde "Gráfico" e "Linha do
      tempo" do menu de Adicionar Imagem (ver gateChartByBackend em
@@ -641,24 +677,33 @@
 </head>
 <body>
 <header>
-  <h1>Diagramação</h1>
-  <span class="crumb">Gerador de Relatórios · Paradigma — miolo</span>
+  <div class="hleft">
+    <h1>Diagramador</h1>
+    <span class="crumb">Gerador de Relatórios · Paradigma</span>
+  </div>
+  <!-- trilha E: zoom saiu do details "Cabeçalho & rodapé" (sidebar) e mora aqui agora; mesmo
+       id (#zoom) — o listener em diagramacao.js busca por id, não por posição. Fora da <nav>
+       (que fica na faixa da direita) pra poder ficar na coluna do MEIO do grid do header e não
+       se deslocar conforme o texto à esquerda ou os botões à direita mudam de tamanho. -->
+  <select id="zoom" title="Zoom da visualização">
+    <option value="fit" selected>Ajustar</option>
+    <option value="1">100%</option>
+    <option value="0.75">75%</option>
+    <option value="0.5">50%</option>
+  </select>
   <nav>
-    <!-- trilha E: zoom saiu do details "Cabeçalho & rodapé" (sidebar) e mora aqui agora;
-         mesmo id (#zoom) — o listener em diagramacao.js busca por id, não por posição -->
-    <select id="zoom" title="Zoom da visualização">
-      <option value="fit">Ajustar</option>
-      <option value="1" selected>100%</option>
-      <option value="0.75">75%</option>
-      <option value="0.5">50%</option>
-    </select>
-    <span class="hsep"></span>
     <button id="btnUndo" title="Desfazer (⌘Z)" disabled>↩︎</button>
     <button id="btnRedo" title="Refazer (⌘⇧Z)" disabled>↪︎</button>
-    <button id="btnMd" title="Salvar uma cópia editável (.pdgm.zip)">Salvar</button>
-    <button id="btnPrint" class="primary" title="Gerar e baixar o PDF (igual à visualização)">Baixar PDF</button>
+    <button id="btnPrint" class="primary" title="Baixar o relatório (PDF ou o projeto editável em .zip)">Baixar</button>
   </nav>
 </header>
+<!-- menu do botão "Baixar": PDF (gerado igual à visualização) ou ZIP (projeto editável,
+     reabre pelo "Abrir .zip") — mesmo padrão de popover flutuante (position:fixed, JS
+     posiciona) do #addImgMenu/#imgPanel/#coverPanel. -->
+<div id="downloadMenu" hidden>
+  <button type="button" data-dl="pdf"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5V4.5H12.5"/></svg><span>PDF</span></button>
+  <button type="button" data-dl="zip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5V4.5H12.5"/><path d="M7 1.5v2M7 5v1.2M7 7.7v1.2M7 10.4v1.2"/></svg><span>ZIP (projeto editável)</span></button>
+</div>
 
 <main>
   <aside>
@@ -845,20 +890,20 @@
         <summary>Bloco</summary>
         <div class="body">
           <div class="blocktypes" id="blocktypes">
-            <button data-type="h1"><span class="ico" style="font-size:15px;font-weight:800">H</span><span class="lbl">H1</span><span class="sc">#</span></button>
-            <button data-type="h2"><span class="ico" style="font-size:13px;font-weight:800">H</span><span class="lbl">H2</span><span class="sc">##</span></button>
-            <button data-type="h3"><span class="ico" style="font-size:11px;font-weight:700">H</span><span class="lbl">H3</span><span class="sc">###</span></button>
-            <button data-type="h4"><span class="ico" style="font-size:10px;font-weight:700">H</span><span class="lbl">H4</span><span class="sc">####</span></button>
-            <button data-type="p"><span class="ico">¶</span><span class="lbl">Parágrafo</span></button>
-            <button data-type="li"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="2.5" cy="4" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r="1.1" fill="currentColor" stroke="none"/><path d="M6 4h8M6 8h8M6 12h8"/></svg></span><span class="lbl">Lista de Pontos</span><span class="sc">-</span></button>
-            <button data-type="ol"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><text x="0" y="6" font-size="6" fill="currentColor" stroke="none" font-weight="700">1</text><text x="0" y="13" font-size="6" fill="currentColor" stroke="none" font-weight="700">2</text><path d="M6 4.5h8M6 11h8"/></svg></span><span class="lbl">Lista Numérica</span><span class="sc">1.</span></button>
-            <button data-type="check"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="5" height="5" rx="1.2"/><path d="M3.2 5l1 1 1.6-2"/><path d="M9.5 5h4.5"/><rect x="2" y="9.5" width="5" height="5" rx="1.2"/><path d="M9.5 12h4.5"/></svg></span><span class="lbl">Checklist</span><span class="sc">[]</span></button>
+            <div class="blockrow"><button data-type="h1"><span class="ico" style="font-size:15px;font-weight:800">H</span><span class="lbl">H1</span><span class="sc">#</span></button><button type="button" class="blockmenu" data-styletype="h1" title="Editar estilo do H1">⋮</button></div>
+            <div class="blockrow"><button data-type="h2"><span class="ico" style="font-size:13px;font-weight:800">H</span><span class="lbl">H2</span><span class="sc">##</span></button><button type="button" class="blockmenu" data-styletype="h2" title="Editar estilo do H2">⋮</button></div>
+            <div class="blockrow"><button data-type="h3"><span class="ico" style="font-size:11px;font-weight:700">H</span><span class="lbl">H3</span><span class="sc">###</span></button><button type="button" class="blockmenu" data-styletype="h3" title="Editar estilo do H3">⋮</button></div>
+            <div class="blockrow"><button data-type="h4"><span class="ico" style="font-size:10px;font-weight:700">H</span><span class="lbl">H4</span><span class="sc">####</span></button><button type="button" class="blockmenu" data-styletype="h4" title="Editar estilo do H4">⋮</button></div>
+            <div class="blockrow"><button data-type="p"><span class="ico">¶</span><span class="lbl">Parágrafo</span></button><button type="button" class="blockmenu" data-styletype="p" title="Editar estilo do Parágrafo">⋮</button></div>
+            <div class="blockrow"><button data-type="li"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="2.5" cy="4" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r="1.1" fill="currentColor" stroke="none"/><path d="M6 4h8M6 8h8M6 12h8"/></svg></span><span class="lbl">Lista de Pontos</span><span class="sc">-</span></button><button type="button" class="blockmenu" data-styletype="li" title="Editar estilo da Lista de Pontos">⋮</button></div>
+            <div class="blockrow"><button data-type="ol"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><text x="0" y="6" font-size="6" fill="currentColor" stroke="none" font-weight="700">1</text><text x="0" y="13" font-size="6" fill="currentColor" stroke="none" font-weight="700">2</text><path d="M6 4.5h8M6 11h8"/></svg></span><span class="lbl">Lista Numérica</span><span class="sc">1.</span></button><button type="button" class="blockmenu" data-styletype="ol" title="Editar estilo da Lista Numérica">⋮</button></div>
+            <div class="blockrow"><button data-type="check"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="5" height="5" rx="1.2"/><path d="M3.2 5l1 1 1.6-2"/><path d="M9.5 5h4.5"/><rect x="2" y="9.5" width="5" height="5" rx="1.2"/><path d="M9.5 12h4.5"/></svg></span><span class="lbl">Checklist</span><span class="sc">[]</span></button><button type="button" class="blockmenu" data-styletype="check" title="Editar estilo do Checklist">⋮</button></div>
             <!-- trilha G: "Citação" tinha sumido da paleta numa edição anterior (regressão) — o tipo 'quote'
                  sempre existiu (funciona, está no #fmtbar) — só o botão daqui tinha ido embora. -->
-            <button data-type="quote"><span class="ico">❝</span><span class="lbl">Citação</span><span class="sc">&gt;</span></button>
+            <div class="blockrow"><button data-type="quote"><span class="ico">❝</span><span class="lbl">Citação</span><span class="sc">&gt;</span></button><button type="button" class="blockmenu" data-styletype="quote" title="Editar estilo da Citação">⋮</button></div>
             <!-- trilha G: bloco Callout (novo, estilo Notion) — ícone reaproveita o emoji default (💡),
                  mesmo padrão de ícone-caractere do botão de Parágrafo (¶) acima. -->
-            <button data-type="callout"><span class="ico">💡</span><span class="lbl">Callout</span></button>
+            <div class="blockrow"><button data-type="callout"><span class="ico">💡</span><span class="lbl">Callout</span></button><button type="button" class="blockmenu" data-styletype="callout" title="Editar estilo do Callout">⋮</button></div>
             <button data-type="table"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2 6.5h12M2 10h12M6.5 3v10"/></svg></span><span class="lbl">Tabela</span></button>
             <button data-type="image"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M3 12l3.4-3.2 2.4 2.2 2.2-2 2 1.8"/></svg></span><span class="lbl">Imagem</span></button>
             <button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button>
