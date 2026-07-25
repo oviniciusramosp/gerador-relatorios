@@ -254,6 +254,51 @@ function measure(b) {
   return h;
 }
 
+// Base de CADA linha visual do bloco, relativa ao topo do box. Um Range sobre o conteúdo
+// devolve um rect por linha (e vários na MESMA linha quando há <b>/<a>/<span> inline), então
+// agrupamos por 'bottom' com 2px de tolerância — a diferença entre duas linhas de verdade é
+// o line-height (14px), longe da tolerância. É o que permite cortar um parágrafo ENTRE páginas
+// medindo onde o texto realmente quebrou, em vez de chutar por line-height (justificado, link
+// inline e <br> mudam a conta).
+function measureLines(b) {
+  const el = buildBlock(b, /*editing*/ false);
+  const col = placementOf(b) === 'full' ? mF : mL;
+  col.appendChild(el);
+  const box = el.getBoundingClientRect();
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  const lines = [];
+  for (const rc of r.getClientRects()) {
+    if (rc.height <= 0) continue;
+    const y = rc.bottom - box.top;
+    if (lines.length && y - lines[lines.length - 1] < 2) lines[lines.length - 1] = Math.max(lines[lines.length - 1], y);
+    else lines.push(y);
+  }
+  col.removeChild(el);
+  return lines;
+}
+
+// "Bloco continuado" (o frame encadeado do InDesign): quando o bloco não cabe no resto da
+// página, tenta cortá-lo numa quebra de linha em vez de empurrar tudo pra próxima. Devolve a
+// ALTURA da parte que fica (bottom da última linha que coube) ou null quando não vale partir.
+// Anti-viúva/órfã: no mínimo MIN_LINES de cada lado — parágrafo de 3 linhas nunca parte.
+// ponytail: só 'p'. li/ol/quote/check/callout têm marcador ou moldura por bloco e cortar no
+// meio exigiria decidir o que acontece com a borda/o bullet; entra quando alguém pedir.
+const MIN_LINES = 2;
+const splittable = (b) => b.type === 'p' && placementOf(b) === 'inline';
+// `from` = quanto do bloco já foi colocado em páginas anteriores (0 no 1º pedaço). Devolve o
+// bottom ABSOLUTO da última linha que cabe em `room`, ou null quando não vale partir aqui.
+function splitFit(b, lines, from, room) {
+  if (room <= 0) return null;
+  const i0 = lines.findIndex(y => y > from + 0.5);       // 1ª linha ainda não colocada
+  if (i0 < 0) return null;
+  const restantes = lines.length - i0;
+  if (restantes < MIN_LINES * 2) return null;            // não sobra 2+2 → o resto sobe inteiro
+  let k = 0;
+  for (let i = MIN_LINES; i <= restantes - MIN_LINES; i++) if (lines[i0 + i - 1] - from <= room) k = i;
+  return k ? lines[i0 + k - 1] : null;
+}
+
 // defaults do callout: mesma cor-base do app (--lilac #BAB1FF), em duas opacidades — fundo
 // bem sutil (10%), ícone mais presente (40%). rgba de verdade (não um hex pré-misturado como
 // antes) porque o swatch.js já entende rgba nativamente: abrir o picker num callout que nunca
@@ -538,6 +583,11 @@ function numberLists() {
 }
 
 // ─────────────────────────── paginação ──────────────────────────────────────
+// A coluna esquerda de uma página não é mais uma lista de blocos, e sim de FRAGMENTOS:
+// { b, gap, clipTop, clipH }. clipH null = bloco inteiro (o caso comum); com clipH, é uma
+// JANELA sobre o bloco — o mesmo b aparece em duas páginas, cortado numa quebra de linha.
+const frag = (b, gap, clipTop = 0, clipH = null) => ({ b, gap, clipTop, clipH });
+
 function paginate() {
   numberLists();
   const pages = [{ left: [], right: [] }];
@@ -553,25 +603,60 @@ function paginate() {
       // trilha E: no editor a quebra MANUAL vira uma barra arrastável no fim da página que
       // ela corta — só quando editing. No PDF (exportPagesHtml roda editing=false) a barra
       // some sozinha, mas a QUEBRA continua: empurramos a página nova nos dois modos.
-      if (editing) { b._gap = 8; pages[pages.length - 1].left.push(b); }
+      if (editing) { pages[pages.length - 1].left.push(frag(b, 8)); }
       pages.push({ left: [], right: [] }); used = 0; continue;
     }
-    const cur = pages[pages.length - 1];
     const h = measure(b);
-    const prev = cur.left.length ? cur.left[cur.left.length - 1] : null;
-    const gap = prev ? gapBefore(b, prev) : 0;
-    if (cur.left.length && used + gap + h > CONTENT_H) {
-      pages.push({ left: [b], right: [] });
-      used = h;
-      b._gap = 0;                       // vira o 1º bloco da nova página → sem gap acima
-    } else {
-      cur.left.push(b);
-      used += gap + h;
-      b._gap = gap;
+    // Um bloco pode render em VÁRIAS páginas: colocamos pedaço a pedaço até acabar. Um parágrafo
+    // maior que a página inteira (que antes vazava por cima do rodapé) sai partido em 3, 4, N.
+    let lines = null, posto = 0, primeiro = true;
+    while (true) {
+      const cur = pages[pages.length - 1];
+      const prev = cur.left.length ? cur.left[cur.left.length - 1].b : null;
+      const gap = primeiro && prev ? gapBefore(b, prev) : 0;
+      const room = CONTENT_H - used - gap, resto = h - posto;
+      const marca = () => { if (primeiro) { b._page = pages.length - 1; b._top = used + gap; } };   // a âncora do cadeado lê o topo do 1º pedaço
+      if (resto <= room) {                       // o que sobrou cabe → fecha o bloco aqui
+        marca();
+        cur.left.push(frag(b, gap, posto, posto ? resto : null));
+        used += gap + resto;
+        break;
+      }
+      if (lines === null) lines = splittable(b) ? measureLines(b) : [];
+      const at = splitFit(b, lines, posto, room);
+      if (at != null) {                          // parte: um pedaço aqui, o resto na próxima
+        marca();
+        cur.left.push(frag(b, gap, posto, at - posto));
+        posto = at; primeiro = false;
+        pages.push({ left: [], right: [] }); used = 0;
+        continue;
+      }
+      if (cur.left.length) {                     // não parte, mas a página já tem conteúdo → tudo pra próxima
+        pages.push({ left: [], right: [] }); used = 0;
+        continue;
+      }
+      // ponytail: página vazia e o bloco não parte (tabela/imagem/lista gigante) → entra inteiro
+      // e transborda, exatamente como antes de existir bloco continuado.
+      marca();
+      cur.left.push(frag(b, 0, posto, posto ? resto : null));
+      used = resto;
+      break;
     }
   }
-  // imagens da coluna direita: ancoradas a uma página (clamp) + y livre
+  // imagens da coluna direita: ancoradas a uma página (clamp) + y livre — OU, se travadas
+  // (r.anchor), seguem o bloco do fluxo em vez do y/page manuais (trilha do cadeado).
   for (const r of rights) {
+    if (r.anchor) {
+      const alvo = blockOf(r.anchor.id);
+      // âncora só é válida se o bloco existe, continua no fluxo (não virou 'right'/pagebreak)
+      // e passou por esta paginação (tem _page/_top frescos); senão destrava sem barulho.
+      if (alvo && placementOf(alvo) !== 'right' && alvo.type !== 'pagebreak' && alvo._page != null && alvo._top != null) {
+        r.page = alvo._page;              // mantém page em sincronia p/ não teleportar ao destravar
+        r.y = alvo._top + r.anchor.dy;
+      } else {
+        delete r.anchor;
+      }
+    }
     const pi = Math.min(Math.max(r.page | 0, 0), pages.length - 1);
     pages[pi].right.push(r);
   }
@@ -632,22 +717,37 @@ function pageShell(number) {
   return page;
 }
 
+// Fragmento → DOM. Sem corte, é o bloco de sempre. Cortado, o bloco vai INTEIRO dentro de uma
+// janela (.frag, overflow:clip) deslocada por margin negativa: os dois pedaços carregam o mesmo
+// HTML, então o 'input' de qualquer um deles sincroniza b.html sem costura e o pedaço de baixo
+// não vira um bloco novo no modelo (undo, índice e markdown seguem vendo UM parágrafo).
+// clip e não hidden: 'hidden' é rolável e o Chrome rola o contenteditable atrás do caret, o que
+// desalinharia a janela sozinho.
+function buildFrag(f) {
+  const el = buildBlock(f.b, editing);
+  if (f.clipH == null) { el.style.marginTop = (f.gap || 0) + 'px'; return el; }
+  const w = document.createElement('div');
+  w.className = 'frag' + (f.clipTop ? ' frag-cont' : '');
+  w.dataset.id = f.b.id;              // alça ⠿ e drop line procuram '.col-left > [data-id]'
+  w.style.height = f.clipH + 'px';
+  w.style.marginTop = (f.gap || 0) + 'px';
+  el.style.marginTop = -f.clipTop + 'px';
+  w.appendChild(el);
+  return w;
+}
+
 function renderContentPage(pg, contentIdx, number, moreAfter) {
   const page = pageShell(number);
   page.dataset.page = contentIdx;                 // índice DENTRO do miolo (âncora de imagem da direita)
   const content = document.createElement('div'); content.className = 'content';
   const colL = document.createElement('div'); colL.className = 'col-left';
   const colR = document.createElement('div'); colR.className = 'col-right';
-  for (const b of pg.left) {
-    const el = buildBlock(b, editing);
-    el.style.marginTop = (b._gap || 0) + 'px';
-    colL.appendChild(el);
-  }
+  for (const f of pg.left) colL.appendChild(buildFrag(f));
   for (const r of pg.right) colR.appendChild(buildRight(r));
   content.append(colL, colR);
   // trilha E: no editor, marca o fim de página por TRANSBORDO (quebra AUTOMÁTICA, só informa).
   // Se a página já termina numa quebra MANUAL (barra arrastável), não duplica a marca.
-  const endsInBreak = pg.left.length && pg.left[pg.left.length - 1].type === 'pagebreak';
+  const endsInBreak = pg.left.length && pg.left[pg.left.length - 1].b.type === 'pagebreak';
   if (editing && moreAfter && !endsInBreak) {
     const mk = document.createElement('div'); mk.className = 'e-autobreak';
     mk.dataset.label = 'fim da página ' + String(number).padStart(2, '0');
@@ -661,7 +761,9 @@ function renderContentPage(pg, contentIdx, number, moreAfter) {
 function buildToc(content) {
   const rows = []; const c = [0, 0, 0];
   content.forEach((pg, ci) => {
-    for (const b of pg.left) {
+    for (const f of pg.left) {
+      if (f.clipTop) continue;          // continuação de bloco cortado: já contada na página de cima
+      const b = f.b;
       const lvl = b.type === 'h1' ? 1 : b.type === 'h2' ? 2 : b.type === 'h3' ? 3 : 0;
       if (!lvl) continue;
       // trilha C (t4): se o título já vem numerado ("1.2 - X"), usa o número lido
@@ -768,6 +870,22 @@ function buildCoverItem(kind, it) {
   return el;
 }
 
+// âncora (cadeado): escolhe, entre candidatos {._top}, o mais próximo do Y informado. Pura —
+// usada tanto ao travar (openImgPanel) quanto ao re-ancorar depois de arrastar (pointerup).
+function nearestByTop(candidates, y) {
+  let best = null, bestD = Infinity;
+  for (const c of candidates) {
+    const d = Math.abs(c._top - y);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return best;
+}
+// assert simples (roda 1x, custo zero): sem framework de teste, mas a lógica de escolha não fica sem checagem
+console.assert(nearestByTop([{ id: 'a', _top: 0 }, { id: 'b', _top: 100 }], 90)?.id === 'b', 'nearestByTop: escolha errada');
+// blocos do FLUXO (candidatos a âncora) que caíram na página `page` na última paginação
+const leftBlocksOnPage = (page) => state.doc.blocks.filter(x =>
+  x.type !== 'pagebreak' && placementOf(x) !== 'right' && x._page === page && x._top != null);
+
 // bloco da coluna direita (imagem, texto, tabela…): wrapper absoluto arrastável no eixo Y.
 // Só a imagem tem altura previsível ANTES de entrar no DOM (proporção nw/nh) → só ela ganha
 // o clamp exato; nos demais o clamp fino fica com o pointermove do arraste, que já usa
@@ -775,13 +893,18 @@ function buildCoverItem(kind, it) {
 // ignora alvos [contenteditable], então digitar funciona e o arraste vai pelo badge.
 function buildRight(b) {
   const wrap = document.createElement('div');
-  wrap.className = 'rimg' + (state.sel === b.id ? ' imgsel' : '');
+  wrap.className = 'rimg' + (state.sel === b.id ? ' imgsel' : '') + (b.anchor ? ' locked' : '');
   wrap.dataset.id = b.id;
+  // ponytail: aproximação — só conta quebras <br> explícitas na legenda/título (não o wrap
+  // automático da linha, que depende de largura real); o clamp FINO do arraste já usa
+  // wrap.offsetHeight de verdade (pointermove), então o erro aqui só afeta o clamp inicial.
+  const capLines = b.caption ? (b.caption.match(/<br\s*\/?>/gi) || []).length : 0;
+  const titleLines = b.title ? (b.title.match(/<br\s*\/?>/gi) || []).length : 0;
   const maxY = b.type === 'image'
-    ? CONTENT_H - imgHeight(b, COL_R) - (b.title != null ? 18 : 0) - (b.caption != null ? 22 : 0)
+    ? CONTENT_H - imgHeight(b, COL_R) - (b.title != null ? 18 + titleLines * PARA_LH : 0) - (b.caption != null ? 22 + capLines * PARA_LH : 0)
     : CONTENT_H;
   wrap.style.top = Math.min(Math.max(b.y | 0, 0), Math.max(0, maxY)) + 'px';
-  const badge = document.createElement('span'); badge.className = 'drag-badge'; badge.textContent = '↕ arraste';
+  const badge = document.createElement('span'); badge.className = 'drag-badge'; badge.textContent = b.anchor ? '🔒 travada' : '↕ arraste';
   wrap.appendChild(b.type === 'image' ? buildFigure(b, COL_R, editing) : buildBlock(b, editing));
   wrap.appendChild(badge);
   return wrap;
@@ -817,7 +940,19 @@ function captureCaret() {
 function findEditable(keep) {
   const sel = keep.role === 'block' ? `[data-id="${keep.id}"][contenteditable]`
     : `[data-role="${keep.role}"][data-id="${keep.id}"]`;
-  return pagesEl.querySelector(sel);
+  const els = pagesEl.querySelectorAll(sel);
+  if (els.length < 2) return els[0] || null;
+  // bloco cortado entre páginas: os dois fragmentos têm o MESMO conteúdo e o mesmo data-id,
+  // só a janela muda. Devolver o primeiro deixaria o cursor na parte clipada (invisível), então
+  // escolhemos o fragmento em que a posição do caret cai DENTRO da janela visível.
+  for (const el of els) {
+    const bnd = boundaryAt(el, keep.offset);
+    const r = document.createRange(); r.setStart(bnd.node, bnd.off); r.collapse(true);
+    const rc = r.getBoundingClientRect();
+    const box = (el.parentElement && el.parentElement.classList.contains('frag') ? el.parentElement : el).getBoundingClientRect();
+    if (rc.top >= box.top - 1 && rc.bottom <= box.bottom + 1) return el;
+  }
+  return els[0];
 }
 
 function restoreCaret(keep) {
@@ -860,8 +995,9 @@ pagesEl.addEventListener('keydown', (e) => {
   const role = host.dataset.role || 'block';
 
   if (role !== 'block') {
-    // título/legenda de imagem: Enter só confirma (sem criar bloco)
-    if (e.key === 'Enter') { e.preventDefault(); host.blur(); }
+    // título/legenda de imagem (e resumo do índice): Enter quebra linha dentro do campo, Escape confirma/sai
+    if (e.key === 'Enter') { e.preventDefault(); document.execCommand('insertLineBreak'); return; }
+    if (e.key === 'Escape') { e.preventDefault(); host.blur(); return; }
     return;
   }
 
@@ -1116,6 +1252,30 @@ pagesEl.addEventListener('paste', (e) => {
 // ─────────────────────────── imagens: arrastar (coluna direita) ─────────────
 let drag = null;
 const SNAP = 6;                              // px de tolerância pro snap
+
+// alvos de snap de um bloco: topo, cada linha de texto (via line-height) e a base —
+// permite alinhar o topo da imagem com a N-ésima linha de um parágrafo (como no InDesign).
+function snapTargets(colLeft) {
+  if (!colLeft) return [0];
+  const out = [0];
+  for (const c of colLeft.children) {
+    const top = c.offsetTop, h = c.offsetHeight;
+    // o line-height mora no elemento de TEXTO: checklist/callout o escondem num envelope, e
+    // um bloco continuado (.frag) o embrulha numa janela — sem desembrulhar, cai no fallback
+    // "bloco sem linhas" e o snap volta a ser só topo/base.
+    const alvo = c.classList.contains('frag') ? c.firstElementChild
+      : (c.querySelector('.ck-txt, .co-txt') || c);
+    const lh = parseFloat(getComputedStyle(alvo).lineHeight);
+    if (Number.isFinite(lh) && lh >= 4) {
+      for (let k = 0; k * lh < h; k++) out.push(top + k * lh);
+    } else {
+      out.push(top);                       // bloco sem linhas próprias (figura/divider/pbreak/tabela)
+    }
+    out.push(top + h);                     // base do bloco
+  }
+  return out;
+}
+
 pagesEl.addEventListener('pointerdown', (e) => {
   const wrap = e.target.closest && e.target.closest('.rimg');
   if (!wrap || e.target.closest('[contenteditable]')) return;
@@ -1123,8 +1283,7 @@ pagesEl.addEventListener('pointerdown', (e) => {
   const b = blockOf(wrap.dataset.id);
   const content = wrap.closest('.content');
   const colLeft = content && content.querySelector('.col-left');
-  // alvos de snap = topo de cada bloco da coluna esquerda (mesma página) + 0
-  const snaps = colLeft ? [0, ...[...colLeft.children].map(c => c.offsetTop)] : [0];
+  const snaps = snapTargets(colLeft);
   drag = { b, wrap, content, snaps, startY: e.clientY, startTop: parseFloat(wrap.style.top) || 0, z: currentZoom(), _y: null };
   wrap.classList.add('dragging'); wrap.setPointerCapture(e.pointerId);
   setImgSel(b.id);                           // seleção por classe — nada de render() aqui
@@ -1153,7 +1312,15 @@ pagesEl.addEventListener('pointerup', (e) => {
   wrap.style.pointerEvents = '';
   drag = null;
   if (under && under.closest && under.closest('.col-left')) { applyDrop(b.id, dropTargetAt(e.clientX, e.clientY)); return; }
-  if (d._y != null) b.y = Math.round(d._y);
+  if (d._y != null) {
+    b.y = Math.round(d._y);
+    // travada: o arraste não solta a âncora, RE-ancora no bloco mais próximo do novo Y (o
+    // snap pode ter grudado num bloco diferente do original) — mesma regra do botão cadeado.
+    if (b.anchor) {
+      const alvo = nearestByTop(leftBlocksOnPage(b.page | 0), b.y);
+      if (alvo) b.anchor = { id: alvo.id, dy: b.y - alvo._top };
+    }
+  }
   save(); scheduleCommit();
 });
 
@@ -1284,11 +1451,13 @@ function dropTargetAt(x, y) {
     const mid = r.top + r.height / 2, d = Math.abs(y - mid);
     if (d < bestD) { bestD = d; ref = bl; before = y < mid; }
   }
-  return ref ? { kind: 'left', refId: ref.dataset.id, before } : null;
+  // el vai junto do refId: um bloco continuado tem DOIS elementos com o mesmo data-id (um por
+  // página), e procurar por seletor depois desenharia a linha no pedaço errado.
+  return ref ? { kind: 'left', refId: ref.dataset.id, before, el: ref } : null;
 }
 function showDrop(t) {
   if (!t || t.kind !== 'left') { dropLine.hidden = true; return; }
-  const el = pagesEl.querySelector(`.col-left > [data-id="${t.refId}"]`);
+  const el = t.el || pagesEl.querySelector(`.col-left > [data-id="${t.refId}"]`);
   if (!el) { dropLine.hidden = true; return; }
   const r = el.getBoundingClientRect();
   dropLine.style.left = r.left + 'px'; dropLine.style.width = r.width + 'px';
@@ -1307,7 +1476,7 @@ function applyDrop(id, t) {
   const from = idxOf(id);
   // voltando pro fluxo: APAGA o placement em vez de cravar 'inline' — assim o bloco
   // recupera o default do tipo (H1–H3/tabela voltam pra largura total, o resto pra esquerda).
-  if (placementOf(b) === 'right') { delete b.placement; delete b.y; delete b.page; }
+  if (placementOf(b) === 'right') { delete b.placement; delete b.y; delete b.page; delete b.anchor; }
   const [moved] = state.doc.blocks.splice(from, 1);
   const ri = idxOf(t.refId);
   const at = ri < 0 ? state.doc.blocks.length : (t.before ? ri : ri + 1);
@@ -1326,6 +1495,10 @@ function currentZoom() {
 // (o botão vira "remover"). Texto do label fica só "Título"/"Legenda" (t1).
 const PLUS_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>';
 const MINUS_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 8h10"/></svg>';
+// cadeado fechado (travada) / aberto (solta) — botão que prende a imagem da direita a um
+// bloco da coluna esquerda (ver nearestByTop/leftBlocksOnPage acima de buildRight).
+const LOCK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>';
+const UNLOCK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5-1.2"/></svg>';
 let imgPanel;
 function openImgPanel() {
   const b = blockOf(state.sel);
@@ -1343,6 +1516,7 @@ function openImgPanel() {
       <button type="button" class="fieldbtn" data-a="caption">${b.caption != null ? MINUS_SVG : PLUS_SVG}<span>Legenda</span></button>
     </div>
     <div class="field">Posição<div data-slot="col"></div></div>
+    ${placementOf(b) === 'right' ? `<button type="button" class="fieldbtn" data-a="lock">${b.anchor ? UNLOCK_SVG : LOCK_SVG}<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span></button>` : ''}
     <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv">${radius}px</span><button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
       <input type="range" data-a="radius" min="0" max="24" step="1" value="${radius}">
     </label>
@@ -1352,7 +1526,9 @@ function openImgPanel() {
   // seletor de coluna (MESMO componente da capa): imagem usa 'inline'/'full'/'right'
   imgPanel.querySelector('[data-slot="col"]').append(
     columnField(placementOf(b), { left: 'inline', full: 'full', right: 'right' }, (v) => {
-      b.placement = v; if (v === 'right' && b.y == null) b.y = 0;
+      // sair da direita larga a âncora: o paginate só limpa anchor de quem AINDA é 'right',
+      // então sem isso a âncora velha ficaria dormindo e teleportaria a imagem ao voltar.
+      b.placement = v; if (v === 'right') { if (b.y == null) b.y = 0; } else delete b.anchor;
       render(); if (state.sel) openImgPanel();
     }));
   // reset (t4) não pode roubar foco/seleção no mousedown — mesmo padrão do resto do app (ex. fmtbar)
@@ -1375,6 +1551,14 @@ function openImgPanel() {
       if (a === 'autocrop') { state.autocrop = el.checked; return; }   // só o padrão da próxima imagem; sem re-render
       if (a === 'title') b.title = b.title != null ? null : '';
       else if (a === 'caption') b.caption = b.caption != null ? null : '';
+      else if (a === 'lock') {
+        if (b.anchor) delete b.anchor;                    // destrava: mantém o b.y atual, a imagem não pula
+        else {
+          const alvo = nearestByTop(leftBlocksOnPage(b.page | 0), b.y || 0);
+          if (alvo) b.anchor = { id: alvo.id, dy: (b.y || 0) - alvo._top };
+          // página sem bloco na esquerda → no-op silencioso (não trava)
+        }
+      }
       else if (a === 'del') { state.doc.blocks.splice(idxOf(b.id), 1); state.sel = null; closeImgPanel(); }
       render(); if (state.sel) openImgPanel();
     });
@@ -1969,7 +2153,7 @@ function setBlockPlacement(id, v) {
   const keep = captureCaret();
   b.placement = v;
   if (v === 'right') { if (b.y == null) b.y = 0; b.page = lastEditedPage(); }
-  else { delete b.y; delete b.page; }
+  else { delete b.y; delete b.page; delete b.anchor; }
   render(keep && keep.id === id ? keep : { id, role: 'block', offset: 0 });
   syncColUI();
 }

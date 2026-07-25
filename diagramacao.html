@@ -202,6 +202,14 @@
   }
   .page .divider.b { height: 1px; min-height: 1px; background: #D9D9D9; }
 
+  /* bloco continuado entre páginas: janela sobre o bloco inteiro (o texto sai por cima/baixo
+     com margin negativa). clip, não hidden — 'hidden' é rolável e o browser rolaria o
+     contenteditable atrás do caret, desalinhando a janela sozinho.
+     flow-root é obrigatório: 'overflow: clip' NÃO cria um BFC (só hidden/auto/scroll criam),
+     então sem ele a margem negativa do texto COLAPSA com a do wrapper e arrasta a janela
+     inteira pra cima em vez de deslocar o conteúdo dentro dela. */
+  .page .frag { overflow: clip; display: flow-root; }
+
   /* linha-guia do snap ao reposicionar imagem (alinha ao bloco da esquerda) */
   .page .snap-guide { position: absolute; left: 0; right: 0; height: 1px; background: #4E39FF; display: none; pointer-events: none; z-index: 5; }
 
@@ -230,11 +238,24 @@
     opacity: 0; transition: opacity .1s;
   }
   .page.editing .rimg:hover .drag-badge { opacity: 1; }
+  /* travada (cadeado): badge sempre visível, não só no hover — é estado, não dica de gesto */
+  .page.editing .rimg.locked .drag-badge { opacity: 1; color: #4E39FF; }
 
   /* estados de edição */
   .page.editing .b:hover { background: color-mix(in srgb, #4E39FF 5%, transparent); }
   /* linha vazia ocupa 1 linha (parágrafo em branco é conteúdo); placeholder só no foco */
   .page .b:empty:not(.divider), .page .figtitle:empty, .page figcaption:empty { min-height: 1lh; }
+  /* Enter no fim do título/legenda/resumo (diagramacao.js) usa execCommand('insertLineBreak'),
+     que deixa DOIS <br> no fim (truque do próprio navegador pra mostrar a linha nova durante a
+     digitação). Sem isso aqui, esse <br> extra sobra como linha em branco fantasma no render
+     final. `br:last-child` sozinho pega até um <br> ÚNICO no meio do texto (:last-child só
+     conta irmãos-ELEMENTO, ignora o texto que vem depois — um <br> solo é sempre "o único
+     elemento" e cai na regra por engano, comendo a quebra de linha real do usuário). Exigindo
+     también "precedido de outro <br>" (br + br:last-child), a regra só bate no 2º <br> do par
+     colado no fim — o <br> real do meio fica de fora. */
+  .page .figtitle br + br:last-child,
+  .page figcaption br + br:last-child,
+  .page .idx-resumo br + br:last-child { display: none; }
   .page.editing .b:empty:focus::before { content: attr(data-ph); color: #bbb; }
   .page.editing .figtitle:empty::before, .page.editing figcaption:empty::before { content: attr(data-ph); color: #bbb; }
   .page.editing .col-left { outline: 1px dashed color-mix(in srgb,#4E39FF 22%, transparent); outline-offset: 4px; }
