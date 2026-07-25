@@ -40,6 +40,10 @@
   .hint { font-size: .72rem; color: var(--muted); font-stretch: 90%; line-height: 1.45; margin: 0; }
   .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  /* 3 ações de "Texto" (Importar/Em Branco/Abrir) lado a lado, cada uma com a MESMA fatia da
+     largura — .row deixaria cada botão do tamanho do próprio texto (sobra vão à direita). */
+  .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+  .row3 button { padding-left: .3rem; padding-right: .3rem; font-size: .72rem; text-align: center; }
 
   /* segment control (Documento / Conteúdo) — .segment/.pane agora em paradigma.css */
 
@@ -53,6 +57,9 @@
   .sw[aria-checked="true"]::after { transform: translateX(14px); }
   .subctrl { display: grid; gap: .5rem; padding: 0 0 .2rem 0; }
   .subctrl[hidden] { display: none; }
+  /* Título H1–H4 como opção ANINHADA dentro de "Mostrar Índice" — só o grupo dos 4 switches,
+     não o resto do subctrl (Cores/Largura ficam no nível de fora, sem recuo). */
+  .titlelvls { display: grid; gap: .5rem; padding-left: 14px; margin-left: 2px; border-left: 1px solid var(--hair); }
 
   /* seletor de tipo de bloco — lista com ícone + label */
   .blocktypes { display: grid; gap: .25rem; }
@@ -345,8 +352,8 @@
   #dropline { position: fixed; z-index: 44; height: 2px; background: #4E39FF; border-radius: 2px; pointer-events: none; }
   #dropline[hidden] { display: none; }
   body.grabbing, body.grabbing * { cursor: grabbing !important; }
-  /* menu de escolha: Imagem | Gráfico */
-  #addImgMenu .am-choices { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  /* menu de escolha: Imagem | Gráfico | Linha do tempo */
+  #addImgMenu .am-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
   #addImgMenu .am-choices[hidden], #addImgMenu .am-image[hidden] { display: none; }
   #addImgMenu .am-choices button {
     display: grid; justify-items: center; gap: .35rem; padding: .8rem .4rem;
@@ -404,9 +411,16 @@
   .page.cover-page .cover-logo.lg-header { top: 40px; }
   .page.cover-page .cover-logo.lg-footer { bottom: 40px; }
   .page.cover-page .cover-logo svg { display: block; }
-  /* trilha D: picker do logo na sidebar (mesmo desenho dos botões de tipo/posição) */
-  .logopick { display: grid; grid-template-columns: repeat(4, 1fr); gap: .3rem; margin-top: .3rem; }
-  .logopick button { padding: .35rem .2rem; border: 1px solid var(--hair); border-radius: var(--r);
+  /* trilha D: picker do logo na sidebar (mesmo desenho dos botões de tipo/posição). 2 colunas
+     (não 4): a sidebar é estreita, e cada célula mais larga dá mais espaço pro DESENHO do logo
+     (Completo/Nome são bem mais largos que Ícone — 4 colunas espremia demais). */
+  .logopick { display: grid; grid-template-columns: repeat(2, 1fr); gap: .3rem; margin-top: .3rem; }
+  /* altura FIXA (não min-height): linhas de grid sem grid-template-rows se auto-dimensionam cada
+     uma pelo próprio conteúdo mais alto, então "Ícone" (1 linha) e "Nome" (ícone+legenda, 2 linhas)
+     acabavam em linhas de altura diferente mesmo com stretch. Fixando a altura em TODOS os botões,
+     as duas linhas ficam iguais incondicionalmente — não é coincidência de conteúdo. */
+  .logopick button { height: 76px; display: flex; align-items: center; justify-content: center;
+    padding: .3rem; border: 1px solid var(--hair); border-radius: var(--r);
     background: transparent; color: var(--muted); cursor: pointer; font-size: .72rem; font-stretch: 85%; }
   .logopick button:hover { border-color: var(--hair-strong); color: var(--ink); }
   .logopick button[aria-pressed="true"] { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
@@ -473,13 +487,28 @@
   .page .ck-txt:empty { min-height: 1lh; }
   .page.editing .ck-txt:empty:focus::before { content: attr(data-ph); color: #bbb; }
 
-  /* trilha H (t2): "Posição"/"Coluna" são <div class="field"> (columnField é um grupo de botões,
-     não faz sentido semântico de <label>) — o global label.field (paradigma.css) só casa com a TAG
-     label, então não pegava. Replica a MESMA declaração aqui, escopada aos dois popovers (não mexe
-     no seletor global, que a sidebar A e os gráficos também usam). */
-  #imgPanel .field, #coverPanel .field, #blockcol { display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); }
+  /* trilha H (t2): "Posição"/"Coluna"/"Logo da Paradigma" são <div class="field"> (agrupam um
+     controle composto — botões, grid — não um único input, então <label> teria semântica errada)
+     — o global label.field (paradigma.css) só casa com a TAG label, então não pegava. Replica a
+     MESMA declaração aqui: "aside .field" cobre TODOS os divs assim dentro da sidebar (inclusive
+     #blockcol) sem tocar no seletor global, que os popovers flutuantes e os gráficos também usam. */
+  #imgPanel .field, #coverPanel .field, aside .field { display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); }
   #blockcol { margin-top: .5rem; }
   #blockcol[hidden] { display: none; }
+  /* bug pré-existente: quando um seletor do AUTOR define display (grid/flex), ele vence o
+     [hidden] da UA mesmo com especificidade igual — sem esta linha, .grid2[data-logoopts] (Cor do
+     logo/Tamanho) e os campos de fundo (data-bgxform) ficavam SEMPRE visíveis, hidden=true e tudo.
+     Mesmo padrão do #blockcol[hidden] acima — só faltava replicar aqui. */
+  [data-logoopts][hidden], [data-bgxform][hidden], .bgcard[hidden] { display: none; }
+  /* "Logo da Paradigma" no mesmo peso visual de um rótulo de switcher (ex.: "Mostrar Capa") —
+     não o cinza/pequeno padrão de rótulo de campo. Só o TEXTO muda; o <div class="field"> ao
+     redor continua o de sempre (empilha o texto sobre o grupo, via aside .field acima). */
+  .fieldtitle { color: var(--ink); font-size: .82rem; }
+  /* segment control com ÍCONE em vez de texto (Largura do Resumo) — mesmos ícones/SVGs de
+     COL_ICON (diagramacao.js) usados na "Posição" da imagem; .segment (paradigma.css) já dá o
+     fundo em pílula + estado selecionado violeta, só falta centralizar o svg no lugar do texto. */
+  .segment.iconseg button { display: flex; align-items: center; justify-content: center; }
+  .segment.iconseg svg { width: 16px; height: 16px; display: block; }
   /* trilha H (t3): linha "rótulo + valor" do slider (Cantos raio / Tamanho) — valor px empurrado
      pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de baixo, como
      já era). (t4) botão de reset discreto colado ao lado do valor, dentro do mesmo grupo à direita. */
@@ -562,9 +591,9 @@
   header nav select#zoom { font-size: .82rem; }
   header nav .hsep { width: 1px; align-self: stretch; margin: 0 .15rem; background: var(--hair-strong); }
 
-  /* trilha D: sem backend (GitHub Pages), o gate esconde a opção "Gráfico" do
-     menu de Adicionar Imagem (ver gateChartByBackend em diagramacao.js) — sem
-     isso a grade de 2 colunas deixa um buraco vazio no lugar do botão escondido */
+  /* trilha D: sem backend (GitHub Pages), o gate esconde "Gráfico" e "Linha do
+     tempo" do menu de Adicionar Imagem (ver gateChartByBackend em
+     diagramacao.js) — sem isso a grade deixa buracos no lugar dos escondidos */
   #addImgMenu .am-choices:has(button[data-opt="chart"][hidden]) { grid-template-columns: 1fr; }
 
   /* trilha A (t2.9): "Sem fundo" vira botão-ícone de lixeira — só existe no DOM com
@@ -573,21 +602,41 @@
   [data-rmbg] { display: inline-flex; align-items: center; justify-content: center; padding: .42rem .55rem; }
   [data-rmbg] svg { width: 14px; height: 14px; display: block; }
   [data-rmbg][hidden] { display: none; }
+  /* card com prévia da imagem de fundo (capa/contracapa) — substitui o botão "Imagem de fundo"
+     assim que existe uma imagem selecionada; [data-rmbg] mora dentro, mesmo ícone/comportamento
+     de antes, só que colado à prévia em vez de solto ao lado do botão de arquivo. */
+  .bgcard { display: flex; align-items: center; gap: .55rem; padding: .35rem .4rem .35rem .35rem;
+    border: 1px solid var(--hair); border-radius: var(--r); background: color-mix(in srgb, var(--lilac) 4%, transparent); }
+  .bgcard img { width: 34px; height: 46px; object-fit: cover; border-radius: 4px; flex: none; background: #000; }
+  .bgcard [data-rmbg] { margin-left: auto; }
   /* trilha A (t3.1): ícone real do logo (via logoPickSvg) no lugar do texto Ícone/
      Completo/Nome — svg já traz fill="currentColor" nos paths, herda a cor do botão
      (--muted / --ink em aria-pressed) de graça; só precisa centralizar. */
   .logopick button svg { display: block; margin: 0 auto; }
-  /* trilha A (t2.10): tooltip do "Índice + Resumo" via title= nativo (sem componente
-     custom) — ícone de info empurrado pro fim da linha do <summary> (mesmo truque do
-     margin-left:auto de .blocktypes button .sc). Listener no JS faz preventDefault no
-     click do ícone pra não togglar o <details> junto. */
+  /* trilha A (t2.10): tooltip do "Índice + Resumo" — ícone de info empurrado pro fim da linha
+     do <summary> (mesmo truque do margin-left:auto de .blocktypes button .sc). Listener no JS
+     faz preventDefault no click do ícone pra não togglar o <details> junto.
+     (correção) o texto virou attr(data-tip) + bolha própria via ::after, NÃO title= nativo: um
+     <button> dentro de <summary> é aninhamento de conteúdo interativo que o Chrome trata de
+     forma inconsistente pro hover-tooltip nativo (às vezes nunca dispara). ::after é síncrono e
+     não depende do temporizador/heurística nenhuma do navegador. */
   summary.sum-info { display: flex; align-items: center; }
   .infoicon {
-    margin-left: auto; border: 0; background: none; padding: 0 0 0 .4rem;
+    position: relative; margin-left: auto; border: 0; background: none; padding: 0 0 0 .4rem;
     color: var(--muted); font-size: .85rem; text-transform: none; letter-spacing: normal;
     cursor: help; line-height: 1;
   }
   .infoicon:hover { background: none; color: var(--ink); }
+  .infoicon::after {
+    content: attr(data-tip); position: absolute; top: 100%; right: 0; margin-top: 6px;
+    width: 220px; padding: .5rem .6rem; border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 14%, var(--ground)); border: 1px solid var(--hair-strong);
+    color: var(--ink); font-size: .68rem; font-weight: 400; text-transform: none; letter-spacing: normal;
+    line-height: 1.4; text-align: left; white-space: normal;
+    opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 50;
+    box-shadow: 0 12px 30px -12px #000;
+  }
+  .infoicon:hover::after, .infoicon:focus-visible::after { opacity: 1; }
 </style>
 </head>
 <body>
@@ -623,38 +672,30 @@
         <summary>Texto</summary>
         <div class="body">
           <div id="srcRow" hidden></div>
-          <button id="btnFile">Importar arquivo (.md, .txt)</button>
+          <div class="row3">
+            <button id="btnFile">Importar Texto</button>
+            <button id="btnNew">Em Branco</button>
+            <button id="btnOpen" title="Abrir um projeto salvo (.pdgm.zip)">Abrir .zip</button>
+          </div>
           <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
           <input type="file" id="fileProject" accept=".pdgm.zip,.zip,.pdgm.json,.json,application/zip,application/json" hidden>
-          <div class="row">
-            <button id="btnNew">Novo Documento</button>
-            <button id="btnOpen" title="Abrir um projeto salvo (.pdgm.zip)">Abrir</button>
-          </div>
         </div>
       </details>
 
       <details open>
         <summary>Capa</summary>
         <div class="body">
-          <div class="swrow"><span>Capa</span><button class="sw" data-sw="cover" role="switch" aria-checked="true"></button></div>
+          <div class="swrow"><span>Mostrar Capa</span><button class="sw" data-sw="cover" role="switch" aria-checked="true"></button></div>
           <div class="subctrl" data-sub="cover">
-            <div class="row">
-              <button class="filebtn">Imagem de fundo<input type="file" data-bg="cover" accept="image/*"></button>
-              <button data-rmbg="cover" title="Remover imagem de fundo" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
-            </div>
-            <div class="grid2">
-              <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="cover" min="0" max="100" value="50"></label>
-              <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="cover" min="0" max="100" value="50"></label>
-            </div>
-            <div class="field">Logo da Paradigma
+            <div class="field"><span class="fieldtitle">Logo da Paradigma</span>
               <div class="logopick" data-logopick="cover">
-                <button type="button" data-logokind="none" aria-pressed="true"><span>Nenhum</span></button>
+                <button type="button" data-logokind="none" title="Nenhum"><svg viewBox="0 0 16 16" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="5.6"/><line x1="4" y1="12" x2="12" y2="4"/></svg></button>
                 <button type="button" data-logokind="icone" title="Ícone"><span>Ícone</span></button>
                 <button type="button" data-logokind="full" title="Completo"><span>Completo</span></button>
-                <button type="button" data-logokind="nome" title="Nome"><span>Nome</span></button>
+                <button type="button" data-logokind="nome" title="Nome" aria-pressed="true"><span>Nome</span></button>
               </div>
             </div>
-            <div class="grid2" data-logoopts="cover" hidden>
+            <div class="grid2">
               <label class="field">Posição
                 <select data-logopos="cover">
                   <option value="header">Cabeçalho (topo)</option>
@@ -668,6 +709,8 @@
                   <option value="right">Direita</option>
                 </select>
               </label>
+            </div>
+            <div class="grid2" data-logoopts="cover" hidden>
               <label class="field">Cor do logo
                 <button type="button" class="colorfield" data-logocolor="cover" title="Escolher cor do logo"></button>
               </label>
@@ -675,44 +718,53 @@
                 <input type="range" data-logosize="cover" min="40" max="260" value="100">
               </label>
             </div>
+            <div class="field"><span class="fieldtitle">Imagem de Fundo</span>
+              <button class="filebtn" data-bgbtn="cover">Selecionar<input type="file" data-bg="cover" accept="image/*"></button>
+            </div>
+            <div class="bgcard" data-bgcard="cover" hidden>
+              <img data-bgpreview="cover" alt="Prévia da imagem de fundo">
+              <button type="button" data-rmbg="cover" title="Remover imagem de fundo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
+            </div>
+            <div class="grid2" data-bgxform="cover" hidden>
+              <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="cover" min="0" max="100" value="50"></label>
+              <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="cover" min="0" max="100" value="50"></label>
+            </div>
+            <label class="field" data-bgxform="cover" hidden>Escala da imagem <span class="hint" data-bgscalev="cover"></span>
+              <input type="range" data-bgscale="cover" min="100" max="250" value="100">
+            </label>
             <div class="row"><button data-addtxt="cover">+ Texto</button></div>
-            <p class="hint" style="margin:0">Duas colunas. Clique num texto para tamanho, cor, coluna e alinhamento. Arraste pela alça <b>⠿</b> para reposicionar no eixo Y. Quantos blocos quiser.</p>
           </div>
         </div>
       </details>
 
       <details open>
-        <summary class="sum-info">Índice + Resumo<button type="button" class="infoicon" title="O índice é gerado automaticamente dos títulos do miolo — escolha abaixo quais níveis entram. O resumo é editável na própria página.">ⓘ</button></summary>
+        <summary class="sum-info">Índice + Resumo<button type="button" class="infoicon" data-tip="O índice é gerado automaticamente dos títulos do miolo — escolha abaixo quais níveis entram. O resumo é editável na própria página." aria-label="Sobre o índice e o resumo">ⓘ</button></summary>
         <div class="body">
-          <div class="swrow"><span>Índice</span><button class="sw" data-sw="index" role="switch" aria-checked="true"></button></div>
+          <div class="swrow"><span>Mostrar Índice</span><button class="sw" data-sw="index" role="switch" aria-checked="true"></button></div>
           <div class="subctrl" data-sub="index">
-            <div class="swrow"><span>Título H1</span><button class="sw" data-idxlvl="h1" role="switch" aria-checked="true"></button></div>
-            <div class="swrow"><span>Título H2</span><button class="sw" data-idxlvl="h2" role="switch" aria-checked="true"></button></div>
-            <div class="swrow"><span>Título H3</span><button class="sw" data-idxlvl="h3" role="switch" aria-checked="false"></button></div>
-            <div class="swrow"><span>Título H4</span><button class="sw" data-idxlvl="h4" role="switch" aria-checked="false"></button></div>
+            <div class="titlelvls">
+              <div class="swrow"><span>Título H1</span><button class="sw" data-idxlvl="h1" role="switch" aria-checked="true"></button></div>
+              <div class="swrow"><span>Título H2</span><button class="sw" data-idxlvl="h2" role="switch" aria-checked="true"></button></div>
+              <div class="swrow"><span>Título H3</span><button class="sw" data-idxlvl="h3" role="switch" aria-checked="false"></button></div>
+              <div class="swrow"><span>Título H4</span><button class="sw" data-idxlvl="h4" role="switch" aria-checked="false"></button></div>
+            </div>
             <div class="grid2">
               <label class="field">Cores
                 <select data-idxopt="color">
-                  <option value="padrao">Padrão</option>
+                  <option value="padrao" selected>Padrão</option>
                   <option value="cinza">Cinza</option>
                 </select>
               </label>
-              <label class="field">Largura
-                <select data-idxopt="width">
-                  <option value="curto">Curto</option>
-                  <option value="full">Largura total</option>
-                </select>
-              </label>
+              <div class="field">Largura
+                <div data-slot="idxwidth"></div>
+              </div>
             </div>
           </div>
-          <div class="swrow"><span>Resumo</span><button class="sw" data-sw="resumo" role="switch" aria-checked="true"></button></div>
+          <div class="swrow"><span>Mostrar Resumo</span><button class="sw" data-sw="resumo" role="switch" aria-checked="true"></button></div>
           <div class="subctrl" data-sub="resumo">
-            <label class="field">Largura do resumo
-              <select data-idxopt="resumoWidth">
-                <option value="full">Largura total</option>
-                <option value="left">Coluna esquerda</option>
-              </select>
-            </label>
+            <div class="field">Largura do resumo
+              <div data-slot="resumowidth"></div>
+            </div>
           </div>
         </div>
       </details>
@@ -720,25 +772,17 @@
       <details open>
         <summary>Contracapa</summary>
         <div class="body">
-          <div class="swrow"><span>Contracapa</span><button class="sw" data-sw="back" role="switch" aria-checked="true"></button></div>
+          <div class="swrow"><span>Mostrar Contracapa</span><button class="sw" data-sw="back" role="switch" aria-checked="true"></button></div>
           <div class="subctrl" data-sub="back">
-            <div class="row">
-              <button class="filebtn">Imagem de fundo<input type="file" data-bg="back" accept="image/*"></button>
-              <button data-rmbg="back" title="Remover imagem de fundo" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
-            </div>
-            <div class="grid2">
-              <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="back" min="0" max="100" value="50"></label>
-              <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="back" min="0" max="100" value="50"></label>
-            </div>
-            <div class="field">Logo da Paradigma
+            <div class="field"><span class="fieldtitle">Logo da Paradigma</span>
               <div class="logopick" data-logopick="back">
-                <button type="button" data-logokind="none" aria-pressed="true"><span>Nenhum</span></button>
+                <button type="button" data-logokind="none" title="Nenhum"><svg viewBox="0 0 16 16" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="5.6"/><line x1="4" y1="12" x2="12" y2="4"/></svg></button>
                 <button type="button" data-logokind="icone" title="Ícone"><span>Ícone</span></button>
                 <button type="button" data-logokind="full" title="Completo"><span>Completo</span></button>
-                <button type="button" data-logokind="nome" title="Nome"><span>Nome</span></button>
+                <button type="button" data-logokind="nome" title="Nome" aria-pressed="true"><span>Nome</span></button>
               </div>
             </div>
-            <div class="grid2" data-logoopts="back" hidden>
+            <div class="grid2">
               <label class="field">Posição
                 <select data-logopos="back">
                   <option value="header">Cabeçalho (topo)</option>
@@ -752,6 +796,8 @@
                   <option value="right">Direita</option>
                 </select>
               </label>
+            </div>
+            <div class="grid2" data-logoopts="back" hidden>
               <label class="field">Cor do logo
                 <button type="button" class="colorfield" data-logocolor="back" title="Escolher cor do logo"></button>
               </label>
@@ -759,6 +805,20 @@
                 <input type="range" data-logosize="back" min="40" max="260" value="100">
               </label>
             </div>
+            <div class="field"><span class="fieldtitle">Imagem de Fundo</span>
+              <button class="filebtn" data-bgbtn="back">Selecionar<input type="file" data-bg="back" accept="image/*"></button>
+            </div>
+            <div class="bgcard" data-bgcard="back" hidden>
+              <img data-bgpreview="back" alt="Prévia da imagem de fundo">
+              <button type="button" data-rmbg="back" title="Remover imagem de fundo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
+            </div>
+            <div class="grid2" data-bgxform="back" hidden>
+              <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="back" min="0" max="100" value="50"></label>
+              <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="back" min="0" max="100" value="50"></label>
+            </div>
+            <label class="field" data-bgxform="back" hidden>Escala da imagem <span class="hint" data-bgscalev="back"></span>
+              <input type="range" data-bgscale="back" min="100" max="250" value="100">
+            </label>
             <div class="row"><button data-addtxt="back">+ Texto</button></div>
           </div>
         </div>
@@ -827,6 +887,10 @@
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v14h14"/><rect x="5.5" y="10" width="2.6" height="4.5" fill="currentColor" stroke="none"/><rect x="9.5" y="7" width="2.6" height="7.5" fill="currentColor" stroke="none"/><rect x="13.5" y="4.5" width="2.6" height="10" fill="currentColor" stroke="none"/></svg>
       <span>Gráfico</span>
     </button>
+    <button data-opt="timeline">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 3v14"/><circle cx="4" cy="6" r="1.6" fill="currentColor" stroke="none"/><circle cx="4" cy="11" r="1.6" fill="currentColor" stroke="none"/><circle cx="4" cy="16" r="1.6" fill="currentColor" stroke="none"/><path d="M8 6h8M8 11h6M8 16h8"/></svg>
+      <span>Linha do tempo</span>
+    </button>
   </div>
   <div class="am-image" hidden>
     <button class="filebtn" id="btnImg">
@@ -847,7 +911,7 @@
 <div id="chartModal" hidden>
   <div class="cm-backdrop"></div>
   <div class="cm-panel">
-    <div class="cm-bar"><span>Extrair / montar gráfico</span><button id="cmClose" title="Fechar">✕</button></div>
+    <div class="cm-bar"><span id="cmTitle">Extrair / montar gráfico</span><button id="cmClose" title="Fechar">✕</button></div>
     <iframe id="cmFrame" title="Extrair gráfico"></iframe>
   </div>
 </div>

@@ -35,6 +35,13 @@ const COL_ICON = {
   full: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="4" width="10" height="8" fill="currentColor"/></svg>',
   right: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="8.5" y="4" width="4.5" height="8" fill="currentColor"/></svg>',
 };
+// ícones de alinhamento de TEXTO (barras tipo linha, não confundir com COL_ICON — aquele é
+// posição/largura de COLUNA). Usado no segment de Alinhamento do popover de Texto da capa.
+const ALIGN_ICON = {
+  left: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2" rx="1" fill="currentColor"/><rect x="2" y="7" width="7" height="2" rx="1" fill="currentColor"/><rect x="2" y="11" width="9" height="2" rx="1" fill="currentColor"/></svg>',
+  center: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2" rx="1" fill="currentColor"/><rect x="4.5" y="7" width="7" height="2" rx="1" fill="currentColor"/><rect x="3.5" y="11" width="9" height="2" rx="1" fill="currentColor"/></svg>',
+  right: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2" rx="1" fill="currentColor"/><rect x="7" y="7" width="7" height="2" rx="1" fill="currentColor"/><rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor"/></svg>',
+};
 // cur = valor atual; vals = { left, full, right } valores emitidos; onPick(v)
 function columnField(cur, vals, onPick) {
   const wrap = document.createElement('div'); wrap.className = 'placebtns';
@@ -49,6 +56,25 @@ function columnField(cur, vals, onPick) {
   opt(vals.left, 'Coluna Esquerda', COL_ICON.left);
   opt(vals.full, 'Largura Total', COL_ICON.full);
   opt(vals.right, 'Coluna Direita', COL_ICON.right);
+  return wrap;
+}
+// segment control (mesma pílula do Documento/Conteúdo) só com ÍCONE — não reaproveita
+// columnField: aquele é uma LISTA vertical de botões ícone+texto (ainda usado no "Coluna" do
+// bloco em foco, na aba Conteúdo); os popovers de Texto/Imagem da capa e o de Imagem do miolo
+// pediram o visual do segment horizontal, com os MESMOS ícones (COL_ICON/ALIGN_ICON conforme o
+// caso). `opts` = [{val,label,icon}, ...], na ordem em que os botões aparecem; 3 opções usa a
+// mesma grade de 3 colunas do segment Documento/Conteúdo (.cols-3, já existe em paradigma.css).
+function widthSeg(cur, opts, onPick) {
+  const wrap = document.createElement('div');
+  wrap.className = 'segment iconseg' + (opts.length >= 3 ? ' cols-3' : '');
+  wrap.setAttribute('role', 'tablist');
+  for (const { val, label, icon } of opts) {
+    const b = document.createElement('button'); b.type = 'button'; b.title = label;
+    b.innerHTML = icon;
+    b.setAttribute('aria-selected', String(cur === val));
+    b.onclick = () => onPick(val);
+    wrap.append(b);
+  }
   return wrap;
 }
 const COL_L = 258, GAP = 24, COL_R = 217;
@@ -110,19 +136,22 @@ const coverItem = (html, size, span, align, color = null, y = 0) => ({ id: uid()
 // arrastável: mora fora do fluxo de itens e do anti-sobreposição. Tingido via
 // currentColor (como nos gráficos), escalado por size. defaultLogo() serve o seed
 // E a migração de config antiga (LS salvo antes deste campo existir).
-const defaultLogo = () => ({ on: false, kind: 'icone', pos: 'header', align: 'left', color: '#FFFFFF', size: 1 });
+// "Nome" (wordmark) vem ligado por padrão — capa/contracapa nascem com o logo já
+// selecionado; "Nenhum" continua uma escolha manual, não o estado inicial.
+const defaultLogo = () => ({ on: true, kind: 'nome', pos: 'header', align: 'left', color: '#FFFFFF', size: 1 });
 
 function seedDoc() {
   return {
     blocks: [mkBlock('p', '')],
     footText: 'paradigma.education', headText: '', firstPage: 1, source: null,
     // páginas especiais — ligadas por padrão via switcher no painel Documento.
-    // bgX/bgY = posição do fundo (Fill) em %; itens posicionados por coluna (x) + y livre.
-    cover: { on: true, bg: null, bgX: 50, bgY: 50, logo: defaultLogo(), items: [
+    // bgX/bgY = posição do fundo (Fill) em %; bgScale = zoom (100 = sem zoom, "cover" puro);
+    // itens posicionados por coluna (x) + y livre.
+    cover: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, logo: defaultLogo(), items: [
       coverItem('Título do relatório', 40, 'full', 'left', null, 330),
       coverItem('Subtítulo · Paradigma Education', 15, 'full', 'left', null, 392),
     ] },
-    back: { on: true, bg: null, bgX: 50, bgY: 50, logo: defaultLogo(), items: [
+    back: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, logo: defaultLogo(), items: [
       coverItem('paradigma.education', 18, 'full', 'center', null, 360),
     ] },
     // t2.11: índice (lista de títulos) e resumo agora ligam/desligam independente —
@@ -843,6 +872,10 @@ function renderCoverPage(kind, cov) {
     const bg = document.createElement('div'); bg.className = 'cover-bg';
     bg.style.backgroundImage = `url("${cov.bg}")`;
     bg.style.backgroundPosition = `${cov.bgX ?? 50}% ${cov.bgY ?? 50}%`;   // reposicionável
+    // zoom além do "cover" mínimo: escala o próprio DIV (que já preenche a página inteira) em
+    // vez de recalcular um background-size em % — transform-origin default (centro) já dá o
+    // zoom certo, e o overflow:hidden do .cover-page (CSS) recorta a sobra de graça.
+    bg.style.transform = `scale(${(cov.bgScale ?? 100) / 100})`;
     page.appendChild(bg);
   }
   const area = document.createElement('div'); area.className = 'cover-area';
@@ -1415,6 +1448,20 @@ function coverXOverlap(a, b) {
   const A = coverColBox(a.span || 'full'), B = coverColBox(b.span || 'full');
   return A.left < B.left + B.width && B.left < A.left + A.width;
 }
+// mudou a ALTURA de um item da capa (ex.: arrastou o Tamanho da fonte) → empurra pra baixo (ou
+// puxa pra cima) os vizinhos da MESMA faixa X que vinham depois dele, pelo delta de altura —
+// senão o texto cresce por cima do próximo item. Mesmo critério de colisão (coverXOverlap) do
+// arraste; aqui não precisa resolver sobreposição, só deslocar quem já estava abaixo.
+function coverPushPull(cov, item, deltaH) {
+  if (!deltaH) return;
+  for (const other of cov.items) {
+    if (other === item || !coverXOverlap(other, item)) continue;
+    if ((other.y || 0) <= (item.y || 0)) continue;   // só quem vem DEPOIS (abaixo) desce/sobe junto
+    other.y = Math.max(0, (other.y || 0) + deltaH);
+    const node = pagesEl.querySelector(`.cover-item[data-cid="${other.id}"]`);
+    if (node) node.style.top = other.y + 'px';
+  }
+}
 // bloco que a alça ancora quando nada está sob o mouse: o que está EM FOCO
 function focusedHandleTarget() {
   if (state.sel) { const c = pagesEl.querySelector(`.cover-item[data-cid="${state.sel}"]`); if (c) return { el: c, kind: 'cover', id: state.sel }; }
@@ -1566,6 +1613,9 @@ const MINUS_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" st
 // bloco da coluna esquerda (ver nearestByTop/leftBlocksOnPage acima de buildRight).
 const LOCK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>';
 const UNLOCK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5-1.2"/></svg>';
+// mesmo desenho do ícone de lixeira já usado em "Remover imagem de fundo" (data-rmbg) — reaproveitado
+// aqui nos botões "Remover texto"/"Remover imagem" dos popovers.
+const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
 let imgPanel;
 function openImgPanel() {
   const b = blockOf(state.sel);
@@ -1582,7 +1632,8 @@ function openImgPanel() {
   // o botão fica desabilitado em vez de virar um clique que não faz nada.
   const travavel = !!b.anchor || leftBlocksOnPage(b.page | 0).length > 0;
   imgPanel.innerHTML = `
-    <div class="eyebrow" style="margin:0">Imagem</div>
+    <div class="eyebrow" style="margin:0">${b.chart ? (b.chart.kind === 'timeline' ? 'Linha do tempo' : 'Gráfico') : 'Imagem'}</div>
+    ${b.chart ? '<button type="button" class="fieldbtn" data-a="chart"><span>✎ Editar dados</span></button>' : ''}
     <div class="row" style="gap:.4rem">
       <button type="button" class="fieldbtn" data-a="title">${b.title != null ? MINUS_SVG : PLUS_SVG}<span>Título</span></button>
       <button type="button" class="fieldbtn" data-a="caption">${b.caption != null ? MINUS_SVG : PLUS_SVG}<span>Legenda</span></button>
@@ -1593,11 +1644,15 @@ function openImgPanel() {
       <input type="range" data-a="radius" min="0" max="24" step="1" value="${radius}">
     </label>
     <label class="checkrow"><input type="checkbox" data-a="autocrop" ${state.autocrop !== false ? 'checked' : ''}>Cortar margem branca <span style="color:var(--muted)">(próxima imagem)</span></label>
-    <button data-a="del" style="color:#CE5249">Remover imagem</button>`;
+    <button type="button" class="fieldbtn" data-a="del" style="color:#CE5249">${TRASH_SVG}<span>Remover imagem</span></button>`;
   imgPanel.hidden = false;
-  // seletor de coluna (MESMO componente da capa): imagem usa 'inline'/'full'/'right'
+  // seletor de coluna (MESMO segment de ícone do popover de Texto da capa): imagem usa 'inline'/'full'/'right'
   imgPanel.querySelector('[data-slot="col"]').append(
-    columnField(placementOf(b), { left: 'inline', full: 'full', right: 'right' }, (v) => {
+    widthSeg(placementOf(b), [
+      { val: 'inline', label: 'Coluna Esquerda', icon: COL_ICON.left },
+      { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+      { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
+    ], (v) => {
       // sair da direita larga a âncora: o paginate só limpa anchor de quem AINDA é 'right',
       // então sem isso a âncora velha ficaria dormindo e teleportaria a imagem ao voltar.
       b.placement = v; if (v === 'right') { if (b.y == null) b.y = 0; } else delete b.anchor;
@@ -1621,6 +1676,8 @@ function openImgPanel() {
         return;
       }
       if (a === 'autocrop') { state.autocrop = el.checked; return; }   // só o padrão da próxima imagem; sem re-render
+      // reabre o editor com o spec guardado; o import de volta troca a arte deste mesmo bloco
+      if (a === 'chart') { chartEditId = b.id; chartTargetPage = b.page | 0; closeImgPanel(); openChartModal(b.chart.kind, b.chart.spec); return; }
       if (a === 'title') b.title = b.title != null ? null : '';
       else if (a === 'caption') b.caption = b.caption != null ? null : '';
       else if (a === 'lock') {
@@ -1666,9 +1723,10 @@ function closeAddImgMenu() { if (addImgMenu) addImgMenu.hidden = true; }
 addImgMenu.querySelector('[data-opt="image"]').addEventListener('click', () => {
   amChoices.hidden = true; amImage.hidden = false;            // experiência atual (arquivo + posição)
 });
-addImgMenu.querySelector('[data-opt="chart"]').addEventListener('click', () => {
-  chartTargetPage = state.addPage; closeAddImgMenu(); openChartModal();
-});
+['chart', 'timeline'].forEach((kind) =>
+  addImgMenu.querySelector(`[data-opt="${kind}"]`).addEventListener('click', () => {
+    chartTargetPage = state.addPage; chartEditId = null; closeAddImgMenu(); openChartModal(kind);
+  }));
 document.addEventListener('mousedown', (e) => {                // fecha ao clicar fora
   if (addImgMenu.hidden) return;
   if (e.target.closest('#addImgMenu') || e.target.closest('.col-right')) return;
@@ -1676,14 +1734,31 @@ document.addEventListener('mousedown', (e) => {                // fecha ao clica
 }, true);
 
 // ─────────────────────────── modal do gráfico (iframe embed) ─────────────────
-let chartTargetPage = 0;
+// Dois editores no mesmo modal (gráfico e linha do tempo), um iframe só: trocar
+// o src recarrega o editor — por isso o kind atual fica guardado e o src só muda
+// quando o kind muda (abrir/fechar o mesmo tipo não recarrega nada).
+// chartEditId != null = estamos EDITANDO um bloco que já está no relatório: o
+// spec vai pro iframe pelo postMessage, e o import de volta substitui o bloco em
+// vez de criar outro.
+const EDITOR_URL = { chart: 'graficos.html?embed=1', timeline: 'timelines.html?embed=1' };
+let chartTargetPage = 0, chartEditId = null;
+let cmKind = null, cmReady = false, cmPending = null;
 const chartModal = document.getElementById('chartModal');
 const cmFrame = document.getElementById('cmFrame');
-function openChartModal() {
-  if (!cmFrame.getAttribute('src')) cmFrame.src = 'graficos.html?embed=1';   // carrega 1×
+function openChartModal(kind, spec = null) {
+  if (cmKind !== kind) { cmKind = kind; cmReady = false; cmFrame.src = EDITOR_URL[kind]; }
+  cmPending = spec;
+  if (cmReady) sendPendingSpec();     // iframe já de pé: manda agora (senão espera o -ready)
+  document.getElementById('cmTitle').textContent =
+    kind === 'timeline' ? 'Montar linha do tempo' : 'Extrair / montar gráfico';
   chartModal.hidden = false;
 }
-function closeChartModal() { chartModal.hidden = true; }
+function sendPendingSpec() {
+  if (!cmPending) return;
+  cmFrame.contentWindow.postMessage({ type: 'pdgm-chart-load', spec: cmPending }, location.origin);
+  cmPending = null;
+}
+function closeChartModal() { chartModal.hidden = true; chartEditId = null; }
 document.getElementById('cmClose').addEventListener('click', closeChartModal);
 chartModal.querySelector('.cm-backdrop').addEventListener('click', closeChartModal);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !chartModal.hidden) closeChartModal(); });
@@ -1698,23 +1773,46 @@ async function gateChartByBackend() {
   let ok = false;
   try { ok = (await fetch('/api/health', { signal: AbortSignal.timeout(1500) })).ok; }
   catch {}                                     // rede/servidor ausente ou timeout
-  if (!ok) addImgMenu.querySelector('[data-opt="chart"]').hidden = true;
+  if (!ok) ['chart', 'timeline'].forEach((k) => { addImgMenu.querySelector(`[data-opt="${k}"]`).hidden = true; });
 }
 gateChartByBackend();
 
-// recebe o SVG do gráfico (postMessage do iframe) → vira imagem na coluna direita
+// recebe o SVG do gráfico/linha do tempo (postMessage do iframe) → vira imagem
+// na coluna direita. O SPEC vem junto e fica guardado em b.chart: é ele que
+// permite reabrir o editor depois com tudo como estava (e é ele que vai pro
+// .pdgm.zip como charts/*.json — ver doc-format.js).
 addEventListener('message', (e) => {
   if (e.origin !== location.origin) return;
   const d = e.data;
+  if (d?.type === 'pdgm-chart-ready') { cmReady = true; sendPendingSpec(); return; }
   if (!d || d.type !== 'pdgm-chart-svg' || !d.svg) return;
-  const src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(d.svg);
-  const b = { id: uid(), type: 'image', src, placement: 'right', radius: 4,
-    nw: d.w || 640, nh: d.h || 400, y: 0, page: chartTargetPage };
-  const at = state.activeId ? idxOf(state.activeId) + 1 : state.doc.blocks.length;
-  state.doc.blocks.splice(at, 0, b);
-  state.sel = b.id;
-  closeChartModal();
-  render(); openImgPanel();
+  // O editor só canta "Importado." depois que ESTE handler confirma (pdgm-chart-ok).
+  // postMessage não falha quando ninguém escuta nem quando o outro lado quebra —
+  // sem o aperto de mão, uma aba velha do relatório engolia o gráfico calada.
+  try {
+    const src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(d.svg);
+    const chart = d.spec ? { kind: d.kind || 'chart', spec: d.spec } : null;
+    const editing = chartEditId && blockOf(chartEditId);
+    if (editing) {                                  // reedição: troca a arte no lugar, preserva posição/título/legenda
+      editing.src = src;
+      editing.nw = d.w || editing.nw; editing.nh = d.h || editing.nh;
+      if (chart) editing.chart = chart;
+      state.sel = editing.id;
+    } else {
+      const b = { id: uid(), type: 'image', src, placement: 'right', radius: 4,
+        nw: d.w || 640, nh: d.h || 400, y: 0, page: chartTargetPage };
+      if (chart) b.chart = chart;
+      const at = state.activeId ? idxOf(state.activeId) + 1 : state.doc.blocks.length;
+      state.doc.blocks.splice(at, 0, b);
+      state.sel = b.id;
+    }
+    closeChartModal();
+    e.source?.postMessage({ type: 'pdgm-chart-ok' }, e.origin);   // daqui pra frente já está no documento
+    render(); openImgPanel();
+  } catch (err) {
+    e.source?.postMessage({ type: 'pdgm-chart-fail', error: String(err.message || err) }, e.origin);
+    throw err;                                      // segue aparecendo no console pra virar bug rastreável
+  }
 });
 
 // ─────────────────────────── capa/contracapa + resumo: edição ────────────────
@@ -1747,19 +1845,28 @@ function openCoverPanel() {
       <input type="range" data-a="size" min="8" max="120" step="1" value="${it.size}"></label>
     <label class="field">Cor <button type="button" class="colorfield" data-cf style="background:${it.color || '#000000'}"></button></label>
     <div class="field">Coluna<div data-slot="col"></div></div>
-    <label class="field">Alinhamento
-      <select data-a="align">
-        <option value="left"${it.align === 'left' ? ' selected' : ''}>Esquerda</option>
-        <option value="center"${it.align === 'center' ? ' selected' : ''}>Centro</option>
-        <option value="right"${it.align === 'right' ? ' selected' : ''}>Direita</option>
-      </select></label>
-    <button data-a="del" style="color:#CE5249">Remover texto</button>`;
+    <div class="field">Alinhamento<div data-slot="align"></div></div>
+    <button type="button" class="fieldbtn" data-a="del" style="color:#CE5249">${TRASH_SVG}<span>Remover texto</span></button>`;
   coverPanel.hidden = false;
-  // seletor de coluna (mesmo componente do popover de Imagem)
+  // seletor de coluna (mesmo segment de ícone do popover de Imagem)
   coverPanel.querySelector('[data-slot="col"]').append(
-    columnField(it.span || 'full', { left: 'left', full: 'full', right: 'right' }, (v) => {
+    widthSeg(it.span || 'full', [
+      { val: 'left', label: 'Coluna Esquerda', icon: COL_ICON.left },
+      { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+      { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
+    ], (v) => {
       const cur = findCoverItem(state.sel); if (!cur) return;
       cur.item.span = v; render(); openCoverPanel();
+    }));
+  // alinhamento — mesmo componente/ícones da Coluna acima, só que ALIGN_ICON (texto, não coluna)
+  coverPanel.querySelector('[data-slot="align"]').append(
+    widthSeg(it.align || 'left', [
+      { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+      { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+      { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+    ], (v) => {
+      const cur = findCoverItem(state.sel); if (!cur) return;
+      cur.item.align = v; render(); openCoverPanel();
     }));
   // cor (mesmo swatch dos gráficos)
   const cf = coverPanel.querySelector('[data-cf]');
@@ -1788,8 +1895,6 @@ function openCoverPanel() {
         save(); scheduleCommit(); return;
       }
       if (a === 'del') { cur.list.splice(cur.idx, 1); state.sel = null; closeCoverPanel(); render(); return; }
-      if (a === 'align') cur.item.align = el.value;
-      render(); openCoverPanel();
     });
   });
 }
@@ -2319,10 +2424,31 @@ function syncSpecialUI() {
     sw.setAttribute('aria-checked', String(!!(state.doc.index.levels || {})[sw.dataset.idxlvl]));
   });
   document.querySelectorAll('select[data-idxopt]').forEach(s => { s.value = state.doc.index[s.dataset.idxopt]; });
+  // largura do índice e do resumo: segment de ícone, não <select> — rebuild é mais barato que
+  // um setter (mesmo idioma do #blockcol/columnField: o componente não guarda estado próprio).
+  const iwSlot = document.querySelector('[data-slot="idxwidth"]');
+  if (iwSlot) iwSlot.replaceChildren(widthSeg(state.doc.index.width, [
+    { val: 'curto', label: 'Curto', icon: COL_ICON.left },
+    { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+  ], (v) => { state.doc.index.width = v; syncSpecialUI(); render(); }));
+  const rwSlot = document.querySelector('[data-slot="resumowidth"]');
+  if (rwSlot) rwSlot.replaceChildren(widthSeg(state.doc.index.resumoWidth, [
+    { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+    { val: 'left', label: 'Coluna Esquerda', icon: COL_ICON.left },
+  ], (v) => { state.doc.index.resumoWidth = v; syncSpecialUI(); render(); }));
   document.querySelectorAll('[data-bgx]').forEach(s => { s.value = specialObj(s.dataset.bgx).bgX ?? 50; });
   document.querySelectorAll('[data-bgy]').forEach(s => { s.value = specialObj(s.dataset.bgy).bgY ?? 50; });
+  document.querySelectorAll('[data-bgscale]').forEach(s => { s.value = specialObj(s.dataset.bgscale).bgScale ?? 100; });
+  document.querySelectorAll('[data-bgscalev]').forEach(sp => { sp.textContent = ((specialObj(sp.dataset.bgscalev).bgScale ?? 100) / 100).toFixed(2) + '×'; });
   // t2.9: "Sem fundo" (lixeira) só aparece quando há imagem de fundo selecionada.
   document.querySelectorAll('[data-rmbg]').forEach(b => { b.hidden = specialObj(b.dataset.rmbg).bg == null; });
+  // botão "Imagem de fundo" e card de prévia são mutuamente exclusivos — o card (com a
+  // lixeira dentro) substitui o botão assim que existe uma imagem selecionada.
+  document.querySelectorAll('[data-bgbtn]').forEach(b => { b.hidden = specialObj(b.dataset.bgbtn).bg != null; });
+  document.querySelectorAll('[data-bgcard]').forEach(el => { el.hidden = specialObj(el.dataset.bgcard).bg == null; });
+  document.querySelectorAll('[data-bgpreview]').forEach(img => { const v = specialObj(img.dataset.bgpreview).bg; if (v) img.src = v; });
+  // fundo↔/fundo↕/escala só fazem sentido com uma imagem selecionada (mesmo gate do card)
+  document.querySelectorAll('[data-bgxform]').forEach(el => { el.hidden = specialObj(el.dataset.bgxform).bg == null; });
   syncSubCtrl();
   syncLogoUI();
 }
@@ -2356,6 +2482,12 @@ function applyCoverBgPos(kind) {
   const bg = pagesEl.querySelector(`.page[data-cover="${kind}"] .cover-bg`);
   if (bg) bg.style.backgroundPosition = `${cov.bgX ?? 50}% ${cov.bgY ?? 50}%`;
 }
+// idem, pro zoom (mesmo padrão do applyCoverBgPos — arrastar o slider não deve remontar a página)
+function applyCoverBgScale(kind) {
+  const cov = specialObj(kind);
+  const bg = pagesEl.querySelector(`.page[data-cover="${kind}"] .cover-bg`);
+  if (bg) bg.style.transform = `scale(${(cov.bgScale ?? 100) / 100})`;
+}
 document.querySelectorAll('.sw[data-sw]').forEach(sw => sw.addEventListener('click', () => {
   // t2.11: 'resumo' mora em state.doc.index.resumoOn (não tem specialObj/.on próprio) —
   // menor mudança correta é um caso especial aqui em vez de generalizar specialObj().
@@ -2388,13 +2520,22 @@ document.querySelectorAll('[data-rmbg]').forEach(btn => btn.addEventListener('cl
 document.querySelectorAll('[data-addtxt]').forEach(btn => btn.addEventListener('click', () => addCoverText(btn.dataset.addtxt)));
 document.querySelectorAll('[data-bgx]').forEach(s => s.addEventListener('input', (e) => { specialObj(s.dataset.bgx).bgX = +e.target.value; applyCoverBgPos(s.dataset.bgx); save(); scheduleCommit(); }));
 document.querySelectorAll('[data-bgy]').forEach(s => s.addEventListener('input', (e) => { specialObj(s.dataset.bgy).bgY = +e.target.value; applyCoverBgPos(s.dataset.bgy); save(); scheduleCommit(); }));
+document.querySelectorAll('[data-bgscale]').forEach(s => s.addEventListener('input', (e) => {
+  specialObj(s.dataset.bgscale).bgScale = +e.target.value; applyCoverBgScale(s.dataset.bgscale);
+  const sp = document.querySelector(`[data-bgscalev="${s.dataset.bgscale}"]`);
+  if (sp) sp.textContent = (+e.target.value / 100).toFixed(2) + '×';
+  save(); scheduleCommit();
+}));
 // t3.1: ícone real do logo (Ícone/Completo/Nome) no picker, no lugar do rótulo de texto —
-// estático (não depende de estado), então injeta uma vez só; "Nenhum" continua texto.
+// estático (não depende de estado), então injeta uma vez só; "Nenhum" já nasce com o próprio
+// ícone (traço cruzado) direto no HTML, sem entrada em LOGOS — não tem o que buscar aqui.
 // o <span> de texto é substituído pelo <svg aria-hidden> (via logoPickSvg); o title=
 // no HTML preserva o nome acessível do botão (senão ficaria mudo pra leitor de tela).
+// tamanho maior que o default (15×26): a grade agora é 2 colunas com botões de 76px de altura
+// (dobro do que eram) — "deixar o preview dos logos melhor" é aproveitar esse espaço.
 document.querySelectorAll('[data-logopick] button[data-logokind]').forEach(b => {
   const kind = b.dataset.logokind;
-  if (kind !== 'none') b.innerHTML = logoPickSvg(kind);
+  if (kind !== 'none') b.innerHTML = logoPickSvg(kind, 36, 90);
 });
 // ── logo da Paradigma na capa/contracapa (trilha D) — picker + posição/alinhamento/cor/tamanho ──
 document.querySelectorAll('[data-logopick]').forEach(pick => pick.addEventListener('click', (e) => {
