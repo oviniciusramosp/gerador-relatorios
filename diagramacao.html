@@ -21,7 +21,9 @@
   header h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
   header .crumb { color: var(--muted); font-size: .74rem; font-stretch: 85%;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  header #zoom { justify-self: center; }
+  header .zoomwrap { justify-self: center; position: relative; display: flex; align-items: center; }
+  header .zoomwrap .zoomico { position: absolute; left: 10px; width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
+  header .zoomwrap select#zoom { padding-left: 30px; }
   header nav { justify-self: end; display: flex; gap: .4rem; align-items: center; }
   header nav button:disabled { opacity: .38; cursor: default; }
   header nav button:disabled:hover { background: color-mix(in srgb, var(--lilac) 7%, transparent); }
@@ -70,39 +72,52 @@
 
   /* seletor de tipo de bloco — lista com ícone + label */
   .blocktypes { display: grid; gap: .25rem; }
-  .blocktypes button {
+  /* card base: botão bare (tabela/imagem/…) OU .blockrow (tipo de texto + ⋮ dentro do card) */
+  .blocktypes > button,
+  .blockrow {
     display: flex; align-items: center; gap: .55rem; text-align: left;
     padding: .38rem .45rem; border: 1px solid var(--hair); border-radius: var(--r);
     background: transparent; color: var(--muted); cursor: pointer; font-stretch: 85%; font-size: .78rem;
   }
-  .blocktypes button .ico {
+  .blocktypes > button .ico,
+  .blockrow button[data-type] .ico {
     flex: none; width: 22px; height: 22px; display: grid; place-items: center;
     border: 1px solid var(--hair); border-radius: 5px; color: var(--lilac);
     font-size: 12px; line-height: 1;
   }
-  .blocktypes button .ico svg { width: 15px; height: 15px; display: block; }
-  .blocktypes button .sc {
+  .blocktypes > button .ico svg,
+  .blockrow button[data-type] .ico svg { width: 15px; height: 15px; display: block; }
+  .blocktypes > button .sc,
+  .blockrow button[data-type] .sc {
     margin-left: auto; color: var(--muted); font-size: .66rem; opacity: .8;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap;
   }
-  .blocktypes button:hover { border-color: var(--hair-strong); color: var(--ink); }
-  .blocktypes button:hover .ico { color: var(--ink); }
-  .blocktypes button[aria-pressed="true"] {
+  .blocktypes > button:hover,
+  .blockrow:hover { border-color: var(--hair-strong); color: var(--ink); }
+  .blocktypes > button:hover .ico,
+  .blockrow:hover .ico { color: var(--ink); }
+  .blocktypes > button[aria-pressed="true"],
+  .blockrow:has(button[aria-pressed="true"]) {
     border-color: var(--violet); color: var(--ink);
     background: color-mix(in srgb, var(--violet) 16%, transparent);
   }
-  .blocktypes button[aria-pressed="true"] .ico { border-color: var(--violet); color: var(--ink); }
-  /* linha = botão de tipo (ocupa o espaço todo) + botão de 3 pontos (edita o ESTILO do tipo,
-     ver #blockStylePanel). Só nos tipos de TEXTO — tabela/imagem/divisor/quebra continuam
-     bare <button>, sem essa opção (cor/tamanho/etc não fazem sentido pra eles). */
-  .blockrow { display: flex; gap: .25rem; }
-  .blockrow button[data-type] { flex: 1; min-width: 0; }
-  .blockmenu {
-    flex: none; width: 26px; display: grid; place-items: center;
-    border: 1px solid var(--hair); border-radius: var(--r);
-    background: transparent; color: var(--muted); cursor: pointer; font-size: .9rem; line-height: 1;
+  .blocktypes > button[aria-pressed="true"] .ico,
+  .blockrow:has(button[aria-pressed="true"]) .ico { border-color: var(--violet); color: var(--ink); }
+  /* linha-card = tipo (flex) + ⋮ de estilo do tipo (#blockStylePanel). Só tipos de TEXTO —
+     tabela/imagem/divisor/quebra continuam bare <button>, sem ⋮. */
+  .blockrow { gap: .15rem; cursor: default; }
+  .blockrow button[data-type] {
+    flex: 1; min-width: 0;
+    display: flex; align-items: center; gap: .55rem; text-align: left;
+    padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit;
+    cursor: pointer; font: inherit; font-stretch: inherit; font-size: inherit;
   }
-  .blockmenu:hover { border-color: var(--hair-strong); color: var(--ink); background: color-mix(in srgb, var(--lilac) 10%, transparent); }
+  .blockmenu {
+    flex: none; width: 22px; height: 22px; display: grid; place-items: center;
+    padding: 0; border: 0; border-radius: 5px;
+    background: transparent; color: var(--muted); cursor: pointer; font-size: .85rem; line-height: 1;
+  }
+  .blockmenu:hover { color: var(--ink); background: color-mix(in srgb, var(--lilac) 14%, transparent); }
 
   .filebtn { position: relative; overflow: hidden; }
   .filebtn input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
@@ -685,12 +700,18 @@
        id (#zoom) — o listener em diagramacao.js busca por id, não por posição. Fora da <nav>
        (que fica na faixa da direita) pra poder ficar na coluna do MEIO do grid do header e não
        se deslocar conforme o texto à esquerda ou os botões à direita mudam de tamanho. -->
-  <select id="zoom" title="Zoom da visualização">
-    <option value="fit" selected>Ajustar</option>
-    <option value="1">100%</option>
-    <option value="0.75">75%</option>
-    <option value="0.5">50%</option>
-  </select>
+  <!-- ícone de lupa deixa claro que é zoom (não outro dropdown qualquer) — precisa de um
+       wrapper: não dá pra colocar SVG DENTRO de um <select> nativo, então o ícone é um irmão
+       posicionado por cima, com pointer-events:none (o clique atravessa pro select). -->
+  <div class="zoomwrap">
+    <svg class="zoomico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+    <select id="zoom" title="Zoom da visualização">
+      <option value="fit" selected>Ajustar</option>
+      <option value="1">100%</option>
+      <option value="0.75">75%</option>
+      <option value="0.5">50%</option>
+    </select>
+  </div>
   <nav>
     <button id="btnUndo" title="Desfazer (⌘Z)" disabled>↩︎</button>
     <button id="btnRedo" title="Refazer (⌘⇧Z)" disabled>↪︎</button>
@@ -901,9 +922,10 @@
             <!-- trilha G: "Citação" tinha sumido da paleta numa edição anterior (regressão) — o tipo 'quote'
                  sempre existiu (funciona, está no #fmtbar) — só o botão daqui tinha ido embora. -->
             <div class="blockrow"><button data-type="quote"><span class="ico">❝</span><span class="lbl">Citação</span><span class="sc">&gt;</span></button><button type="button" class="blockmenu" data-styletype="quote" title="Editar estilo da Citação">⋮</button></div>
-            <!-- trilha G: bloco Callout (novo, estilo Notion) — ícone reaproveita o emoji default (💡),
-                 mesmo padrão de ícone-caractere do botão de Parágrafo (¶) acima. -->
-            <div class="blockrow"><button data-type="callout"><span class="ico">💡</span><span class="lbl">Callout</span></button><button type="button" class="blockmenu" data-styletype="callout" title="Editar estilo do Callout">⋮</button></div>
+            <!-- trilha G: bloco Callout (novo, estilo Notion) — o ícone da PALETA aqui é um SVG,
+                 igual aos outros tipos (era 💡, o único emoji da lista); o ícone DENTRO do bloco
+                 já criado continua editável/emoji por padrão (picker próprio, ver buildText). -->
+            <div class="blockrow"><button data-type="callout"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5a4.5 4.5 0 0 0-2.5 8.25c.4.28.5.7.5 1.05v.7h4v-.7c0-.35.1-.77.5-1.05A4.5 4.5 0 0 0 8 1.5Z"/><path d="M6.5 14h3"/><path d="M7 12.5h2"/></svg></span><span class="lbl">Callout</span></button><button type="button" class="blockmenu" data-styletype="callout" title="Editar estilo do Callout">⋮</button></div>
             <button data-type="table"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2 6.5h12M2 10h12M6.5 3v10"/></svg></span><span class="lbl">Tabela</span></button>
             <button data-type="image"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M3 12l3.4-3.2 2.4 2.2 2.2-2 2 1.8"/></svg></span><span class="lbl">Imagem</span></button>
             <button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button>

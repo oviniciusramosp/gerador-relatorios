@@ -1128,14 +1128,19 @@ function enterAtCaret(host, b) {
   const c = captureCaret();
   const [before, after] = splitHtmlAt(host, c ? c.offset : (host.textContent.length));
 
-  // lista/citação/checklist vazia + Enter → vira parágrafo (sai da lista) — trilha B (t7) incluiu 'check'
-  if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote' || b.type === 'check') && !before.trim() && !after.trim()) {
+  // lista/citação/checklist vazia + Enter → vira parágrafo (sai da lista) — trilha B (t7) incluiu
+  // 'check'; 'callout' entrou depois — é uma caixa avulsa, não uma lista, então Enter num
+  // callout vazio deve sair dele (virar parágrafo), não deixar uma caixa vazia pra trás.
+  if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote' || b.type === 'check' || b.type === 'callout') && !before.trim() && !after.trim()) {
     b.type = 'p'; b.html = '';
     render({ id: b.id, role: 'block', offset: 0 });
     return;
   }
   b.html = before;
-  const newType = HEAD_TYPES.has(b.type) ? 'p' : b.type;   // título não continua; lista/citação sim
+  // título e callout não continuam (viram parágrafo); lista/citação continuam (é o ponto de
+  // ter uma lista). Callout é uma caixa de destaque avulsa — não faz sentido Enter empilhar
+  // caixas, então Enter de dentro dele sempre abre um parágrafo normal em seguida.
+  const newType = (HEAD_TYPES.has(b.type) || b.type === 'callout') ? 'p' : b.type;
   const nb = mkBlock(newType, after);
   state.doc.blocks.splice(idxOf(b.id) + 1, 0, nb);
   render({ id: nb.id, role: 'block', offset: 0 });
