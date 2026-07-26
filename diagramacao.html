@@ -288,6 +288,11 @@
     flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: .74rem; color: var(--muted);
   }
+  #srcRow .src-hint {
+    flex: none; font-size: .68rem; font-stretch: 85%; color: var(--muted);
+    padding: .15rem .4rem; border-radius: 999px;
+    background: color-mix(in srgb, var(--lilac) 12%, transparent);
+  }
   #srcRow button { padding: .3rem .55rem; font-size: .74rem; }
 
   /* ===================== palco / preview ===================== */
@@ -1315,7 +1320,7 @@
           <div id="srcRow" hidden></div>
           <div class="row3">
             <button type="button" id="btnNew">Em Branco</button>
-            <button type="button" id="btnOpen" title="Abrir um projeto salvo (.pdgm.zip ou .pdgm.json)">Abrir .zip</button>
+            <button type="button" id="btnOpen" title="Abrir e vincular um projeto (.pdgm.zip ou .pdgm.json). No Chrome, mantém o arquivo no disco com autosave.">Abrir .zip</button>
           </div>
           <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
           <!-- accept com extensões de 1 ponto (.zip/.json): cobre foo.pdgm.zip e

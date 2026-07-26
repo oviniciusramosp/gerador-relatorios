@@ -22,7 +22,8 @@ import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingív
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
-import { deserializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
+import { deserializeDoc, serializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
+import { projectFormatFromName, shouldReloadLinkedProject } from './project-link.js';
 import { registerIcons, findIcon, iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
 import { IONICONS_LIB, IONICONS_LIB_SOLID } from './ionicons-lib.js';  // outline + solid (charts / callout)
 import { openIconPop, paintIconBtn } from './icon-pop.js';
@@ -340,7 +341,13 @@ function load() {
     if (cfg.footText != null) state.doc.footText = cfg.footText;
     if (cfg.headText != null) state.doc.headText = cfg.headText;
     if (cfg.firstPage != null) state.doc.firstPage = +cfg.firstPage || 0;
-    if (cfg.source) state.doc.source = cfg.source;
+    if (cfg.source) {
+      state.doc.source = cfg.source;
+      // sessões antigas sem format: infere do nome (.zip → pdgm, senão md)
+      if (state.doc.source && !state.doc.source.format) {
+        state.doc.source.format = projectFormatFromName(state.doc.source.label) || 'md';
+      }
+    }
     if (cfg.cover) state.doc.cover = cfg.cover;
     if (cfg.back) state.doc.back = cfg.back;
     if (cfg.index) state.doc.index = cfg.index;
@@ -381,6 +388,8 @@ function save() { clearTimeout(saveT); saveT = setTimeout(() => {
       localStorage.setItem(LS_KEY, JSON.stringify(light));
     } catch {}
   }
+  // projeto .pdgm vinculado (File System Access): autosave no mesmo ficheiro do disco
+  scheduleProjectAutosave();
 }, 250); }
 
 // ─────────────────────────── histórico (undo/redo) ──────────────────────────
@@ -4003,7 +4012,54 @@ const idb = {
   async del(k) { try { const db = await this.open(); db.transaction('kv', 'readwrite').objectStore('kv').delete(k); } catch {} },
 };
 
-let fileHandle = null;   // FileSystemFileHandle da origem (quando o browser suporta)
+let fileHandle = null;   // FileSystemFileHandle da origem (md OU .pdgm — um de cada vez)
+// Vínculo live com .pdgm.zip/.json: mtime visto, dirty local, gravação em curso, poll.
+let linkedMtime = 0;
+let projectDirty = false;
+let projectWriting = false;
+let suppressProjectAutosave = false;
+let projectSaveT = null;
+let projectWatchT = null;
+const PROJECT_AUTOSAVE_MS = 900;
+const PROJECT_POLL_MS = 1000;
+
+function isProjectSource(s = state.doc?.source) {
+  return s && (s.format === 'pdgm' || s.format === 'pdgm-json');
+}
+function isMdSource(s = state.doc?.source) {
+  return s && s.kind === 'file' && !isProjectSource(s);
+}
+function clearFileLink() {
+  fileHandle = null;
+  linkedMtime = 0;
+  projectDirty = false;
+  idb.del('fh');
+  stopProjectWatch();
+}
+function stopProjectWatch() {
+  if (projectWatchT) { clearInterval(projectWatchT); projectWatchT = null; }
+  document.removeEventListener('visibilitychange', onProjectVisibility);
+}
+function startProjectWatch() {
+  stopProjectWatch();
+  if (!fileHandle || !isProjectSource()) return;
+  projectWatchT = setInterval(() => { pollLinkedProject(); }, PROJECT_POLL_MS);
+  document.addEventListener('visibilitychange', onProjectVisibility);
+}
+function onProjectVisibility() {
+  if (document.visibilityState === 'visible') pollLinkedProject();
+}
+function scheduleProjectAutosave() {
+  if (suppressProjectAutosave) return;
+  if (!fileHandle || !isProjectSource()) return;
+  projectDirty = true;
+  clearTimeout(projectSaveT);
+  projectSaveT = setTimeout(() => {
+    saveProjectToHandle({ quiet: true }).catch((e) => {
+      console.warn('[projeto] autosave', e);
+    });
+  }, PROJECT_AUTOSAVE_MS);
+}
 
 function setBlocks(blocks) {
   state.doc.blocks = blocks.length ? blocks : [mkBlock('p', '')];
@@ -4065,9 +4121,34 @@ function normalizeOpenedDoc(doc) {
 // tudo que veio no arquivo em vez de abrir em branco. Object.assign sobre um
 // seedDoc() novo cobre campo ausente no TOPO (arquivo de versão futura ou editado
 // à mão); nested (index.*) precisa de normalizeOpenedDoc — ver comentário lá.
-function applyDocFile(doc) {
-  fileHandle = null; idb.del('fh');   // .pdgm.json não é origem sincronizável (sem "Salvar no arquivo" de volta)
-  applyDoc(doc);
+//
+// opts.handle: FileSystemFileHandle do .pdgm.zip/.json — mantém vínculo live
+// (autosave + poll). Sem handle (input file Safari/Firefox) só carrega o doc.
+function applyDocFile(doc, opts = {}) {
+  const keep = opts.handle || null;
+  const label = opts.label || (keep && keep.name) || null;
+  const format = opts.format || (label && projectFormatFromName(label)) || 'pdgm';
+  suppressProjectAutosave = true;
+  if (!keep) clearFileLink();
+  try {
+    applyDoc(doc);
+    if (keep) {
+      fileHandle = keep;
+      idb.set('fh', keep);
+      state.doc.source = { kind: 'file', label: label || keep.name, format };
+      if (opts.mtime != null) linkedMtime = opts.mtime;
+      projectDirty = false;
+      startProjectWatch();
+    } else if (label) {
+      // aberto sem FSA: nome no chip / download, sem gravação in-place
+      state.doc.source = { kind: 'file', label, format };
+    }
+    renderSourceChip();
+  } finally {
+    // solta o freio depois do save() debounced (250ms) de applyDoc — senão o
+    // autosave regrava o zip no mesmo instante em que acabámos de ler o disco
+    setTimeout(() => { suppressProjectAutosave = false; }, 400);
+  }
 }
 // mesma troca de documento SEM mexer na origem vinculada — usada pela restauração de
 // sessão no boot, que não pode derrubar o fileHandle de um .md linkado.
@@ -4183,7 +4264,8 @@ function showToast(kind, title, detail, opts = {}) {
 }
 
 // texto bruto de um .pdgm.json → parse + valida envelope + aplica.
-function openDocFile(text, label, fileMeta) {
+// opts.handle / mtime / silent: mesmo contrato de openDocZipFile (vínculo live).
+function openDocFile(text, label, fileMeta, opts = {}) {
   let parsed;
   try { parsed = JSON.parse(text); }
   catch (e) {
@@ -4202,16 +4284,25 @@ function openDocFile(text, label, fileMeta) {
       { fileName: label, fileSize: fileMeta && fileMeta.size, code: 'DOC_ENVELOPE' });
     return false;
   }
-  applyDocFile(doc);
+  applyDocFile(doc, {
+    handle: opts.handle || null,
+    label,
+    format: 'pdgm-json',
+    mtime: opts.mtime,
+  });
   const n = (doc.blocks && doc.blocks.length) || 0;
-  showToast('ok', 'Projeto aberto',
-    (label ? label + ' · ' : '') + n + ' bloco' + (n === 1 ? '' : 's'));
+  if (!opts.silent) {
+    showToast('ok', opts.handle ? 'Projeto vinculado' : 'Projeto aberto',
+      (label ? label + ' · ' : '') + n + ' bloco' + (n === 1 ? '' : 's')
+      + (opts.handle ? ' · autosave no arquivo' : ''));
+  }
   return true;
 }
 
 // ArrayBuffer de um .pdgm.zip → loadDocZip com motivo específico se falhar.
 // `pending` = toast "Abrindo…" a substituir pelo resultado (sucesso ou erro).
-async function openDocZipFile(buf, label, fileMeta, pending) {
+// opts.handle: FileSystemFileHandle para vínculo live (autosave + poll).
+async function openDocZipFile(buf, label, fileMeta, pending, opts = {}) {
   const r = await loadDocZip(buf, label);
   if (pending) dismissToast(pending);
   if (!r.ok) {
@@ -4226,10 +4317,18 @@ async function openDocZipFile(buf, label, fileMeta, pending) {
   // thread, o usuário já viu que o arquivo foi lido (antes o toast vinha depois
   // do apply e o botão parecia morto).
   const n = (r.doc.blocks && r.doc.blocks.length) || 0;
-  showToast('ok', 'Projeto aberto',
-    (label ? label + ' · ' : '') + n + ' bloco' + (n === 1 ? '' : 's'));
+  if (!opts.silent) {
+    showToast('ok', opts.handle ? 'Projeto vinculado' : 'Projeto aberto',
+      (label ? label + ' · ' : '') + n + ' bloco' + (n === 1 ? '' : 's')
+      + (opts.handle ? ' · autosave no arquivo' : ''));
+  }
   try {
-    applyDocFile(r.doc);
+    applyDocFile(r.doc, {
+      handle: opts.handle || null,
+      label,
+      format: 'pdgm',
+      mtime: opts.mtime,
+    });
   } catch (e) {
     console.error('[abrir projeto] applyDocFile', e);
     showToast('err', 'Arquivo lido, mas falhou ao aplicar no editor',
@@ -4241,25 +4340,27 @@ async function openDocZipFile(buf, label, fileMeta, pending) {
 }
 
 // Lê File e decide zip vs json por extensão OU magic bytes (PK..).
-async function openProjectBlob(f) {
+// handle opcional (File System Access) → vínculo live no mesmo ficheiro.
+async function openProjectBlob(f, handle = null) {
   if (!f) {
     showToast('err', 'Nenhum arquivo selecionado',
       'O seletor fechou sem um arquivo. Tente de novo em Abrir .zip.');
     return;
   }
   const meta = { size: f.size, name: f.name };
+  const linkOpts = { handle, mtime: f.lastModified };
   // Feedback imediato: arrayBuffer/load/render podem demorar (iCloud, zip grande)
   // e sem isso o clique parece ter falhado em silêncio.
   const pending = showToast('ok', 'Abrindo projeto…', f.name || '');
   try {
     const buf = await f.arrayBuffer();
     if (isDocZip(f.name) || looksLikeZip(buf)) {
-      await openDocZipFile(buf, f.name, meta, pending);
+      await openDocZipFile(buf, f.name, meta, pending, linkOpts);
       return;
     }
     // extensão .json ou conteúdo texto — tenta JSON do projeto
     dismissToast(pending);
-    openDocFile(new TextDecoder().decode(buf), f.name, meta);
+    openDocFile(new TextDecoder().decode(buf), f.name, meta, linkOpts);
   } catch (e) {
     console.error('[abrir projeto]', e);
     dismissToast(pending);
@@ -4277,9 +4378,11 @@ async function pickFile() {
       { description: 'Texto', accept: { 'text/plain': ['.md', '.markdown', '.txt'] } },
     ] });
   } catch { return; }                        // usuário cancelou
+  stopProjectWatch();
   const f = await h.getFile();
   fileHandle = h;
-  state.doc.source = { kind: 'file', label: h.name };
+  linkedMtime = f.lastModified;
+  state.doc.source = { kind: 'file', label: h.name, format: 'md' };
   idb.set('fh', h);
   setBlocks(parseMarkdown(await f.text()));
 }
@@ -4287,19 +4390,46 @@ async function pickFile() {
 // "Abrir" (peer de "Novo Documento"): reabre um projeto salvo — .pdgm.zip (formato
 // atual, com mídia separada) ou .pdgm.json (formato antigo, ainda lido por compat).
 //
-// Usa SEMPRE o <input type=file> (#fileProject), não showOpenFilePicker:
-// applyDocFile descarta o FileSystemFileHandle (projeto não é re-gravável in-place),
-// então a FSA API não traz ganho — só caminhos de falha silenciosa (getFile/TypeError
-// engolidos sem toast; fallback input.click() após await perde user-gesture em
-// alguns hosts). accept=".zip,.json" cobre "foo.pdgm.zip" e "foo.pdgm (9).zip".
-function pickProjectFile() {
+// Preferência: showOpenFilePicker (Chrome/Edge) → FileSystemFileHandle com
+// readwrite, autosave e poll de lastModified (MCP/outro processo no mesmo zip).
+// Fallback: <input type=file> (Safari/Firefox) — abre sem vínculo live.
+async function pickProjectFile() {
+  if (window.showOpenFilePicker) {
+    let h;
+    try {
+      [h] = await showOpenFilePicker({
+        types: [{
+          description: 'Projeto Paradigma',
+          accept: {
+            'application/zip': ['.zip'],
+            'application/json': ['.json'],
+          },
+        }],
+        multiple: false,
+      });
+    } catch { return; }   // cancelou
+    try {
+      // pede escrita cedo: autosave precisa de readwrite
+      if (h.queryPermission && await h.queryPermission({ mode: 'readwrite' }) !== 'granted') {
+        if (h.requestPermission && await h.requestPermission({ mode: 'readwrite' }) !== 'granted') {
+          showToast('err', 'Sem permissão de escrita',
+            'O projeto abrirá só para leitura. Use Baixar → ZIP para exportar alterações.');
+        }
+      }
+      const f = await h.getFile();
+      await openProjectBlob(f, h);
+    } catch (e) {
+      console.error('[abrir projeto] FSA', e);
+      showToast('err', 'Não foi possível abrir o arquivo', (e && e.message) || String(e));
+    }
+    return;
+  }
   const input = document.getElementById('fileProject');
   if (!input) {
     showToast('err', 'Seletor de arquivo indisponível',
       'Recarregue a página e tente Abrir .zip de novo.');
     return;
   }
-  // limpa valor pra change disparar mesmo se o usuário reescolher o mesmo arquivo
   input.value = '';
   input.click();
 }
@@ -4310,6 +4440,10 @@ function pickProjectFile() {
 async function syncNow(fresh = false) {
   const s = state.doc.source;
   if (!s) return;
+  if (isProjectSource(s)) {
+    await pollLinkedProject({ force: true });
+    return;
+  }
   const dirty = state.doc.blocks.some(b => (b.html && b.html.trim()) || b.type === 'image');
   if (!fresh && dirty && !confirm('Sincronizar substitui o conteúdo atual pelo do documento de origem. Continuar?')) return;
   try {
@@ -4321,10 +4455,18 @@ async function syncNow(fresh = false) {
   } catch (e) { alert('Sincronização falhou: ' + (e.message || e)); }
 }
 
-// grava o documento atual (como markdown) de volta no arquivo de origem
+// grava o documento atual de volta no arquivo de origem (md OU .pdgm)
 async function saveToSource() {
   const s = state.doc.source;
   if (!s || s.kind !== 'file') return;
+  if (isProjectSource(s)) {
+    try {
+      await saveProjectToHandle({ quiet: false });
+    } catch (e) {
+      alert('Não foi possível salvar no arquivo: ' + (e.message || e));
+    }
+    return;
+  }
   if (!fileHandle) { downloadMd(); return; }        // sem File System Access API: baixa o .md
   try {
     if (await fileHandle.queryPermission({ mode: 'readwrite' }) !== 'granted'
@@ -4333,9 +4475,89 @@ async function saveToSource() {
     const w = await fileHandle.createWritable();
     await w.write(toMarkdown());
     await w.close();
+    const f = await fileHandle.getFile();
+    linkedMtime = f.lastModified;
     flashSaved();
   } catch (e) { alert('Não foi possível salvar no arquivo: ' + (e.message || e)); }
 }
+
+// Serializa state.doc no handle do .pdgm.zip/.json (autosave ou botão Salvar).
+async function saveProjectToHandle({ quiet = false } = {}) {
+  if (!isProjectSource()) return;
+  if (!fileHandle) {
+    if (!quiet) await saveDocFile();
+    return;
+  }
+  if (projectWriting) return;
+  projectWriting = true;
+  try {
+    if (await fileHandle.queryPermission({ mode: 'readwrite' }) !== 'granted'
+      && await fileHandle.requestPermission({ mode: 'readwrite' }) !== 'granted') {
+      throw new Error('permissão de escrita negada');
+    }
+    const fmt = state.doc.source.format;
+    let blob;
+    if (fmt === 'pdgm-json') {
+      blob = new Blob([JSON.stringify(serializeDoc(state.doc), null, 2)], { type: 'application/json' });
+    } else {
+      blob = await serializeDocZip(state.doc);
+    }
+    const w = await fileHandle.createWritable();
+    await w.write(blob);
+    await w.close();
+    const f = await fileHandle.getFile();
+    linkedMtime = f.lastModified;
+    projectDirty = false;
+    if (!quiet) flashSaved();
+  } finally {
+    projectWriting = false;
+  }
+}
+
+// Poll: se o ficheiro no disco mudou por fora (MCP, outro editor) e não há
+// edição local pendente, recarrega o doc e re-renderiza.
+async function pollLinkedProject({ force = false } = {}) {
+  if (!fileHandle || !isProjectSource()) return;
+  if (projectWriting) return;
+  try {
+    if (await fileHandle.queryPermission({ mode: 'readwrite' }) !== 'granted'
+      && await fileHandle.queryPermission() !== 'granted') {
+      // sem re-prompt no poll silencioso (só force / foco com gesture)
+      if (!force) return;
+      if (await fileHandle.requestPermission({ mode: 'readwrite' }) !== 'granted'
+        && await fileHandle.requestPermission() !== 'granted') return;
+    }
+    const f = await fileHandle.getFile();
+    if (!force && !shouldReloadLinkedProject({
+      localDirty: projectDirty,
+      writing: projectWriting,
+      diskMtime: f.lastModified,
+      seenMtime: linkedMtime,
+    })) return;
+    if (!force && f.lastModified <= linkedMtime) return;
+    if (projectDirty && !force) return; // local ainda não flushou — não pisa o caret
+    if (force && projectDirty) {
+      if (!confirm('Há alterações locais ainda não gravadas no arquivo. Recarregar do disco e descartá-las?')) return;
+      projectDirty = false;
+      clearTimeout(projectSaveT);
+    }
+    const buf = await f.arrayBuffer();
+    const label = state.doc.source?.label || f.name;
+    const meta = { size: f.size, name: label };
+    // silent: toast fica a cargo daqui (evita duplicar com openDoc*)
+    const linkOpts = { handle: fileHandle, mtime: f.lastModified, silent: true };
+    if (isDocZip(label) || looksLikeZip(buf)) {
+      await openDocZipFile(buf, label, meta, null, linkOpts);
+    } else {
+      openDocFile(new TextDecoder().decode(buf), label, meta, linkOpts);
+    }
+    showToast('ok', force ? 'Projeto recarregado' : 'Atualizado do arquivo', label);
+  } catch (e) {
+    console.warn('[projeto] poll', e);
+    if (force) alert('Sincronização falhou: ' + (e.message || e));
+  }
+}
+
 function flashSaved() {
   const b = srcRow.querySelector('#btnSave');
   if (!b) return;
@@ -4348,17 +4570,31 @@ function renderSourceChip() {
   const s = state.doc.source;
   if (!s) { srcRow.hidden = true; return; }
   srcRow.hidden = false;
-  // arquivo local → Salvar (grava as edições de volta); Google Docs é leitura → Sincronizar (reimporta)
-  const action = s.kind === 'gdoc'
-    ? `<button id="btnSync" class="primary" title="Reimportar o conteúdo do Google Docs">Sincronizar</button>`
-    : `<button id="btnSave" class="primary" title="Salvar as alterações no arquivo original">Salvar no arquivo</button>`;
-  srcRow.innerHTML = `<span class="src-label">${s.kind === 'gdoc' ? '🌐' : '📄'} ${escapeHtml(s.label || '')}</span>
+  const live = isProjectSource(s) && !!fileHandle;
+  const md = isMdSource(s);
+  let action = '';
+  if (s.kind === 'gdoc') {
+    action = `<button id="btnSync" class="primary" title="Reimportar o conteúdo do Google Docs">Sincronizar</button>`;
+  } else if (live) {
+    action = `<button id="btnSave" class="primary" title="Gravar agora no arquivo vinculado">Salvar</button>`
+      + `<button id="btnSync" title="Relê o arquivo do disco (útil se o MCP editou)">Recarregar</button>`;
+  } else if (md && fileHandle) {
+    action = `<button id="btnSave" class="primary" title="Salvar as alterações no arquivo original">Salvar no arquivo</button>`;
+  } else if (isProjectSource(s) && !fileHandle) {
+    action = `<span class="src-hint" title="Aberto sem permissão de escrita (Safari/Firefox ou seletor antigo). Use Baixar → ZIP.">só leitura</span>`;
+  }
+  const icon = live ? '🔗' : (s.kind === 'gdoc' ? '🌐' : '📄');
+  const hint = live ? ' · vinculado' : '';
+  srcRow.innerHTML = `<span class="src-label">${icon} ${escapeHtml(s.label || '')}${hint}</span>
     ${action}
     <button id="btnUnlink" title="Desvincular origem">✕</button>`;
-  const sync = srcRow.querySelector('#btnSync'); if (sync) sync.addEventListener('click', () => syncNow());
+  const sync = srcRow.querySelector('#btnSync'); if (sync) sync.addEventListener('click', () => syncNow(true));
   const savebtn = srcRow.querySelector('#btnSave'); if (savebtn) savebtn.addEventListener('click', saveToSource);
   srcRow.querySelector('#btnUnlink').addEventListener('click', () => {
-    state.doc.source = null; fileHandle = null; idb.del('fh'); save(); renderSourceChip();
+    state.doc.source = null;
+    clearFileLink();
+    save();
+    renderSourceChip();
   });
 }
 
@@ -4718,7 +4954,11 @@ function insertBlockAfter(t) {
 document.getElementById('file').addEventListener('change', (e) => {
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
-  r.onload = () => { fileHandle = null; state.doc.source = { kind: 'file', label: f.name }; setBlocks(parseMarkdown(r.result)); };
+  r.onload = () => {
+    clearFileLink();
+    state.doc.source = { kind: 'file', label: f.name, format: 'md' };
+    setBlocks(parseMarkdown(r.result));
+  };
   r.readAsText(f); e.target.value = '';
 });
 document.getElementById('btnOpen').addEventListener('click', (e) => {
@@ -4757,7 +4997,9 @@ document.getElementById('imgfile').addEventListener('change', (e) => {
 });
 document.getElementById('btnNew').addEventListener('click', () => {
   if (!confirm('Limpar o documento atual e desvincular a origem?')) return;
-  state.doc = seedDoc(); fileHandle = null; idb.del('fh'); idb.del('doc');
+  state.doc = seedDoc();
+  clearFileLink();
+  idb.del('doc');
   document.getElementById('footText').value = state.doc.footText;
   document.getElementById('headText').value = state.doc.headText || '';
   document.getElementById('firstPage').value = state.doc.firstPage;
@@ -5801,7 +6043,30 @@ state.activeId = state.doc.blocks[0]?.id;
 document.getElementById('footText').value = state.doc.footText;
 document.getElementById('headText').value = state.doc.headText || '';
 document.getElementById('firstPage').value = state.doc.firstPage;
-idb.get('fh').then(h => { if (h) fileHandle = h; });
+// handle restaurado do IDB + source do LS: reativa poll se for .pdgm vinculado
+idb.get('fh').then(async (h) => {
+  if (!h) return;
+  fileHandle = h;
+  const s = state.doc.source;
+  if (s && s.kind === 'file' && !s.format) {
+    s.format = projectFormatFromName(s.label) || 'md';
+  }
+  if (!isProjectSource(s)) return;
+  try {
+    if (await h.queryPermission({ mode: 'readwrite' }) !== 'granted'
+      && await h.queryPermission() !== 'granted') {
+      // permissão caiu no reload — chip mostra vinculado mas poll só após gesture
+      renderSourceChip();
+      return;
+    }
+    const f = await h.getFile();
+    linkedMtime = f.lastModified;
+    startProjectWatch();
+    renderSourceChip();
+  } catch (e) {
+    console.warn('[projeto] restaurar handle', e);
+  }
+});
 renderSourceChip();
 syncSpecialUI();
 setSegment('documento');
@@ -5818,5 +6083,13 @@ const pristine = () => state.doc.blocks.length === 1
   && !(state.doc.blocks[0].html || '').trim() && !hist.past.length;
 idb.get('doc').then(doc => {
   if (!doc || !Array.isArray(doc.blocks) || !doc.blocks.length || !pristine()) return;
-  applyDoc(doc);
+  // não usa applyDocFile: preserva fileHandle restaurado do IDB (origem vinculada)
+  suppressProjectAutosave = true;
+  try { applyDoc(doc); }
+  finally { setTimeout(() => { suppressProjectAutosave = false; }, 400); }
+  if (state.doc.source && !state.doc.source.format) {
+    state.doc.source.format = projectFormatFromName(state.doc.source.label) || 'md';
+  }
+  if (fileHandle && isProjectSource(state.doc.source)) startProjectWatch();
+  renderSourceChip();
 });
