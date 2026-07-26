@@ -355,8 +355,8 @@ $('btnSvg').addEventListener('click', async () => {
 // entra no relatório como imagem, e o spec vai junto pra poder reabrir e editar.
 if (new URLSearchParams(location.search).has('embed')) {
   const b = document.createElement('button');
-  b.id = 'btnImport'; b.className = 'primary'; b.textContent = 'Importar para o relatório →';
-  document.querySelector('header nav').prepend(b);
+  b.id = 'btnImport'; b.className = 'primary'; b.textContent = 'Importar para o Relatório';
+  document.querySelector('header nav').append(b);   // extrema direita do header
   b.addEventListener('click', async () => {
     flash('Gerando SVG…');
     try {
@@ -364,7 +364,7 @@ if (new URLSearchParams(location.search).has('embed')) {
       const { w, h } = layoutSize(spec);
       parent.postMessage({ type: 'pdgm-chart-svg', kind: 'timeline', svg, spec, title: spec.title, w, h }, location.origin);
       await importConfirmado();
-      flash('Importado.');
+      // modal fecha no parent; o banner de confirmação também (pdgm-chart-ok)
     } catch (e) { flash('Falhou: ' + e.message, true); }
   });
   addEventListener('message', (e) => {

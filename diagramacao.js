@@ -941,7 +941,37 @@ function updateTableBar() {
   }
 }
 
-function imgHeight(b, colW) { return b.nw ? colW * (b.nh / b.nw) : colW * 0.6; }
+// escala da imagem no popover: 10–100 (default 100 = ocupa a largura máxima da coluna).
+// Nunca > 100 — só permite reduzir, nunca esticar além da coluna.
+function imgScalePct(b) {
+  const s = b.scale == null ? 100 : +b.scale;
+  return Math.min(100, Math.max(10, Number.isFinite(s) ? s : 100));
+}
+function imgScaleOf(b) { return imgScalePct(b) / 100; }
+// alinhamento horizontal da imagem DENTRO da coluna quando scale < 100% (left|center).
+function imgAlignOf(b) { return b.imgAlign === 'center' ? 'center' : 'left'; }
+
+function imgHeight(b, colW) {
+  const w = colW * imgScaleOf(b);
+  return b.nw ? w * (b.nh / b.nw) : w * 0.6;
+}
+
+// aplica width/height/alinhamento no <img> da figura (build + update ao vivo no slider).
+function applyImgScaleStyles(img, b, colW) {
+  const scale = imgScaleOf(b);
+  const w = colW * scale;
+  img.style.width = w + 'px';
+  img.style.maxWidth = '100%';
+  img.style.height = imgHeight(b, colW) + 'px';
+  if (scale < 1) {
+    const center = imgAlignOf(b) === 'center';
+    img.style.marginLeft = center ? 'auto' : '0';
+    img.style.marginRight = center ? 'auto' : '0';
+  } else {
+    img.style.marginLeft = '';
+    img.style.marginRight = '';
+  }
+}
 
 function buildFigure(b, colW, editing) {
   const fig = document.createElement('figure');
@@ -960,7 +990,7 @@ function buildFigure(b, colW, editing) {
   }
   const img = document.createElement('img');
   img.src = b.src; img.draggable = false;
-  img.style.height = imgHeight(b, colW) + 'px';
+  applyImgScaleStyles(img, b, colW);
   img.style.borderRadius = (b.radius ?? 4) + 'px';
   fig.appendChild(img);
 
@@ -2670,6 +2700,14 @@ const uiIco = (key, size = 12, style = 'outline') =>
   iconSvg(key, { x: 0, y: 0, w: size, h: size }, 'currentColor', 1.8, style, true)
     .replace(/ x="0" y="0"/, '');
 
+// undo/redo: ion-icon name="arrow-undo" / "arrow-redo" (solid) — iguais no criador de gráficos
+{
+  const u = document.getElementById('btnUndo');
+  const r = document.getElementById('btnRedo');
+  if (u) u.innerHTML = uiIco('arrow-undo', 16, 'solid');
+  if (r) r.innerHTML = uiIco('arrow-redo', 16, 'solid');
+}
+
 initPreviewToc();   // botão list-outline do índice flutuante (precisa de uiIco)
 
 const bhandle = document.createElement('div');
@@ -3077,6 +3115,8 @@ const UNLOCK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" s
 const TRASH_ICO = uiIco('trash', 16, 'outline');
 // ion-icon name="repeat-outline" — botão "Substituir" (troca a arte, mantém título/legenda)
 const REPLACE_ICO = uiIco('repeat', 16, 'outline');
+// ion-icon name="create-outline" — editar dados do gráfico/timeline (mesmo do criador)
+const CREATE_ICO = uiIco('create', 16, 'outline');
 let imgPanel;
 function openImgPanel() {
   const b = blockOf(state.sel);
@@ -3090,6 +3130,9 @@ function openImgPanel() {
   const radius = b.radius ?? 4;
   // slider fica no range “fino” (0–24); valor > 24 vem digitar no número ao lado de px
   const RADIUS_SLIDER_MAX = 24;
+  const scalePct = imgScalePct(b);
+  // largura da coluna onde a imagem está (mesma regra de buildFigure/buildRight)
+  const figColW = placementOf(b) === 'full' ? COL_FULL : placementOf(b) === 'right' ? COL_R : COL_L;
   // travar exige um bloco do FLUXO que comece nesta página. Uma página que só mostra a
   // continuação de um parágrafo (bloco cortado) não tem âncora possível: o _top do bloco vive
   // na página onde ele começou, e ancorar ali jogaria a imagem de volta pra lá. Sem candidato,
@@ -3097,16 +3140,20 @@ function openImgPanel() {
   const travavel = !!b.anchor || leftBlocksOnPage(b.page | 0).length > 0;
   imgPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">${b.chart ? (b.chart.kind === 'timeline' ? 'Linha do tempo' : 'Gráfico') : 'Imagem'}</div>
-    ${b.chart ? '<button type="button" class="fieldbtn" data-a="chart"><span>✎ Editar dados</span></button>' : ''}
-    <div class="row" style="gap:.4rem">
+    <div class="row img-tc-row">
       <button type="button" class="fieldbtn" data-a="title">${b.title != null ? MINUS_SVG : PLUS_SVG}<span>Título</span></button>
       <button type="button" class="fieldbtn" data-a="caption">${b.caption != null ? MINUS_SVG : PLUS_SVG}<span>Legenda</span></button>
     </div>
     <div class="field">Posição<div data-slot="col"></div></div>
     ${placementOf(b) === 'right' ? `<button type="button" class="fieldbtn" data-a="lock"${travavel ? '' : ' disabled title="Esta página não tem bloco de texto próprio para prender a imagem (só a continuação de um parágrafo que começa numa página anterior)."'}>${b.anchor ? UNLOCK_SVG : LOCK_SVG}<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span></button>` : ''}
+    <label class="field"><span class="field-row">Escala <span class="field-val"><span data-role="scalev">${scalePct}%</span><button type="button" class="resetbtn" data-a="scalereset" title="Redefinir para 100% (ocupa a coluna)">↺</button></span></span>
+      <input type="range" data-a="scale" min="10" max="100" step="1" value="${scalePct}" data-snaps="10,25,50,75,100">
+    </label>
+    <div class="field" data-role="imgalign-field">Alinhamento<div data-slot="imgalign"></div></div>
     <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
       <input type="range" data-a="radius" min="0" max="${RADIUS_SLIDER_MAX}" step="1" value="${Math.min(radius, RADIUS_SLIDER_MAX)}" data-snaps="0,4,8,12,16,24">
     </label>
+    ${b.chart ? `<button type="button" class="fieldbtn" data-a="chart">${CREATE_ICO}<span>Editar dados</span></button>` : ''}
     <button type="button" class="fieldbtn" data-a="replace">${REPLACE_ICO}<span>Substituir</span></button>
     <button type="button" class="fieldbtn danger" data-a="del">${TRASH_ICO}<span>Remover</span></button>`;
   imgPanel.hidden = false;
@@ -3122,10 +3169,31 @@ function openImgPanel() {
       b.placement = v; if (v === 'right') { if (b.y == null) b.y = 0; } else delete b.anchor;
       render(); if (state.sel) openImgPanel();
     }));
+  // alinhamento só faz sentido com scale < 100% (imagem menor que a coluna)
+  const alignField = imgPanel.querySelector('[data-role="imgalign-field"]');
+  // estado inicial (instantâneo no 1º paint do nó; anima nas trocas do slider via paintScale)
+  setSidebarReveal(alignField, scalePct < 100);
+  const alignSlot = imgPanel.querySelector('[data-slot="imgalign"]');
+  const mountAlignSeg = () => {
+    if (!alignSlot) return;
+    alignSlot.replaceChildren(widthSeg(imgAlignOf(b), [
+      { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+      { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+    ], (v) => {
+      b.imgAlign = v === 'center' ? 'center' : 'left';
+      if (b.imgAlign === 'left') delete b.imgAlign; // default = esquerda; não polui o JSON
+      const img = pagesEl.querySelector(`figure[data-id="${b.id}"] img`);
+      if (img) applyImgScaleStyles(img, b, figColW);
+      save(); scheduleCommit();
+      mountAlignSeg(); // re-marca o segment sem rebuild do painel (preserva a transição do reveal)
+    }));
+  };
+  mountAlignSeg();
   // reset (t4) não pode roubar foco/seleção no mousedown — mesmo padrão do resto do app (ex. fmtbar)
-  imgPanel.querySelector('[data-a="radiusreset"]').addEventListener('mousedown', (e) => e.preventDefault());
+  imgPanel.querySelectorAll('.resetbtn').forEach(btn => btn.addEventListener('mousedown', (e) => e.preventDefault()));
   // valor em px: editável no lugar (sem <input> extra). Teto = metade da página (círculo perfeito).
   const radv = imgPanel.querySelector('[data-role="radv"]');
+  const scalev = imgPanel.querySelector('[data-role="scalev"]');
   const parseRadius = (raw) => {
     const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
     if (!Number.isFinite(n)) return null;
@@ -3138,6 +3206,27 @@ function openImgPanel() {
     if (syncText && document.activeElement !== radv) radv.textContent = String(n);
     const range = imgPanel.querySelector('input[data-a="radius"]');
     if (range) range.value = Math.min(n, RADIUS_SLIDER_MAX);
+    save(); scheduleCommit();
+  };
+  // escala ao vivo (sem re-render no arraste — igual radius); reflow da página no `change`.
+  const paintScale = (pct) => {
+    const n = Math.min(100, Math.max(10, Math.round(+pct) || 100));
+    b.scale = n;
+    if (n >= 100) delete b.scale; // default = ocupa a coluna; não polui o JSON
+    const img = pagesEl.querySelector(`figure[data-id="${b.id}"] img`);
+    if (img) applyImgScaleStyles(img, b, figColW);
+    // coluna direita: se a imagem cresceu de volta, re-clampa y pra não vazar da página
+    if (placementOf(b) === 'right') {
+      const wrap = pagesEl.querySelector(`.rimg[data-id="${b.id}"]`);
+      if (wrap) {
+        const maxY = Math.max(0, CONTENT_H - wrap.offsetHeight);
+        if ((b.y | 0) > maxY) { b.y = maxY; wrap.style.top = maxY + 'px'; }
+      }
+    }
+    if (scalev) scalev.textContent = n + '%';
+    const range = imgPanel.querySelector('input[data-a="scale"]');
+    if (range && document.activeElement !== range) range.value = String(n);
+    // reveal do alinhamento só no soltar do thumb (`change`) / reset — não durante o arraste
     save(); scheduleCommit();
   };
   // label envolve o range: sem preventDefault o clique no número roubaria o foco pro slider
@@ -3179,6 +3268,15 @@ function openImgPanel() {
         paintRadius(a === 'radiusreset' ? 4 : +el.value);   // 4 = mesmo default de `b.radius ?? 4` (t4)
         return;
       }
+      if (a === 'scale' || a === 'scalereset') {
+        paintScale(a === 'scalereset' ? 100 : +el.value);
+        // reset não dispara `change` do range — reveal + re-pagina se a altura no fluxo mudou
+        if (a === 'scalereset') {
+          setSidebarReveal(alignField, false);
+          if (placementOf(b) !== 'right') { render(); if (state.sel) openImgPanel(); }
+        }
+        return;
+      }
       // reabre o editor com o spec guardado; o import de volta troca a arte deste mesmo bloco
       if (a === 'chart') { chartEditId = b.id; chartTargetPage = b.page | 0; closeImgPanel(); openChartModal(b.chart.kind, b.chart.spec); return; }
       // troca só o arquivo (src/dimensões); título, legenda, posição, raio e âncora ficam
@@ -3190,6 +3288,17 @@ function openImgPanel() {
       render(); if (state.sel) openImgPanel();
     });
   });
+  // soltar o thumb: revela/esconde alinhamento + re-pagina se a altura no fluxo mudou
+  const scaleRange = imgPanel.querySelector('input[data-a="scale"]');
+  if (scaleRange) {
+    scaleRange.addEventListener('change', () => {
+      // mesma transição de altura+opacity da sidebar — só no soltar (não no `input` do arraste)
+      setSidebarReveal(alignField, imgScalePct(b) < 100);
+      // re-pagina sem openImgPanel: rebuild do painel mataria o reveal no meio
+      if (placementOf(b) !== 'right') render();
+      positionImgPanel();
+    });
+  }
 }
 function positionImgPanel() {
   if (!imgPanel || imgPanel.hidden) return;
@@ -3339,6 +3448,10 @@ addEventListener('message', (e) => {
     closeChartModal();
     e.source?.postMessage({ type: 'pdgm-chart-ok' }, e.origin);   // daqui pra frente já está no documento
     render(); openImgPanel();
+    const kindLabel = (d.kind === 'timeline') ? 'Linha do tempo' : 'Gráfico';
+    const title = (d.spec && d.spec.title) || d.title || '';
+    showToast('ok', `${kindLabel} importado para o relatório`,
+      title ? `“${title}” entrou no documento.` : 'O bloco entrou no documento.');
   } catch (err) {
     e.source?.postMessage({ type: 'pdgm-chart-fail', error: String(err.message || err) }, e.origin);
     throw err;                                      // segue aparecendo no console pra virar bug rastreável

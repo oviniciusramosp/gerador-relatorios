@@ -96,11 +96,16 @@ export const DEFAULTS = {
   // grandeza (TVL, market cap, preço); exige valores > 0 e ignora `zero`,
   // porque em log o zero fica infinitamente longe. Não vale em stacked100.
   y: { format: 'num', prefix: '', suffix: '', title: '', min: null, max: null, ticks: 5, zero: true, side: 'left', scale: 'linear' },
-  x: { title: '', every: 1, hidden: [], offsets: {} },
+  x: { title: '', every: 1, hidden: [], offsets: {}, pos: {} },
   // every: mostra 1 a cada N rótulos · hidden: índices sem TEXTO do rótulo
   // (o ponto/barra continua no lugar, só o texto some) · offsets: {indice: dx}
   // desloca só o TEXTO do rótulo, na HORIZONTAL — nunca o dado/posição real do
   // ponto, e nunca na vertical (o rótulo sempre fica na mesma linha do eixo)
+  // pos: {indice: fração 0..1} — posição LIVRE do ponto/barra CATEGÓRICO
+  // (edit mode, Shift+arraste). O RÓTULO do eixo fica no slot.
+  // freePoints: pontos EXTRA que NÃO entram em labels[] (não redistribuem o
+  // eixo X). [{ id, pos: 0..1, data: number[] }] — data[si] = valor da série si.
+  freePoints: [],
   grid: 'y',             // y | x | both | none
   legend: 'top',         // top | bottom | none
   labelMode: 'none',     // none | ends (primeiro+último) | max | all
@@ -487,6 +492,13 @@ function cartesian(series, labels, s, t, box) {
   } else {
     vals = serY1.flatMap((se) => se.data).filter((v) => v != null);
   }
+  // freePoints entram no domínio do Y, mas não no eixo X (não contam em labels)
+  for (const fp of s.freePoints || []) {
+    serY1.forEach((se) => {
+      const v = fp.data?.[se._i];
+      if (v != null) vals.push(v);
+    });
+  }
   if (!vals.length) vals = [0, 1];
 
   /* Escala log. Nunca em stacked100 — lá a soma É a escala, e segmento
@@ -539,7 +551,10 @@ function cartesian(series, labels, s, t, box) {
   let ticks2 = [], d2Min = 0, d2Max = 1, tickLabels2 = [];
   if (has2) {
     const v2 = serY2.flatMap((se) => se.data).filter((v) => v != null);
-    let m2 = y2cfg.min ?? Math.min(...v2), M2 = y2cfg.max ?? Math.max(...v2);
+    for (const fp of s.freePoints || []) {
+      serY2.forEach((se) => { const v = fp.data?.[se._i]; if (v != null) v2.push(v); });
+    }
+    let m2 = y2cfg.min ?? Math.min(...(v2.length ? v2 : [0])), M2 = y2cfg.max ?? Math.max(...(v2.length ? v2 : [1]));
     if (y2cfg.zero && y2cfg.min == null && m2 > 0) m2 = 0;
     ticks2 = niceTicks(m2, M2, y2cfg.ticks);
     d2Min = y2cfg.min ?? Math.min(...ticks2); d2Max = y2cfg.max ?? Math.max(...ticks2);
@@ -660,11 +675,22 @@ function cartesian(series, labels, s, t, box) {
   });
 
   // — eixo de categoria — (every/xHidden vêm de cima: entram no cálculo da margem)
-  const catPos = (i) => ((s.type === 'line' || s.type === 'area') && !mixed ? catPoint(i) : catCenter(i));
+  // slotCat = posição do RÓTULO no eixo (sempre o índice da categoria).
+  // markPos = posição do ponto/barra: pode usar x.pos[i] (0..1) no editor
+  // (Shift+arraste) sem mover o rótulo de referência.
+  const slotCat = (i) => ((s.type === 'line' || s.type === 'area') && !mixed ? catPoint(i) : catCenter(i));
+  const markPos = (i) => {
+    const raw = s.x?.pos?.[i];
+    if (raw != null && Number.isFinite(+raw)) {
+      const f = Math.max(0, Math.min(1, +raw));
+      return (horiz ? top : left) + f * (horiz ? plotH : plotW);
+    }
+    return slotCat(i);
+  };
   const xOffsets = s.x.offsets || {};
   labels.forEach((l, i) => {
     if (i % every) return;
-    const p = catPos(i);
+    const p = slotCat(i);   // rótulo fica no slot — mesmo se o ponto flutuou com pos
     // offset desloca só a POSIÇÃO HORIZONTAL DO TEXTO — p (posição real do
     // ponto/barra) não muda, e a vertical do rótulo é sempre a mesma do eixo
     const lx = (horiz ? left - axisGap : p) + (xOffsets[i] || 0);
@@ -687,11 +713,11 @@ function cartesian(series, labels, s, t, box) {
   // acima, 2.2 em vez de 1.6) — sem esse ajuste o título do eixo X colidia com ele
   if (s.x.title) out.push(txt((left + right) / 2, bottom + fs.axis * 3.9, esc(s.x.title), { size: fs.axis, fill: t.muted, anchor: 'middle', stretch: 90 }));
 
-  // — anotações (linhas verticais marcadas) —
+  // — anotações (linhas verticais marcadas) — no slot da categoria (referência do eixo)
   (s.annotations || []).forEach((a) => {
     const i = typeof a.at === 'number' ? a.at : labels.indexOf(a.at);
     if (i < 0) return;
-    const p = catPos(i);
+    const p = slotCat(i);
     out.push(`<line x1="${n2(p)}" y1="${n2(top)}" x2="${n2(p)}" y2="${n2(bottom)}" stroke="${t.axis}" stroke-width="1" stroke-dasharray="4 4"/>`);
     if (a.text) out.push(txt(p + 6, top + fs.axis, esc(a.text), { size: fs.axis, fill: t.muted, stretch: 90 }));
   });
@@ -711,7 +737,7 @@ function cartesian(series, labels, s, t, box) {
     const bw = Math.max(2, Math.min(band * 0.62, 14 * s.fontScale));
     labels.forEach((_, i) => {
       if (O[i] == null || Hi[i] == null || Lo[i] == null || C[i] == null) return;
-      const x = catCenter(i), col = C[i] >= O[i] ? up : down;
+      const x = markPos(i), col = C[i] >= O[i] ? up : down;
       out.push(`<line x1="${n2(x)}" y1="${n2(V(Hi[i]))}" x2="${n2(x)}" y2="${n2(V(Lo[i]))}" stroke="${col}" stroke-width="${n2(wickW)}"/>`);
       const yTop = V(Math.max(O[i], C[i])), yBot = V(Math.min(O[i], C[i]));
       out.push(`<rect x="${n2(x - bw / 2)}" y="${n2(yTop)}" width="${n2(bw)}" height="${n2(Math.max(1.2, yBot - yTop))}" fill="${col}"/>`);
@@ -729,7 +755,7 @@ function cartesian(series, labels, s, t, box) {
         const v = se.data[i];
         if (v == null) return;
         const a = Vx(zero), b = Vx(v);
-        const x = catCenter(i) - inner / 2 + k * (barSize + GAP);
+        const x = markPos(i) - inner / 2 + k * (barSize + GAP);
         if (track.show) out.push(trackRect(x, barSize, top, bottom, false, R, track, se.color));
         out.push(roundedEnd(x, Math.min(a, b), barSize, Math.abs(b - a), Math.min(R, barSize / 2), false, b < a, se.color));
         if (meta) meta.marks.push({ s: k0, i, value: v, base: 0, kind: 'bar', axis: onY2(se) ? 'y2' : 'y', x: x + barSize / 2, y: b });
@@ -763,8 +789,8 @@ function cartesian(series, labels, s, t, box) {
         if (stacked) { if (v >= 0) accP = end; else accN = end; }
 
         const a = V(start), b = V(end);
-        const cs = catCenter(i) - inner / 2 + (stacked ? 0 : k * (barSize + GAP)) + (stacked ? (band - inner) / 2 * 0 : 0);
-        const off = stacked ? catCenter(i) - inner / 2 : cs;
+        const cs = markPos(i) - inner / 2 + (stacked ? 0 : k * (barSize + GAP)) + (stacked ? (band - inner) / 2 * 0 : 0);
+        const off = stacked ? markPos(i) - inner / 2 : cs;
         const len = Math.max(0, Math.abs(b - a) - (stacked ? GAP : 0));
         const size = stacked ? inner : barSize;
         // canto arredondado só na ponta do dado, ancorado na base
@@ -792,13 +818,29 @@ function cartesian(series, labels, s, t, box) {
     });
   }
   if (lineSer.length) {
-    // line / area (e a parte de linha do combo)
-    const px = (i) => (mixed ? catCenter(i) : catPoint(i));
+    // line / area (e a parte de linha do combo) — markPos = slot ou x.pos livre
+    const px = (i) => markPos(i);
+    const freePx = (frac) => {
+      const f = Math.max(0, Math.min(1, +frac || 0));
+      return (horiz ? top : left) + f * (horiz ? plotH : plotW);
+    };
     const pending = [];   // rótulos diretos, posicionados só no fim (ver anti-colisão)
     lineSer.forEach((se) => {
       const k = se._i, Vx = Vfor(se);
-      const pts = se.data.map((v, i) => (v == null ? null : [px(i), Vx(v)])).filter(Boolean);
-      if (meta) se.data.forEach((v, i) => { if (v != null) meta.marks.push({ s: k, i, value: v, base: 0, kind: 'point', axis: onY2(se) ? 'y2' : 'y', x: px(i), y: Vx(v) }); });
+      // traço na ordem VISUAL: pontos de categoria + freePoints (sem slot no eixo)
+      const raw = se.data.map((v, i) => (v == null ? null : { x: px(i), y: Vx(v), i, v, free: false })).filter(Boolean);
+      for (const fp of s.freePoints || []) {
+        const v = fp.data?.[k];
+        if (v == null) continue;
+        const x = freePx(fp.pos);
+        raw.push({ x, y: Vx(v), i: -1, v, free: true, freeId: fp.id });
+      }
+      const pts = raw.slice().sort((a, b) => (horiz ? a.y - b.y : a.x - b.x) || a.i - b.i)
+        .map((p) => [p.x, p.y]);
+      if (meta) raw.forEach((p) => meta.marks.push({
+        s: k, i: p.i, free: !!p.free, freeId: p.freeId || null,
+        value: p.v, base: 0, kind: 'point', axis: onY2(se) ? 'y2' : 'y', x: p.x, y: p.y,
+      }));
       if (!pts.length) return;
       const d = s.smooth ? smoothPath(pts) : linePath(pts);
       if (s.type === 'area' || se.area) {

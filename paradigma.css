@@ -310,11 +310,15 @@ aside#sidebar > .sidebar-panel {
   --sb-rail: 8px;
   box-sizing: border-box;
   padding: var(--sb-pad);
+  /* y auto + x hidden: overflow-y sozinho vira overflow-x:auto e aparece
+     scroll horizontal por 1–2px de chrome (alças de tabela, ::after full-bleed). */
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
   display: grid;
   gap: 0;
   align-content: start;
+  min-width: 0;
 }
 aside#sidebar > .sidebar-panel::-webkit-scrollbar { width: var(--sb-rail); }
 aside#sidebar > .sidebar-panel::-webkit-scrollbar-thumb {

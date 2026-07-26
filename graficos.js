@@ -1,10 +1,12 @@
 /* Editor de gráficos — liga os controles ao renderer puro (chart.js). */
-import { renderChart, DEFAULTS, THEMES, formatValue, symlog, symlogInv } from './chart.js';
-import { parseTable, toTable, parseLinks, parseBubbles } from './tabela.js';
+import { renderChart, DEFAULTS, THEMES, SERIES_NAMES, formatValue, symlog, symlogInv } from './chart.js';
+import { parseTable, toTable, parseLinks, parseBubbles, num } from './tabela.js';
+import { buildTableEl } from './bloco-tabela.js';   // mesma tabela Notion do diagramador
 import { openIconPop, paintIconBtn } from './icon-pop.js';   // mesmo picker do criador de timelines
 import { registerIcons, iconSvg } from './timeline-icons.js';
-import { IONICONS_LIB } from './ionicons-lib.js';            // 421 ícones outline
+import { IONICONS_LIB, IONICONS_LIB_SOLID } from './ionicons-lib.js';  // outline + solid (undo/redo)
 registerIcons(IONICONS_LIB);
+registerIcons(IONICONS_LIB_SOLID, { style: 'solid' }); // filled — igual diagramador
 // ícone de UI Ionicons (viewBox 512) em currentColor — mesmo helper do Diagramador
 const uiIco = (key, size = 12, style = 'outline') =>
   iconSvg(key, { x: 0, y: 0, w: size, h: size }, 'currentColor', 1.8, style, true)
@@ -53,8 +55,13 @@ function sync({ keepTable = false, keepJson = false } = {}) {
   if (ghostUrl && $('ghostOn').checked) positionGhost();   // realinha a sobreposição
   $('dims').textContent = `${spec.width} × ${spec.height} px  →  PNG ${spec.width * +$('scale').value} × ${spec.height * +$('scale').value}`;
   if (!keepJson) $('json').value = JSON.stringify(spec, null, 2);
-  if (!keepTable) $('tsv').value = toTable(spec);
+  if (!keepTable) {
+    $('tsv').value = toTable(spec);
+    if (csvMode === 'tabela') rebuildCsvTable();
+  }
 }
+
+const freePointId = () => 'fp_' + Math.random().toString(36).slice(2, 9);
 
 // desenha uma alça em cima de cada ponto/barra editável (só no modo edição). O
 // arraste é capturado pelo #editLayer. Donut não tem marks → sem alças.
@@ -66,11 +73,11 @@ function drawHandles() {
   for (const m of chartMeta.marks || []) {
     const c = document.createElementNS(NS, 'circle');
     c.setAttribute('cx', m.x); c.setAttribute('cy', m.y); c.setAttribute('r', 7);
-    c.setAttribute('class', 'edit-handle'); c.dataset.mark = `${m.s}:${m.i}`;
+    c.setAttribute('class', 'edit-handle');
+    c.dataset.mark = m.free ? `free:${m.freeId}:${m.s}` : `${m.s}:${m.i}`;
     svg.appendChild(c);
   }
   // rótulo oculto: marca fantasma no lugar dele, só pra achar e clicar de novo
-  // (reativar ou arrastar) — o dado real não depende disso, é só um achado.
   for (const c of chartMeta.catLabels || []) {
     if (!c.hidden) continue;
     const g = document.createElementNS(NS, 'circle');
@@ -78,8 +85,6 @@ function drawHandles() {
     g.setAttribute('class', 'edit-handle-ghost');
     svg.appendChild(g);
   }
-  // sankey: a alça é o nó inteiro (a barra), não um ponto — arrastar sobe/desce
-  // o nó com o rótulo junto, pra desencavalar o que o automático deixou perto
   for (const nd of chartMeta.sankeyNodes || []) {
     const r = document.createElementNS(NS, 'rect');
     r.setAttribute('x', nd.x - 3); r.setAttribute('y', nd.y);
@@ -88,7 +93,85 @@ function drawHandles() {
     r.dataset.node = nd.n;
     svg.appendChild(r);
   }
+  // fantasma: ponto livre entre 2 dots (não mexe no eixo)
+  if (insertGhost) {
+    const g = document.createElementNS(NS, 'circle');
+    g.setAttribute('cx', insertGhost.x); g.setAttribute('cy', insertGhost.y);
+    g.setAttribute('r', 7); g.setAttribute('class', 'edit-insert-ghost');
+    svg.appendChild(g);
+  }
+  // fantasma: rótulo novo entre 2 labels do eixo X
+  if (labelInsertGhost) {
+    const g = document.createElementNS(NS, 'circle');
+    g.setAttribute('cx', labelInsertGhost.x); g.setAttribute('cy', labelInsertGhost.y);
+    g.setAttribute('r', 4); g.setAttribute('class', 'edit-insert-ghost');
+    svg.appendChild(g);
+  }
 }
+
+// marcas ordenadas pela posição VISUAL (categoria + freePoints)
+function visualMarksOrdered() {
+  // prefer série 0 (ou a de menor s) por “slot” visual; freePoints têm freeId
+  const byKey = new Map();
+  for (const m of chartMeta.marks || []) {
+    if (m.kind !== 'point' && m.kind !== 'bar') continue;
+    const key = m.free ? `f:${m.freeId}` : `i:${m.i}`;
+    const prev = byKey.get(key);
+    if (!prev || m.s < prev.s) byKey.set(key, m);
+  }
+  const along = (m) => (chartMeta.plot?.horiz ? m.y : m.x);
+  return [...byKey.values()].sort((a, b) => along(a) - along(b) || (a.i - b.i));
+}
+// segmento visual entre 2 pontos (para freePoint no meio da linha)
+function nearestInsertSegment(vb) {
+  if (!vb || !chartMeta.plot) return null;
+  if (spec.type === 'donut' || spec.type === 'pie' || spec.type === 'sankey'
+    || spec.type === 'bubble' || spec.type === 'candle') return null;
+  const ordered = visualMarksOrdered();
+  if (ordered.length < 2) return null;
+  const horiz = !!chartMeta.plot.horiz;
+  const coord = horiz ? vb.y : vb.x;
+  let left = ordered[0], right = ordered[1], bd = Infinity;
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const a = ordered[i], b = ordered[i + 1];
+    const ax = horiz ? a.y : a.x, bx = horiz ? b.y : b.x;
+    const mid = (ax + bx) / 2;
+    const d = Math.abs(coord - mid);
+    if (d < bd) { bd = d; left = a; right = b; }
+  }
+  const mx = (left.x + right.x) / 2;
+  const my = (left.y + right.y) / 2;
+  const p = chartMeta.plot;
+  const origin = horiz ? p.top : p.left;
+  const span = horiz ? p.plotH : p.plotW;
+  const midAlong = horiz ? my : mx;
+  const frac = span ? Math.max(0, Math.min(1, (midAlong - origin) / span)) : 0.5;
+  return { left, right, x: mx, y: my, frac };
+}
+// segmento entre 2 rótulos do eixo X (para inserir categoria no eixo)
+function nearestLabelSegment(vb) {
+  if (!vb || !chartMeta.plot) return null;
+  const labs = (chartMeta.catLabels || [])
+    .filter((c) => !c.hidden && c.i != null)
+    .slice()
+    .sort((a, b) => (a.horiz ? a.cy - b.cy : a.cx - b.cx) || a.i - b.i);
+  if (labs.length < 2) return null;
+  const horiz = !!chartMeta.plot.horiz;
+  const coord = horiz ? vb.y : vb.x;
+  let left = labs[0], right = labs[1], bd = Infinity;
+  for (let i = 0; i < labs.length - 1; i++) {
+    const a = labs[i], b = labs[i + 1];
+    const ax = horiz ? a.cy : a.cx, bx = horiz ? b.cy : b.cx;
+    const mid = (ax + bx) / 2;
+    const d = Math.abs(coord - mid);
+    if (d < bd) { bd = d; left = a; right = b; }
+  }
+  const mx = (left.cx + right.cx) / 2;
+  const my = (left.cy + right.cy) / 2;
+  return { left, right, x: mx, y: my, insertAt: Math.min(left.i, right.i) + 1 };
+}
+let insertGhost = null;      // freePoint preview
+let labelInsertGhost = null; // new X-label preview
 
 // ── segment de topo: Importar | Customizar ───────────────────────────────────
 // ion-icon: download-outline / options-outline (mesmo idioma do Diagramador)
@@ -134,7 +217,9 @@ dataSegBtns.forEach((b) => b.addEventListener('click', () => {
 setDataSegment('imagem');
 
 // ── controles ────────────────────────────────────────────────────────────────
-const bindText = (id, path) => $(id).addEventListener('input', (e) => { set(path, e.target.value); sync({ keepTable: true }); });
+const bindText = (id, path) => $(id).addEventListener('input', (e) => {
+  set(path, e.target.value); sync({ keepTable: true }); scheduleHistory();
+});
 const set = (path, v) => {
   const ks = path.split('.'); let o = spec;
   while (ks.length > 1) o = o[ks.shift()];
@@ -155,6 +240,9 @@ $('typePicker').addEventListener('click', (e) => {
   if (para === 'candle' && de !== 'candle') soFechamento(false);
   paintTypePicker(); buildSeries();
   sync({ keepTable: true });
+  if (csvMode === 'tabela') rebuildCsvTable();
+  else $('tsv').value = toTable(spec);
+  pushHistory();
 });
 // candle → linha/área: traça só o Fechamento. Candle usa as 4 primeiras séries
 // como O/H/L/C (contrato do renderer), então basta ocultar as 3 primeiras —
@@ -274,14 +362,14 @@ function syncSidebarVisibility() {
   $(id).addEventListener('click', () => {
     spec.show[key] = !spec.show[key];
     $(id).setAttribute('aria-checked', spec.show[key]);
-    sync({ keepTable: true });
+    sync({ keepTable: true }); pushHistory();
   });
 });
 // logo da Paradigma: picker + posição + região/lado + cor + sliders
 const wmDefaultOpacity = (pos) => (pos === 'center' ? 0.08 : 1);   // centro faded, canto opaco
 function setWm(patch) {
   spec.watermark = { ...DEFAULTS.watermark, ...spec.watermark, ...patch };
-  paintWatermark(); sync({ keepTable: true });
+  paintWatermark(); sync({ keepTable: true }); scheduleHistory();
 }
 $('wmPicker').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-logo]'); if (!b) return;
@@ -321,9 +409,8 @@ $('wmScaleReset').addEventListener('click', () => {
 // acompanha claro↔escuro. O swatch mostra a cor resolvida (nunca "vazio").
 const candleCfg = () => ({ ...DEFAULTS.candle, ...spec.candle });
 const candleColor = (k) => candleCfg()[k] || (THEMES[spec.theme] || THEMES.dark).series[k === 'up' ? 1 : 4];
-// sem pushHistory aqui: o pavio é input numérico e gravaria um passo de undo por
-// tecla — mesmo tratamento que os sliders de traço/ponto e que o logo (setWm)
-const setCandle = (patch) => { spec.candle = { ...candleCfg(), ...patch }; paintCandle(); sync({ keepTable: true }); };
+// scheduleHistory (debounce) no pavio/sliders — um passo de undo por gesto, não por tecla
+const setCandle = (patch) => { spec.candle = { ...candleCfg(), ...patch }; paintCandle(); sync({ keepTable: true }); scheduleHistory(); };
 ['up', 'down'].forEach((k) => {
   const el = $('candle' + k[0].toUpperCase() + k.slice(1));
   el.addEventListener('click', () => openSwatchPop(el, (hex) => setCandle({ [k]: hex }), candleColor(k), { opacity: false }));
@@ -340,12 +427,12 @@ function paintCandle() {
 // (empilhado fica de fora: segmento arredondado/trilha atrás não fazem sentido
 // quando as barras já ficam coladas umas nas outras formando o próprio 100%)
 const barTrackCfg = () => ({ ...DEFAULTS.barTrack, ...spec.barTrack });
-const setBarTrack = (patch) => { spec.barTrack = { ...barTrackCfg(), ...patch }; sync({ keepTable: true }); };
+const setBarTrack = (patch) => { spec.barTrack = { ...barTrackCfg(), ...patch }; sync({ keepTable: true }); scheduleHistory(); };
 $('barRadius').addEventListener('input', (e) => {
-  spec.barRadius = +e.target.value; $('brVal').textContent = spec.barRadius + ' px'; sync({ keepTable: true });
+  spec.barRadius = +e.target.value; $('brVal').textContent = spec.barRadius + ' px'; sync({ keepTable: true }); scheduleHistory();
 });
 $('barGap').addEventListener('input', (e) => {
-  spec.barGap = +e.target.value; $('bgVal').textContent = Math.round(spec.barGap * 100) + '%'; sync({ keepTable: true });
+  spec.barGap = +e.target.value; $('bgVal').textContent = Math.round(spec.barGap * 100) + '%'; sync({ keepTable: true }); scheduleHistory();
 });
 $('btShow').addEventListener('change', (e) => setBarTrack({ show: e.target.checked }));
 $('btOpacity').addEventListener('input', (e) => {
@@ -358,18 +445,18 @@ $('btScale').addEventListener('input', (e) => {
 const icoCfg = () => ({ ...DEFAULTS.bubbleIcon, ...spec.bubbleIcon });
 $('bbLabel').addEventListener('change', (e) => { spec.bubbleLabel = e.target.value; sync({ keepTable: true }); pushHistory(); });
 $('bbMinR').addEventListener('input', (e) => {
-  spec.bubbleMinR = +e.target.value; $('bbMinRVal').textContent = e.target.value + 'px'; sync({ keepTable: true });
+  spec.bubbleMinR = +e.target.value; $('bbMinRVal').textContent = e.target.value + 'px'; sync({ keepTable: true }); scheduleHistory();
 });
 $('bbIcoMin').addEventListener('input', (e) => {
   // o piso não pode passar do teto, senão nenhum ícone aparece e parece que quebrou
   const v = Math.min(+e.target.value, icoCfg().max);
   spec.bubbleIcon = { ...icoCfg(), min: v };
-  $('bbIcoMinVal').textContent = v + 'px'; sync({ keepTable: true });
+  $('bbIcoMinVal').textContent = v + 'px'; sync({ keepTable: true }); scheduleHistory();
 });
 $('bbIcoMax').addEventListener('input', (e) => {
   const v = Math.max(+e.target.value, icoCfg().min);
   spec.bubbleIcon = { ...icoCfg(), max: v };
-  $('bbIcoMaxVal').textContent = v + 'px'; sync({ keepTable: true });
+  $('bbIcoMaxVal').textContent = v + 'px'; sync({ keepTable: true }); scheduleHistory();
 });
 function paintBubbleOpts() {
   $('bubbleOpts').hidden = spec.type !== 'bubble';
@@ -385,7 +472,7 @@ function paintBubbleOpts() {
 $('skScale').addEventListener('input', (e) => {
   spec.sankeyScale = +e.target.value / 100;
   $('skScaleVal').textContent = e.target.value + '%';
-  sync({ keepTable: true });
+  sync({ keepTable: true }); scheduleHistory();
 });
 function paintSankeyOpts() {
   $('sankeyOpts').hidden = spec.type !== 'sankey';
@@ -395,7 +482,7 @@ function paintSankeyOpts() {
 
 // — pizza/rosca: juntar a cauda longa em "Outros" —
 const gsCfg = () => ({ ...DEFAULTS.groupSmall, ...spec.groupSmall });
-const setGs = (patch) => { spec.groupSmall = { ...gsCfg(), ...patch }; buildSeries(); sync({ keepTable: true }); };
+const setGs = (patch) => { spec.groupSmall = { ...gsCfg(), ...patch }; buildSeries(); sync({ keepTable: true }); scheduleHistory(); };
 $('gsOn').addEventListener('change', (e) => setGs({ on: e.target.checked }));
 $('gsPct').addEventListener('input', (e) => { $('gsVal').textContent = e.target.value + '%'; setGs({ pct: +e.target.value }); });
 $('gsLabel').addEventListener('input', (e) => setGs({ label: e.target.value || 'Outros' }));
@@ -456,7 +543,7 @@ function setTheme(next) {
   spec.series.forEach((s) => { const i = from.indexOf(s.color); if (i >= 0) s.color = to[i]; });
   spec.theme = next;
   paintTheme();
-  buildSeries(); paintCandle(); sync({ keepTable: true });   // swatch mostra a cor do tema novo
+  buildSeries(); paintCandle(); sync({ keepTable: true }); pushHistory();   // swatch mostra a cor do tema novo
 }
 themeSegBtns.forEach((b) => b.addEventListener('click', () => setTheme(b.dataset.theme)));
 
@@ -467,57 +554,203 @@ themeSegBtns.forEach((b) => b.addEventListener('click', () => setTheme(b.dataset
     if (id === 'yformat' && ['usd', 'brl', 'pct'].includes(e.target.value)) {
       spec.y.prefix = ''; spec.y.suffix = ''; $('yprefix').value = ''; $('ysuffix').value = '';
     }
-    sync({ keepTable: true });
+    sync({ keepTable: true }); pushHistory();
   }));
 
 [['ymin', 'y.min'], ['ymax', 'y.max']].forEach(([id, path]) =>
-  $(id).addEventListener('input', (e) => { set(path, e.target.value === '' ? null : +e.target.value); sync({ keepTable: true }); }));
+  $(id).addEventListener('input', (e) => { set(path, e.target.value === '' ? null : +e.target.value); sync({ keepTable: true }); scheduleHistory(); }));
 
-$('xevery').addEventListener('input', (e) => { spec.x.every = Math.max(1, +e.target.value || 1); sync({ keepTable: true }); });
+$('xevery').addEventListener('input', (e) => { spec.x.every = Math.max(1, +e.target.value || 1); sync({ keepTable: true }); scheduleHistory(); });
 
 [['strokeWidth', 'swVal', (v) => v + ' px'], ['dotSize', 'dotVal', (v) => (+v ? v + ' px' : 'off')], ['fontScale', 'fsVal', (v) => v + '×']]
   .forEach(([id, out_, fmt]) => $(id).addEventListener('input', (e) => {
-    spec[id] = +e.target.value; $(out_).textContent = fmt(e.target.value); sync({ keepTable: true });
+    spec[id] = +e.target.value; $(out_).textContent = fmt(e.target.value); sync({ keepTable: true }); scheduleHistory();
   }));
 
 ['smooth', 'transparent'].forEach((id) =>
-  $(id).addEventListener('change', (e) => { spec[id] = e.target.checked; sync({ keepTable: true }); }));
+  $(id).addEventListener('change', (e) => { spec[id] = e.target.checked; sync({ keepTable: true }); pushHistory(); }));
 
 ['width', 'height'].forEach((id) =>
-  $(id).addEventListener('input', (e) => { spec[id] = +e.target.value || DEFAULTS[id]; sync({ keepTable: true }); }));
+  $(id).addEventListener('input', (e) => { spec[id] = +e.target.value || DEFAULTS[id]; sync({ keepTable: true }); scheduleHistory(); }));
 
 $('scale').addEventListener('change', () => sync({ keepTable: true, keepJson: true }));
+
+// ── CSV: Tabela (bloco-tabela) | Código (textarea) ───────────────────────────
+let csvMode = 'tabela'; // 'tabela' | 'codigo'
+const csvTableBlock = { id: 'csv-data', rows: [['', '']], colWidths: null };
+const stripCell = (html) => {
+  if (html == null) return '';
+  const d = document.createElement('div');
+  d.innerHTML = String(html);
+  return (d.textContent || '').trim();
+};
+/** spec → matriz (1ª linha = cabeçalho) pro buildTableEl */
+function specToMatrix(sp) {
+  if (sp.type === 'sankey') {
+    return [
+      ['origem', 'destino', 'valor'],
+      ...(sp.links || []).map((l) => [l.from ?? '', l.to ?? '', l.value == null ? '' : String(l.value)]),
+    ];
+  }
+  if (sp.type === 'bubble') {
+    return [
+      ['rótulo', 'valor', 'ícone', 'grupo', 'categoria'],
+      ...(sp.bubbles || []).map((b) => [
+        b.label ?? '', b.value == null ? '' : String(b.value), b.icon || '', b.group || '', b.cat || '',
+      ]),
+    ];
+  }
+  return [
+    ['', ...(sp.series || []).map((s) => s.name ?? '')],
+    ...(sp.labels || []).map((l, i) => [
+      l ?? '',
+      ...(sp.series || []).map((s) => (s.data?.[i] == null ? '' : String(s.data[i]))),
+    ]),
+  ];
+}
+/** matriz editada → spec (preserva cor/estilo das séries quando possível) */
+function applyMatrixToSpec(rawRows) {
+  const rows = (rawRows || []).map((r) => r.map(stripCell));
+  if (!rows.length) return false;
+  const cols = Math.max(...rows.map((r) => r.length), 1);
+  const plain = rows.map((r) => {
+    const row = r.slice();
+    while (row.length < cols) row.push('');
+    return row;
+  });
+  if (spec.type === 'sankey') {
+    const body = plain[0][0]?.toLowerCase() === 'origem' ? plain.slice(1) : plain;
+    const links = [];
+    for (const r of body) {
+      const v = num(r[2]);
+      if (!r[0] || !r[1] || v == null) continue;
+      links.push({ from: r[0], to: r[1], value: v });
+    }
+    if (!links.length) return false;
+    spec.links = links;
+    return true;
+  }
+  if (spec.type === 'bubble') {
+    const body = /r[oó]tulo/i.test(plain[0][0] || '') ? plain.slice(1) : plain;
+    const bubbles = [];
+    for (const r of body) {
+      const v = num(r[1]);
+      if (!r[0] || v == null) continue;
+      bubbles.push({ label: r[0], value: v, icon: r[2] || '', group: r[3] || '', cat: r[4] || '' });
+    }
+    if (!bubbles.length) return false;
+    spec.bubbles = bubbles;
+    return true;
+  }
+  if (plain.length < 2) return false;
+  const head = plain[0];
+  const body = plain.slice(1);
+  const names = head.slice(1);
+  if (!names.length) return false;
+  spec.labels = body.map((r) => r[0] ?? '');
+  spec.series = names.map((name, k) => ({
+    ...(spec.series[k] || {}),
+    name: name || SERIES_NAMES[k] || `Série ${k + 1}`,
+    data: body.map((r) => num(r[k + 1])),
+  }));
+  return true;
+}
+function rebuildCsvTable() {
+  const host = $('csvTableHost');
+  if (!host || csvMode !== 'tabela') return;
+  csvTableBlock.rows = specToMatrix(spec);
+  // largura fluida no sidebar (componente nasce com 499px de impressão)
+  const el = buildTableEl(csvTableBlock, true, {
+    commit: () => {
+      if (!applyMatrixToSpec(csvTableBlock.rows)) return;
+      $('tsv').value = toTable(spec);
+      buildSeries();
+      sync({ keepTable: true });
+      scheduleHistory();
+    },
+    rerender: () => {
+      if (applyMatrixToSpec(csvTableBlock.rows)) {
+        $('tsv').value = toTable(spec);
+        buildSeries();
+        sync({ keepTable: true });
+        scheduleHistory();
+      }
+      rebuildCsvTable();
+    },
+    removeBlock: () => {},
+  });
+  el.style.width = '100%';
+  host.replaceChildren(el);
+}
+function setCsvMode(mode) {
+  if (mode !== 'tabela' && mode !== 'codigo') return;
+  // ao sair da tabela, garante que o textarea está em dia
+  if (csvMode === 'tabela' && mode === 'codigo') {
+    if (applyMatrixToSpec(csvTableBlock.rows)) {
+      $('tsv').value = toTable(spec);
+      buildSeries();
+      sync({ keepTable: true });
+    }
+  }
+  csvMode = mode;
+  const host = $('csvTableHost');
+  const ta = $('tsv');
+  if (host) host.hidden = mode !== 'tabela';
+  if (ta) ta.hidden = mode !== 'codigo';
+  document.querySelectorAll('#csvModeSeg button[data-csv-mode]').forEach((b) => {
+    b.setAttribute('aria-selected', String(b.dataset.csvMode === mode));
+  });
+  if (mode === 'tabela') rebuildCsvTable();
+  else if (ta) ta.value = toTable(spec);
+}
+{
+  const CSV_SEG_ICO = { tabela: 'grid', codigo: 'code-slash' };
+  document.querySelectorAll('#csvModeSeg button[data-csv-mode]').forEach((b) => {
+    const key = CSV_SEG_ICO[b.dataset.csvMode];
+    if (key) {
+      const label = b.textContent.trim();
+      b.innerHTML = `${uiIco(key, 13, 'outline')}<span>${label}</span>`;
+    }
+    b.addEventListener('click', () => setCsvMode(b.dataset.csvMode));
+  });
+  setCsvMode('tabela');
+}
 
 $('tsv').addEventListener('input', (e) => {
   // sankey lê "origem,destino,valor"; bolhas leem "rótulo,valor,ícone,grupo,categoria"
   if (spec.type === 'sankey') {
     spec.links = parseLinks(e.target.value);
-    buildSeries(); sync({ keepTable: true });
+    buildSeries(); sync({ keepTable: true }); scheduleHistory();
     return;
   }
   if (spec.type === 'bubble') {
     spec.bubbles = parseBubbles(e.target.value);
-    buildSeries(); sync({ keepTable: true });
+    buildSeries(); sync({ keepTable: true }); scheduleHistory();
     return;
   }
   const t = parseTable(e.target.value);
   if (!t) return;
   spec.labels = t.labels;
   spec.series = t.series.map((s, i) => ({ ...spec.series[i], ...s }));
-  buildSeries(); sync({ keepTable: true });
+  buildSeries(); sync({ keepTable: true }); scheduleHistory();
 });
 
-$('btnApply').addEventListener('click', () => {
-  try { spec = { ...structuredClone(DEFAULTS), ...JSON.parse($('json').value) }; }
-  catch (err) { return flash('JSON inválido: ' + err.message, true); }
-  fillControls(); buildSeries(); sync();
+// Projeto JSON ↔ CSV em sincronia: editar o JSON aplica na hora (como o CSV já faz).
+// JSON inválido a meio da digitação é ignorado — só aplica quando parseia.
+$('json').addEventListener('input', (e) => {
+  let parsed;
+  try { parsed = JSON.parse(e.target.value); }
+  catch { return; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+  spec = { ...structuredClone(DEFAULTS), ...parsed };
+  fillControls(); buildSeries(); sync({ keepJson: true }); scheduleHistory();
 });
 $('btnCopy').addEventListener('click', async () => {
   await navigator.clipboard.writeText(JSON.stringify(spec, null, 2)); flash('Spec copiada.');
 });
 
-// Abrir projeto: o spec JÁ é o estado inteiro. Salvar JSON / PNG / SVG saem
-// do popover "Baixar" (mesmo padrão do Diagramador).
+// Abrir .json (sidebar): o spec JÁ é o estado inteiro. Salvar JSON / PNG / SVG
+// saem do popover "Baixar" no header (mesmo padrão do Diagramador).
 $('btnOpen').addEventListener('click', () => $('fileSpec').click());
 $('fileSpec').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) openSpecFile(f); e.target.value = ''; });
 
@@ -620,11 +853,11 @@ function buildSeries() {
     const sw = document.createElement('button');
     sw.type = 'button'; sw.className = 'swatch'; sw.title = 'Cor da série';
     sw.style.background = color;
-    sw.onclick = () => openSwatchPop(sw, (hex) => { s.color = hex; buildSeries(); sync({ keepTable: true }); }, color);
+    sw.onclick = () => openSwatchPop(sw, (hex) => { s.color = hex; buildSeries(); sync({ keepTable: true }); pushHistory(); }, color);
 
     const name = document.createElement('input');
     name.type = 'text'; name.className = 'sname'; name.value = s.name ?? ''; name.setAttribute('aria-label', 'Nome da série');
-    name.oninput = () => { s.name = name.value; sync({ keepTable: true }); };
+    name.oninput = () => { s.name = name.value; sync({ keepTable: true }); scheduleHistory(); };
 
     // o switch é MOSTRAR/ESCONDER a série (o estilo do traço virou o dropdown
     // abaixo). Esconder não apaga: o dado continua na spec e no CSV.
@@ -635,7 +868,7 @@ function buildSeries() {
       if (s.hidden) delete s.hidden; else s.hidden = true;
       vis.setAttribute('aria-checked', !s.hidden);
       row.classList.toggle('off', !!s.hidden);
-      sync({ keepTable: true });
+      sync({ keepTable: true }); pushHistory();
       syncSidebarVisibility(); // legenda some/aparece com 1 vs 2+ séries visíveis
     };
     row.classList.toggle('off', !!s.hidden);
@@ -652,7 +885,7 @@ function buildSeries() {
         sel.className = 'mini'; sel.title = title;
         pairs.forEach(([v, l]) => { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.append(o); });
         sel.value = cur;
-        sel.onchange = () => { set(sel.value); sync({ keepTable: true }); };
+        sel.onchange = () => { set(sel.value); sync({ keepTable: true }); pushHistory(); };
         return sel;
       };
       opts.append(
@@ -802,10 +1035,12 @@ $('btnCsv').addEventListener('click', () => {
 });
 
 // ── modo embutido (iframe da Diagramação): importa o SVG direto pro relatório ──
+// Botão primary na extrema direita do header (depois de Baixar, que é secundário).
+// A confirmação/banner fica na diagramação — ao importar ela fecha o modal.
 if (new URLSearchParams(location.search).has('embed')) {
   const b = document.createElement('button');
-  b.id = 'btnImport'; b.className = 'primary'; b.textContent = 'Importar para o relatório →';
-  document.querySelector('header nav').prepend(b);
+  b.id = 'btnImport'; b.className = 'primary'; b.textContent = 'Importar para o Relatório';
+  document.querySelector('header nav').append(b);
   b.addEventListener('click', async () => {
     flash('Gerando SVG…');
     try {
@@ -815,7 +1050,7 @@ if (new URLSearchParams(location.search).has('embed')) {
       // ele o relatório só teria um PNG vetorial burro, sem volta.
       parent.postMessage({ type: 'pdgm-chart-svg', kind: 'chart', svg, spec, title: spec.title, w: spec.width, h: spec.height }, location.origin);
       await importConfirmado();
-      flash('Importado.');
+      // modal fecha no parent; o banner de confirmação também (pdgm-chart-ok)
     } catch (e) { flash('Falhou: ' + e.message, true); }
   });
   // caminho de volta: a diagramação manda o spec de um gráfico já colocado no
@@ -1452,9 +1687,24 @@ drop.addEventListener('drop', (e) => {
   if (f) convertImage(f);
 });
 
-// ── modo edição: escala fixa, alças, add/remove, undo/redo ────────────────────
+// ── modo edição: escala fixa, alças, add/remove ──────────────────────────────
+// Undo/redo vivem na top bar e valem pro criador inteiro (não só este modo).
 let priorBounds = null;
 $('editToggle').addEventListener('click', () => (editMode ? exitEdit() : enterEdit()));
+
+function paintEditToggle() {
+  const btn = $('editToggle');
+  if (editMode) {
+    btn.classList.add('on');
+    btn.innerHTML = `${uiIco('checkmark', 14, 'outline')}<span>Concluir</span>`;
+    btn.title = 'Sair do modo edição';
+  } else {
+    btn.classList.remove('on');
+    // ion-icon name="create-outline" — mesmo do popover "Editar dados" no diagramador
+    btn.innerHTML = `${uiIco('create', 14, 'outline')}<span>Editar</span>`;
+    btn.title = 'Editar pontos e rótulos · Shift+arraste = posição livre no X';
+  }
+}
 
 function enterEdit() {
   editMode = true;
@@ -1468,51 +1718,80 @@ function enterEdit() {
       spec.y2.min = chartMeta.scale2.dMin; spec.y2.max = chartMeta.scale2.dMax;
     }
   }
-  $('editToggle').classList.add('on'); $('editToggle').textContent = '✓ Editando';
+  paintEditToggle();
   editLayer.classList.add('on');
-  ['undo', 'redo', 'editHint'].forEach((id) => ($(id).hidden = false));
-  // sankey não tem ponto nem rótulo de eixo: a alça é o próprio nó
-  $('editHint').textContent = spec.type === 'sankey'
-    ? 'arraste um nó (a barra) pra cima ou pra baixo — o rótulo e os fluxos vão junto. Só na vertical: a horizontal é a etapa do fluxo.'
-    : 'arraste os pontos · no rótulo do eixo: clique renomeia, arraste desloca o texto na horizontal, botão-direito oculta/mostra · 2 cliques no gráfico adiciona ponto · botão-direito num ponto remove';
-  fillControls(); sync(); updateUndoBtns();
+  fillControls(); sync();
+  flash('Arraste: valor · Shift: X livre · 2× na linha: ponto · 2× no eixo: rótulo.');
 }
 function exitEdit() {
   editMode = false;
+  insertGhost = null;
+  labelInsertGhost = null;
   if (priorBounds) {
     spec.y.min = priorBounds.min; spec.y.max = priorBounds.max;
     if (spec.y2 && 'min2' in priorBounds) { spec.y2.min = priorBounds.min2; spec.y2.max = priorBounds.max2; }
     priorBounds = null;
   }
-  $('editToggle').classList.remove('on'); $('editToggle').textContent = '✎ Editar';
+  paintEditToggle();
   editLayer.classList.remove('on', 'can-drag');
-  ['undo', 'redo', 'editHint'].forEach((id) => ($(id).hidden = true));
   fillControls(); sync();
 }
 
-// histórico (undo/redo) — snapshot do spec inteiro
-let history = [], hidx = -1;
+// histórico (undo/redo) — snapshot do spec inteiro; top bar, global (como diagramador)
+let history = [], hidx = -1, histT = 0;
 function pushHistory() {
+  clearTimeout(histT); histT = 0;
+  const s = JSON.stringify(spec);
+  if (hidx >= 0 && history[hidx] === s) { updateUndoBtns(); return; }
   history = history.slice(0, hidx + 1);
-  history.push(JSON.stringify(spec));
+  history.push(s);
   if (history.length > 60) history.shift();
   hidx = history.length - 1;
   updateUndoBtns();
 }
+// sliders / digitação: coalesce num único passo (igual scheduleCommit do diagramador)
+function scheduleHistory() {
+  clearTimeout(histT);
+  histT = setTimeout(pushHistory, 400);
+}
 function restoreHistory() {
+  clearTimeout(histT); histT = 0;
   spec = JSON.parse(history[hidx]);
   fillControls(); buildSeries(); sync();
+  if (editMode) editLayer.classList.add('on');
   updateUndoBtns();
 }
-function updateUndoBtns() { $('undo').disabled = hidx <= 0; $('redo').disabled = hidx >= history.length - 1; }
-$('undo').addEventListener('click', () => { if (hidx > 0) { hidx--; restoreHistory(); } });
-$('redo').addEventListener('click', () => { if (hidx < history.length - 1) { hidx++; restoreHistory(); } });
+function updateUndoBtns() {
+  const u = $('btnUndo'), r = $('btnRedo');
+  if (u) u.disabled = hidx <= 0;
+  if (r) r.disabled = hidx >= history.length - 1;
+}
+// fecha rajada pendente antes de voltar (como diagramador commit+undo)
+function doUndo() {
+  clearTimeout(histT); histT = 0;
+  pushHistory();   // grava o estado atual se ainda não estiver no hist
+  if (hidx <= 0) return;
+  hidx--;
+  restoreHistory();
+}
+function doRedo() {
+  clearTimeout(histT); histT = 0;
+  if (hidx >= history.length - 1) return;
+  hidx++;
+  restoreHistory();
+}
+$('btnUndo').addEventListener('click', doUndo);
+$('btnRedo').addEventListener('click', doRedo);
+// ion-icon name="arrow-undo" / "arrow-redo" solid — iguais no diagramador
+$('btnUndo').innerHTML = uiIco('arrow-undo', 16, 'solid');
+$('btnRedo').innerHTML = uiIco('arrow-redo', 16, 'solid');
 addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey) || /input|textarea/i.test(e.target.tagName)) return;
   const k = e.key.toLowerCase();
-  if (k === 'z') { e.preventDefault(); (e.shiftKey ? $('redo') : $('undo')).click(); }
-  else if (k === 'y') { e.preventDefault(); $('redo').click(); }
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); doUndo(); }
+  else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); doRedo(); }
 });
+paintEditToggle();
 
 // inicial maiúscula no rótulo (meses saem capitalizados por padrão na extração)
 const capFirst = (s) => (typeof s === 'string' && s ? s[0].toUpperCase() + s.slice(1) : s);
@@ -1529,29 +1808,110 @@ function midLabel(a, b) {
 
 // ── arraste: editar pontos/barras direto no gráfico ───────────────────────────
 // O #editLayer (transparente, por cima) captura o ponteiro; acha a marca mais
-// próxima, converte o pixel de volta pra valor e re-renderiza. Vertical:
-// line/area/bar/stacked. Horizontal: hbar. Donut edita pela planilha.
+// próxima, converte o pixel de volta pra valor e re-renderiza.
+//   • arraste normal  → só o valor (eixo Y / valor no hbar); rótulo X fixo
+//   • Shift+arraste   → valor + posição livre no eixo de categoria (x.pos),
+//     sem mover o rótulo (março fica em março; o ponto pode ir entre mar/abr)
+// Tooltip mostra X+Y. Donut edita pela planilha.
 const editLayer = $('editLayer'), tip = $('dragTip');
 let drag = null, raf = 0;
 let labelDrag = null;   // { i, lbl, startClientX, startClientY, startDx, moved } — só horizontal
 let nodeDrag = null;    // { n, startY, startOff } — nó do sankey, só vertical
 
+const escTip = (s) => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 // depois de inserir (delta=+1, at=índice novo) ou remover (delta=-1, at=índice
-// removido) um ponto, realinha os índices guardados em x.hidden/x.offsets —
+// removido) um ponto, realinha os índices guardados em x.hidden/x.offsets/x.pos —
 // senão "oculto no índice 5" passa a apontar pro ponto errado.
 function reindexX(at, delta) {
   if (!spec.x) return;
   const shift = (i) => (delta > 0 ? (i >= at ? i + 1 : i) : (i > at ? i - 1 : i));
-  if (Array.isArray(spec.x.hidden)) spec.x.hidden = spec.x.hidden.filter((i) => delta > 0 || i !== at).map(shift);
-  if (spec.x.offsets) {
+  const remapMap = (map) => {
+    if (!map || typeof map !== 'object') return map;
     const o = {};
-    for (const k in spec.x.offsets) {
+    for (const k in map) {
       const i = +k;
       if (delta < 0 && i === at) continue;
-      o[shift(i)] = spec.x.offsets[k];
+      o[shift(i)] = map[k];
     }
-    spec.x.offsets = o;
+    return o;
+  };
+  if (Array.isArray(spec.x.hidden)) spec.x.hidden = spec.x.hidden.filter((i) => delta > 0 || i !== at).map(shift);
+  if (spec.x.offsets) spec.x.offsets = remapMap(spec.x.offsets);
+  if (spec.x.pos) spec.x.pos = remapMap(spec.x.pos);
+}
+
+// fração 0..1 no eixo de categoria sob o cursor (X no vertical, Y no hbar)
+function catFracAt(vb) {
+  const p = chartMeta.plot; if (!p) return 0;
+  const coord = p.horiz ? vb.y : vb.x;
+  const origin = p.horiz ? p.top : p.left;
+  const span = p.horiz ? p.plotH : p.plotW;
+  if (!span) return 0;
+  return Math.max(0, Math.min(1, (coord - origin) / span));
+}
+// se TODOS os rótulos forem números, o X vira escala contínua (tooltip + label)
+function numericXScale() {
+  const vals = (spec.labels || []).map((l) => num(l));
+  if (!vals.length || vals.some((v) => v == null)) return null;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  if (!(max > min)) return null;
+  return { min, max, vals };
+}
+function formatXNum(v) {
+  if (!Number.isFinite(v)) return '';
+  const a = Math.abs(v);
+  if (a >= 1000 || (a > 0 && a < 0.01)) return +v.toPrecision(4);
+  if (Number.isInteger(v)) return String(v);
+  return +v.toPrecision(4);
+}
+// aplica arraste: valor sempre; posição livre no eixo só com Shift
+// freePoints: NÃO tocam labels[]; pontos de categoria usam x.pos
+function applyMarkDrag(vb, { freeX = false } = {}) {
+  const v = roundNice(valueAt(vb), drag.axis);
+  let xDisp = '';
+  if (drag.free) {
+    const fp = (spec.freePoints || []).find((p) => p.id === drag.freeId);
+    if (!fp) return { v, xDisp: 'livre' };
+    fp.data = Array.isArray(fp.data) ? [...fp.data] : [];
+    while (fp.data.length < spec.series.length) fp.data.push(null);
+    fp.data[drag.s] = v;
+    if (freeX) fp.pos = +catFracAt(vb).toFixed(5);
+    xDisp = 'livre';
+    return { v, xDisp };
   }
+  spec.series[drag.s].data[drag.i] = v;
+  xDisp = spec.labels[drag.i] ?? '';
+  if (freeX) {
+    const frac = catFracAt(vb);
+    spec.x = { ...(spec.x || {}), pos: { ...(spec.x?.pos || {}) } };
+    spec.x.pos[drag.i] = +frac.toFixed(5);
+    const xs = drag.xScale;
+    if (xs) {
+      const xv = xs.min + frac * (xs.max - xs.min);
+      const span = xs.max - xs.min;
+      const step = 10 ** Math.floor(Math.log10(span / 200));
+      xDisp = formatXNum(Math.round(xv / step) * step);
+    }
+  }
+  return { v, xDisp };
+}
+// tooltip do arraste: X + Y, com altura pra caber as 2 linhas
+function paintDragTip(e, vb, v, xDisp) {
+  const cat = xDisp ?? (spec.labels[drag.i] ?? '');
+  const val = formatValue(v, formatOf(drag.axis));
+  const horiz = !!chartMeta.plot?.horiz;
+  // hbar: valor no eixo X, categorias no Y
+  const rows = horiz
+    ? [['X', val], ['Y', cat]]
+    : [['X', cat], ['Y', val]];
+  tip.innerHTML = rows.map(([k, t]) =>
+    `<div class="tip-row"><span class="tip-k">${k}</span><span class="tip-v">${escTip(t)}</span></div>`
+  ).join('');
+  tip.hidden = false;
+  tip.style.left = (e.clientX - vb.r.left) + 'px';
+  tip.style.top = (e.clientY - vb.r.top) + 'px';
 }
 
 // tela → coordenadas do viewBox do SVG
@@ -1599,24 +1959,34 @@ function labelZone(vb) {
   if (valZone) { const y = nearestIn(chartMeta.yTicks, vb.x, vb.y); if (y) return y; }
   return null;
 }
-// input inline por cima do rótulo pra renomear. Serve pro eixo X (spec.labels[i])
-// e pros ticks do eixo Y (override em spec.y.tickText[valor]).
+// input inline centrado no rótulo (compensa offset do SVG no framewrap + baseline)
 function editLabel(c) {
   const svg = out.querySelector('svg'); if (!svg) return;
-  const r = svg.getBoundingClientRect();
-  const sx = r.width / spec.width, sy = r.height / spec.height;
+  const wrap = editLayer.parentElement; // .framewrap — posição do input é relativa a ele
+  const wr = wrap.getBoundingClientRect();
+  const sr = svg.getBoundingClientRect();
+  const sx = sr.width / spec.width, sy = sr.height / spec.height;
+  const ox = sr.left - wr.left, oy = sr.top - wr.top;
   const isY = c.axis === 'y' || c.axis === 'y2';
   const yObj = () => (c.axis === 'y2' ? (spec.y2 = spec.y2 || {}) : spec.y);
   const def = isY ? formatValue(c.value, formatOf(c.axis)) : '';
   const cur = isY ? (yObj().tickText?.[c.key] ?? def) : (spec.labels[c.i] ?? '');
+  const tw = c.w || 40, th = c.h || 13;
+  // caixa do texto a partir do anchor + baseline (SVG y = baseline)
+  const boxL = c.anchor === 'end' ? c.cx - tw : c.anchor === 'middle' ? c.cx - tw / 2 : c.cx;
+  const boxT = c.cy - th * 0.85;
+  const centerX = boxL + tw / 2;
+  const centerY = boxT + th / 2;
   const inp = document.createElement('input');
   inp.type = 'text'; inp.className = 'label-edit'; inp.value = cur;
-  const wpx = Math.max(70, (c.w || 40) * sx + 24);
-  inp.style.left = ((c.anchor === 'end' ? c.cx * sx - wpx : c.anchor === 'middle' ? c.cx * sx - wpx / 2 : c.cx * sx)) + 'px';
-  inp.style.top = (c.cy * sy) + 'px';
+  const wpx = Math.max(56, tw * sx + 20);
+  inp.style.left = (ox + centerX * sx) + 'px';
+  inp.style.top = (oy + centerY * sy) + 'px';
   inp.style.width = wpx + 'px';
+  inp.style.fontSize = Math.max(11, th * sy) + 'px';
   if (isY) inp.style.textAlign = 'right';
-  editLayer.parentElement.appendChild(inp);
+  else if (c.anchor === 'middle') inp.style.textAlign = 'center';
+  wrap.appendChild(inp);
   inp.focus(); inp.select();
   let done = false;
   const commit = (save) => {
@@ -1625,7 +1995,7 @@ function editLabel(c) {
       if (isY) {
         const yo = yObj();
         yo.tickText = yo.tickText || {};
-        if (inp.value === def || inp.value === '') delete yo.tickText[c.key];   // volta ao automático
+        if (inp.value === def || inp.value === '') delete yo.tickText[c.key];
         else yo.tickText[c.key] = inp.value;
       } else {
         spec.labels[c.i] = inp.value;
@@ -1635,7 +2005,7 @@ function editLabel(c) {
     inp.remove();
   };
   inp.addEventListener('keydown', (e) => {
-    e.stopPropagation();   // atalhos globais (⌘Z etc.) não roubam a digitação
+    e.stopPropagation();
     if (e.key === 'Enter') { e.preventDefault(); commit(true); }
     else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
   });
@@ -1690,23 +2060,66 @@ editLayer.addEventListener('pointermove', (e) => {
     if (!raf) raf = requestAnimationFrame(() => { raf = 0; sync({ keepTable: true, keepJson: true }); });
     return;
   }
-  if (!drag) {   // hover: mostra que dá pra pegar (ponto) ou renomear (rótulo)
+  if (!drag) {   // hover: marca / rótulo / fantasmas de inserção
     const vb = toViewBox(e.clientX, e.clientY);
     const onLabel = !!(vb && labelZone(vb));
+    const onMark = !!(vb && (nearestMark(vb.x, vb.y) || nodeZone(vb)));
     editLayer.classList.toggle('can-edit', onLabel);
-    editLayer.classList.toggle('can-drag', !onLabel && !!(vb && (nearestMark(vb.x, vb.y) || nodeZone(vb))));
+    editLayer.classList.toggle('can-drag', !onLabel && onMark);
+    let nextPointGhost = null, nextLabelGhost = null;
+    if (editMode && vb && chartMeta.plot) {
+      const p = chartMeta.plot;
+      const inPlot = vb.x >= p.left && vb.x <= p.right && vb.y >= p.top && vb.y <= p.bottom;
+      const inCat = p.horiz ? vb.x < p.left : vb.y > p.bottom;
+      if (inPlot && !onMark && !onLabel) {
+        const seg = nearestInsertSegment(vb);
+        if (seg) nextPointGhost = { x: seg.x, y: seg.y, frac: seg.frac, left: seg.left, right: seg.right };
+      }
+      if (inCat && !onLabel) {
+        const seg = nearestLabelSegment(vb);
+        if (seg) nextLabelGhost = { x: seg.x, y: seg.y, insertAt: seg.insertAt, left: seg.left, right: seg.right };
+      }
+    }
+    const sameP = insertGhost && nextPointGhost
+      && Math.abs(insertGhost.x - nextPointGhost.x) < 0.5
+      && Math.abs(insertGhost.y - nextPointGhost.y) < 0.5;
+    const sameL = labelInsertGhost && nextLabelGhost
+      && Math.abs(labelInsertGhost.x - nextLabelGhost.x) < 0.5
+      && Math.abs(labelInsertGhost.y - nextLabelGhost.y) < 0.5;
+    if (!sameP || !sameL || !!insertGhost !== !!nextPointGhost || !!labelInsertGhost !== !!nextLabelGhost) {
+      insertGhost = nextPointGhost;
+      labelInsertGhost = nextLabelGhost;
+      const svg = out.querySelector('svg');
+      if (svg) {
+        svg.querySelectorAll('.edit-insert-ghost').forEach((el) => el.remove());
+        const NS = 'http://www.w3.org/2000/svg';
+        if (insertGhost) {
+          const g = document.createElementNS(NS, 'circle');
+          g.setAttribute('cx', insertGhost.x); g.setAttribute('cy', insertGhost.y);
+          g.setAttribute('r', 7); g.setAttribute('class', 'edit-insert-ghost');
+          svg.appendChild(g);
+        }
+        if (labelInsertGhost) {
+          const g = document.createElementNS(NS, 'circle');
+          g.setAttribute('cx', labelInsertGhost.x); g.setAttribute('cy', labelInsertGhost.y);
+          g.setAttribute('r', 4); g.setAttribute('class', 'edit-insert-ghost');
+          svg.appendChild(g);
+        }
+      }
+    }
     return;
   }
   const vb = toViewBox(e.clientX, e.clientY);
-  const v = roundNice(valueAt(vb), drag.axis);
-  spec.series[drag.s].data[drag.i] = v;
-  tip.hidden = false;
-  tip.textContent = formatValue(v, formatOf(drag.axis));
-  tip.style.left = (e.clientX - vb.r.left) + 'px';
-  tip.style.top = (e.clientY - vb.r.top) + 'px';
+  const { v, xDisp } = applyMarkDrag(vb, { freeX: e.shiftKey });
+  paintDragTip(e, vb, v, xDisp);
   if (!raf) raf = requestAnimationFrame(() => { raf = 0; sync({ keepTable: true, keepJson: true }); repositionTip(); });
 });
-function repositionTip() { const h = out.querySelector(`.edit-handle[data-mark="${drag.s}:${drag.i}"]`); if (h) h.classList.add('hot'); }
+function repositionTip() {
+  if (!drag) return;
+  const key = drag.free ? `free:${drag.freeId}:${drag.s}` : `${drag.s}:${drag.i}`;
+  const h = out.querySelector(`.edit-handle[data-mark="${key}"]`);
+  if (h) h.classList.add('hot');
+}
 
 editLayer.addEventListener('pointerdown', (e) => {
   if (!editMode) return;
@@ -1730,7 +2143,17 @@ editLayer.addEventListener('pointerdown', (e) => {
     return;
   }
   const m = nearestMark(vb.x, vb.y);
-  if (m) { drag = m; editLayer.setPointerCapture(e.pointerId); editLayer.classList.add('dragging'); }
+  if (m) {
+    drag = {
+      ...m,
+      free: !!m.free,
+      freeId: m.freeId || null,
+      xScale: m.free ? null : numericXScale(),
+    };
+    editLayer.setPointerCapture(e.pointerId);
+    editLayer.classList.add('dragging');
+    paintDragTip(e, vb, m.value, m.free ? 'livre' : (spec.labels[m.i] ?? ''));
+  }
 });
 // solta a captura só se ela ainda estiver ativa — o navegador pode já ter
 // liberado sozinho (ex.: pointercancel), e chamar de novo lança NotFoundError
@@ -1777,27 +2200,66 @@ function endDrag(e) {
 editLayer.addEventListener('pointerup', endDrag);
 editLayer.addEventListener('pointercancel', endDrag);
 
-// adicionar ponto: 2 cliques no gráfico inserem uma coluna (rótulo + valor
-// interpolado em cada série); depois é só arrastar
+// 2 cliques:
+//  · no plot, entre 2 pontos → freePoint (NÃO mexe em labels / eixo X)
+//  · na faixa do eixo X, entre 2 labels → nova categoria no eixo
 editLayer.addEventListener('dblclick', (e) => {
-  if (!editMode || !chartMeta.plot || spec.type === 'donut') return;
+  if (!editMode || !chartMeta.plot) return;
+  if (spec.type === 'donut' || spec.type === 'pie' || spec.type === 'sankey' || spec.type === 'bubble') return;
   const vb = toViewBox(e.clientX, e.clientY);
+  if (!vb) return;
+  if (nearestMark(vb.x, vb.y)) return;
+
   const p = chartMeta.plot;
-  const n = spec.labels.length;
-  const span = (spec.type === 'line' || spec.type === 'area') ? n - 1 : n;
-  const idx = Math.max(0, Math.min(n, Math.round(((vb.x - p.left) / p.plotW) * span + 0.5)));
-  spec.labels.splice(idx, 0, midLabel(spec.labels[idx - 1], spec.labels[idx]));
-  spec.series.forEach((se) => {
-    const a = se.data[idx - 1] ?? se.data[idx] ?? 0, b = se.data[idx] ?? se.data[idx - 1] ?? 0;
-    se.data.splice(idx, 0, roundNice((a + b) / 2));
+  const inCat = p.horiz ? vb.x < p.left : vb.y > p.bottom;
+  const inPlot = vb.x >= p.left && vb.x <= p.right && vb.y >= p.top && vb.y <= p.bottom;
+
+  // —— inserir rótulo no eixo X (entre 2 labels) ——
+  if (inCat) {
+    const seg = nearestLabelSegment(vb);
+    if (!seg) { flash('2 cliques entre dois rótulos do eixo X.', true); return; }
+    const { left, right, insertAt } = seg;
+    const name = midLabel(spec.labels[left.i], spec.labels[right.i]) || '';
+    spec.labels.splice(insertAt, 0, name);
+    spec.series.forEach((se) => {
+      const va = se.data[left.i], vb_ = se.data[right.i];
+      const a = va != null ? va : (vb_ ?? 0);
+      const b = vb_ != null ? vb_ : (va ?? 0);
+      se.data.splice(insertAt, 0, roundNice((a + b) / 2));
+    });
+    reindexX(insertAt, +1);
+    labelInsertGhost = null;
+    sync(); pushHistory();
+    flash('Rótulo adicionado no eixo X.');
+    return;
+  }
+
+  // —— freePoint no meio da linha (eixo X intocado) ——
+  if (!inPlot || spec.type === 'candle') return;
+  const seg = nearestInsertSegment(vb);
+  if (!seg) { flash('2 cliques entre dois pontos da linha.', true); return; }
+  const { left, right, frac } = seg;
+  // valor por série: interpola pelos vizinhos (categoria ou free)
+  const valOf = (m, sIdx) => {
+    if (m.free) {
+      const fp = (spec.freePoints || []).find((p) => p.id === m.freeId);
+      return fp?.data?.[sIdx];
+    }
+    return spec.series[sIdx]?.data?.[m.i];
+  };
+  const data = spec.series.map((_, sIdx) => {
+    const va = valOf(left, sIdx), vb_ = valOf(right, sIdx);
+    const a = va != null ? va : (vb_ ?? 0);
+    const b = vb_ != null ? vb_ : (va ?? 0);
+    return roundNice((a + b) / 2);
   });
-  reindexX(idx, +1);
+  spec.freePoints = [...(spec.freePoints || []), { id: freePointId(), pos: +frac.toFixed(5), data }];
+  insertGhost = null;
   sync(); pushHistory();
-  flash('Ponto adicionado.');
+  flash('Ponto livre adicionado (eixo X intacto). Shift+arraste pra mover.');
 });
 
-// botão direito: em cima de um RÓTULO do eixo X alterna oculto/visível (o
-// dado continua intacto); em cima de uma MARCA (ponto/barra) remove a coluna
+// botão direito: rótulo X oculta/mostra · freePoint remove · marca de categoria remove coluna
 editLayer.addEventListener('contextmenu', (e) => {
   if (!editMode) return;
   e.preventDefault();
@@ -1812,7 +2274,14 @@ editLayer.addEventListener('contextmenu', (e) => {
     return;
   }
   const m = vb && nearestMark(vb.x, vb.y);
-  if (!m || spec.labels.length <= 2) return;   // mantém ao menos 2 pontos
+  if (!m) return;
+  if (m.free) {
+    spec.freePoints = (spec.freePoints || []).filter((p) => p.id !== m.freeId);
+    sync(); pushHistory();
+    flash('Ponto livre removido.');
+    return;
+  }
+  if (spec.labels.length <= 2) return;   // mantém ao menos 2 categorias
   spec.labels.splice(m.i, 1);
   spec.series.forEach((se) => se.data.splice(m.i, 1));
   reindexX(m.i, -1);

@@ -123,8 +123,22 @@
   }
   aside#sidebar > .sidebar-panel {
     width: 320px;
+    max-width: 100%;
     height: 100%;
     gap: .9rem; /* respiro entre segment principal e o pane ativo */
+    min-width: 0;
+  }
+  /* nada na sidebar pode estourar a largura do painel (tabela CSV, grids, textareas) */
+  aside#sidebar .pane,
+  aside#sidebar details,
+  aside#sidebar details > .body,
+  aside#sidebar .field,
+  aside#sidebar textarea,
+  aside#sidebar input,
+  aside#sidebar select {
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
   @media (prefers-reduced-motion: reduce) {
     aside#sidebar { transition: none; }
@@ -143,6 +157,53 @@
   /* segment Tema (Claro/Escuro) — mesmo gap/ícone */
   #themeSeg button { gap: .35rem; }
   #themeSeg button svg { width: 14px; height: 14px; flex: none; display: block; }
+  /* CSV: Tabela | Código */
+  #csvModeSeg { margin-bottom: .15rem; }
+  #csvModeSeg button { gap: .3rem; font-size: .72rem; }
+  #csvModeSeg button svg { width: 13px; height: 13px; flex: none; display: block; }
+  .csv-table-host {
+    width: 100%; max-width: 100%; min-width: 0;
+    box-sizing: border-box;
+    padding: 12px 10px 18px 14px;
+    /* scroll da planilha fica AQUI — não no painel da sidebar */
+    overflow-x: auto;
+    overflow-y: visible;
+    border: 1px solid var(--hair);
+    border-radius: var(--ctrl-r, 9px);
+    background: color-mix(in srgb, var(--lilac) 5%, transparent);
+  }
+  .csv-table-host[hidden] { display: none !important; }
+  .csv-table-host .tbl-wrap {
+    width: 100% !important;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .csv-table-host .tbl {
+    color: var(--ink);
+    font-size: .72rem;
+    line-height: 1.35;
+  }
+  .csv-table-host .tbl th,
+  .csv-table-host .tbl td {
+    border-color: var(--hair-strong);
+    color: var(--ink);
+    padding: 5px 7px;
+  }
+  .csv-table-host .tbl th,
+  .csv-table-host .tbl .tbl-head-cell {
+    background: color-mix(in srgb, var(--lilac) 14%, var(--ground)) !important;
+    color: var(--ink);
+  }
+  .csv-table-host .tbl th:focus,
+  .csv-table-host .tbl td:focus {
+    outline: 2px solid var(--violet);
+    outline-offset: -2px;
+  }
+  .csv-table-host .tbl-handle {
+    background: var(--ground);
+    box-shadow: 0 0 0 1px var(--hair-strong);
+  }
 
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
 
@@ -236,21 +297,74 @@
     border: 1px solid var(--violet); border-radius: 5px;
     background: var(--ground); color: var(--ink); box-shadow: 0 8px 24px -10px #000;
   }
-  #editToggle { font-stretch: 85%; }
-  #editToggle.on { background: var(--violet); border-color: var(--violet); font-weight: 600; }
+  #editToggle {
+    display: inline-flex; align-items: center; gap: .35rem;
+    font-stretch: 85%;
+  }
+  #editToggle svg { width: 14px; height: 14px; display: block; flex: none; }
+  #editToggle.on { background: var(--violet); border-color: var(--violet); font-weight: 600; color: #fff; }
+  /* undo/redo solid — cor ativa (lilac) vs desativada (lilac fraco); sem só opacity */
+  header nav #btnUndo,
+  header nav #btnRedo {
+    display: grid; place-items: center;
+    width: var(--ctrl-h, 2rem); height: var(--ctrl-h, 2rem); padding: 0;
+    color: var(--lilac);
+  }
+  header nav #btnUndo:hover:not(:disabled),
+  header nav #btnRedo:hover:not(:disabled) { color: var(--ink); }
+  header nav #btnUndo:disabled,
+  header nav #btnRedo:disabled {
+    opacity: 1;
+    color: color-mix(in srgb, var(--lilac) 32%, transparent);
+    cursor: default;
+  }
+  header nav #btnUndo:disabled:hover,
+  header nav #btnRedo:disabled:hover {
+    background: color-mix(in srgb, var(--lilac) 7%, transparent);
+    color: color-mix(in srgb, var(--lilac) 32%, transparent);
+  }
+  header nav #btnUndo svg,
+  header nav #btnRedo svg { width: 16px; height: 16px; display: block; }
+  header nav button:disabled { opacity: .38; cursor: default; }
+  header nav button:disabled:hover { background: color-mix(in srgb, var(--lilac) 7%, transparent); }
   .iconbtn { padding: .3rem .55rem; font-size: 1rem; line-height: 1; }
   .iconbtn:disabled { opacity: .35; cursor: default; }
   .edit-handle { fill: color-mix(in srgb, var(--ink) 70%, transparent); stroke: var(--violet); stroke-width: 2; pointer-events: none; }
   .edit-handle.hot { fill: var(--ink); }
   /* rótulo oculto do eixo X: marquinha fantasma só pra achar e clicar de novo */
   .edit-handle-ghost { fill: none; stroke: var(--violet); stroke-width: 1.5; stroke-dasharray: 2 2; opacity: .6; pointer-events: none; }
+  /* preview do 2× clique: ponto fantasma no meio do segmento (não mexe no eixo) */
+  .edit-insert-ghost {
+    fill: color-mix(in srgb, var(--violet) 45%, transparent);
+    stroke: var(--violet); stroke-width: 1.5; opacity: .55;
+    pointer-events: none;
+  }
   #dragTip {
     position: absolute; z-index: 6; pointer-events: none;
-    padding: .2rem .5rem; border-radius: 5px; font-size: .8rem; font-weight: 600;
-    background: var(--violet); color: #fff; white-space: nowrap;
-    transform: translate(-50%, -140%);
+    min-width: 7.5rem; min-height: 2.85rem;
+    padding: .5rem .7rem; border-radius: 8px;
+    font-size: .78rem; font-weight: 600; line-height: 1.35;
+    background: var(--violet); color: #fff;
+    display: grid; gap: .2rem; align-content: center;
+    white-space: nowrap;
+    box-shadow: 0 10px 28px -12px #000;
+    /* acima do cursor, com folga pra caber X+Y */
+    transform: translate(-50%, calc(-100% - 14px));
   }
   #dragTip[hidden] { display: none; }
+  #dragTip .tip-row {
+    display: flex; gap: .45rem; align-items: baseline; min-height: 1.15em;
+  }
+  #dragTip .tip-k {
+    flex: none; min-width: 1.1em;
+    font-size: .66rem; font-weight: 600; font-stretch: 85%;
+    letter-spacing: .04em; text-transform: uppercase;
+    opacity: .78;
+  }
+  #dragTip .tip-v {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
 
   /* ---------- palco ---------- */
   section.stage {
@@ -386,9 +500,9 @@
     <span class="crumb">Gerador de Relatórios · Paradigma</span>
   </div>
   <nav>
-    <button id="btnOpen" title="Abre um .json salvo antes (ou arraste o arquivo pra janela)">Abrir projeto…</button>
-    <input type="file" id="fileSpec" accept="application/json,.json" hidden>
-    <button type="button" id="btnDownload" class="primary" title="Baixar o gráfico (PNG, SVG ou projeto .json)" aria-haspopup="menu" aria-expanded="false" aria-controls="downloadMenu">Baixar</button>
+    <button type="button" id="btnUndo" title="Desfazer (⌘Z)" aria-label="Desfazer" disabled></button>
+    <button type="button" id="btnRedo" title="Refazer (⌘⇧Z)" aria-label="Refazer" disabled></button>
+    <button type="button" id="btnDownload" title="Baixar o gráfico (PNG, SVG ou projeto .json)" aria-haspopup="menu" aria-expanded="false" aria-controls="downloadMenu">Baixar</button>
   </nav>
 </header>
 <!-- menu do botão "Baixar": PNG / SVG / JSON (projeto editável) — position:fixed, JS ancora no botão -->
@@ -492,18 +606,24 @@
     <details data-sec="csv" open>
       <summary>CSV</summary>
       <div class="body">
-        <textarea id="tsv" spellcheck="false"></textarea>
+        <div class="segment" id="csvModeSeg" role="tablist" aria-label="Modo da planilha">
+          <button type="button" data-csv-mode="tabela" aria-selected="true">Tabela</button>
+          <button type="button" data-csv-mode="codigo" aria-selected="false">Código</button>
+        </div>
+        <div id="csvTableHost" class="csv-table-host"></div>
+        <textarea id="tsv" spellcheck="false" hidden></textarea>
         <button id="btnCsv" title="Baixar os dados em CSV">Baixar CSV</button>
       </div>
     </details>
 
     <details data-sec="spec">
-      <summary>Spec JSON</summary>
+      <summary>Projeto JSON</summary>
       <div class="body">
         <textarea id="json" spellcheck="false"></textarea>
         <div class="row">
-          <button id="btnApply">Aplicar JSON</button>
-          <button id="btnCopy">Copiar</button>
+          <button type="button" id="btnOpen" title="Abre um .json salvo antes (ou arraste o arquivo pra janela)">Abrir .json</button>
+          <input type="file" id="fileSpec" accept="application/json,.json" hidden>
+          <button type="button" id="btnCopy">Copiar</button>
         </div>
       </div>
     </details>
@@ -735,10 +855,7 @@
       </div>
     </div>
     <div class="bar">
-      <button id="editToggle">✎ Editar</button>
-      <button id="undo" class="iconbtn" title="Desfazer (⌘Z)" hidden>↶</button>
-      <button id="redo" class="iconbtn" title="Refazer (⇧⌘Z)" hidden>↷</button>
-      <span class="hint" id="editHint" hidden>arraste os pontos · no rótulo do eixo: clique renomeia, arraste desloca o texto na horizontal, botão-direito oculta/mostra · 2 cliques no gráfico adiciona ponto · botão-direito num ponto remove</span>
+      <button type="button" id="editToggle">Editar</button>
       <span class="sep"></span>
       <label class="toggle">PNG em <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>×</label>
       <span class="hint" id="dims"></span>

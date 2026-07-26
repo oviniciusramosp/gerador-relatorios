@@ -72,6 +72,28 @@
   header nav { justify-self: end; display: flex; gap: .4rem; align-items: center; }
   header nav button:disabled { opacity: .38; cursor: default; }
   header nav button:disabled:hover { background: color-mix(in srgb, var(--lilac) 7%, transparent); }
+  /* undo/redo: ion-icon solid arrow-undo / arrow-redo — cor ativa vs desativada (sem só opacity) */
+  header nav #btnUndo,
+  header nav #btnRedo {
+    display: grid; place-items: center;
+    width: var(--ctrl-h, 2rem); height: var(--ctrl-h, 2rem); padding: 0;
+    color: var(--lilac);
+  }
+  header nav #btnUndo:hover:not(:disabled),
+  header nav #btnRedo:hover:not(:disabled) { color: var(--ink); }
+  header nav #btnUndo:disabled,
+  header nav #btnRedo:disabled {
+    opacity: 1;
+    color: color-mix(in srgb, var(--lilac) 32%, transparent);
+    cursor: default;
+  }
+  header nav #btnUndo:disabled:hover,
+  header nav #btnRedo:disabled:hover {
+    background: color-mix(in srgb, var(--lilac) 7%, transparent);
+    color: color-mix(in srgb, var(--lilac) 32%, transparent);
+  }
+  header nav #btnUndo svg,
+  header nav #btnRedo svg { width: 16px; height: 16px; display: block; }
   /* painel do Salvar/Salvo — wrap sempre visível. Hover só mostra .save-tip
      quando há vínculo (data-linked). Nested button no tip é inválido → tip irmão. */
   .save-source-wrap {
@@ -928,6 +950,9 @@
     padding: .35rem .5rem; border: 1px solid var(--hair); border-radius: var(--r);
     background: transparent; color: var(--muted); cursor: pointer; font-size: .76rem; font-stretch: 85%;
   }
+  /* Título + Legenda: cada um toma metade da largura do popover (flex, sem wrap). */
+  #imgPanel .img-tc-row { flex-wrap: nowrap; gap: .4rem; }
+  #imgPanel .img-tc-row .fieldbtn { flex: 1; min-width: 0; justify-content: center; }
   .fieldbtn svg { width: 16px; height: 16px; flex: none; color: var(--lilac); }
   .fieldbtn:hover { border-color: var(--hair-strong); color: var(--ink); }
   /* botão "Remover": texto + trash-outline na mesma cor vermelha */
@@ -1257,6 +1282,8 @@
   #idxPanel .field, #resumoPanel .field, #blockStylePanel .field, aside .field {
     display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted);
   }
+  /* display:grid do .field vence o [hidden] da UA — mesmo bug da sidebar (logoopts/bgxform). */
+  #imgPanel .field[hidden] { display: none; }
   #blockcol { margin-top: .5rem; }
   #blockcol[hidden] { display: none; }
   /* cadeado do bloco na coluna direita (sidebar Conteúdo) — mesmo .fieldbtn do painel de imagem */
@@ -1452,8 +1479,8 @@
     </label>
   </div>
   <nav>
-    <button id="btnUndo" title="Desfazer (⌘Z)" disabled>↩︎</button>
-    <button id="btnRedo" title="Refazer (⌘⇧Z)" disabled>↪︎</button>
+    <button type="button" id="btnUndo" title="Desfazer (⌘Z)" aria-label="Desfazer" disabled></button>
+    <button type="button" id="btnRedo" title="Refazer (⌘⇧Z)" aria-label="Refazer" disabled></button>
     <div class="save-source-wrap" id="saveSourceWrap" data-linked="0">
       <button type="button" id="btnSaveSource" class="primary" aria-describedby="btnSaveSourceTip" aria-haspopup="true">
         <span class="save-ico warn" aria-hidden="true"></span>
