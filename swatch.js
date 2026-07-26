@@ -10,11 +10,15 @@
  *               assumida 100%) OU "rgba(r,g,b,a)"/"rgb(r,g,b)" de entrada — nesse caso o hex vira
  *               o destaque e o alpha inicializa o slider.
  *     opts    — { opacity:false } esconde a seção de Opacidade inteira (pra host que já tem seu
- *               próprio controle, ex. o watermark do gráfico). Default (sem opts): opacity=true.
+ *               próprio controle, ex. o watermark do gráfico).
+ *               { paper:true } preview/HEX com base branca sob a cor com alpha (como o papel
+ *               do PDF) em vez do xadrez — use no fundo do Callout. Default: opacity=true.
  *
  * Quatro seções: (1) cores nomeadas da marca, (2) complementares por tom, (3) HEX manual,
  * (4) opacidade (opcional). O CSS é injetado uma vez pelo próprio módulo — nenhum host precisa
  * declarar nada. */
+
+import { enhanceRange } from './range-snap.js';
 
 export const NAMED_COLORS = [
   { name: 'Paradigma Aqua', hex: '#29E899' },
@@ -25,20 +29,23 @@ export const NAMED_COLORS = [
   { name: 'HYPE Green', hex: '#97FCE4' },
   { name: 'XRP Grey', hex: '#23292F' },
 ];
-// complementares: 12 slots da marca + 8 extras + preto/branco puros, exibidas por
-// tom (matiz; quase-cinzas no fim — hueOf joga branco e preto pras duas últimas casas)
-const SWATCHES = ['#554FFE', '#01AD6F', '#C08600', '#9283E3', '#CE5249', '#0092C6',
-  '#C15AA7', '#6F9D17', '#0695B5', '#CC4F6E', '#9B61C9', '#DC701C',
-  '#4E39FF', '#29E899', '#BAB1FF', '#E8B029', '#22B279', '#7FD1F5', '#94A3B8', '#0E0C1B',
-  '#FFFFFF', '#000000'];
-const hueOf = (hex) => {
-  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
-  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
-  if (d < 0.04) return 1000 + (1 - mx) * 100;           // cinza/preto/branco no fim, por lightness
-  let h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  return (h * 60 + 360) % 360;
-};
-const TONAL = [...SWATCHES].sort((a, b) => hueOf(a) - hueOf(b));
+// complementares: 11 famílias × (clara, padrão, escura). Ordem fixa no arco
+// (não sort por matiz) — a grade tem 9 colunas = 3 famílias por linha
+// (clara|padrão|escura × 3), ocupando a largura do popover.
+const SWATCH_VARIANTS = ['clara', 'padrão', 'escura'];
+const SWATCH_FAMILIES = [
+  { name: 'Vermelha',     colors: ['#FCA5A5', '#EF4444', '#9F1239'] },
+  { name: 'Laranja',      colors: ['#FDBA74', '#F97316', '#9A3412'] },
+  { name: 'Amarela',      colors: ['#FDE68A', '#EAB308', '#A16207'] },
+  { name: 'Verde limão',  colors: ['#D9F99D', '#84CC16', '#3F6212'] },
+  { name: 'Verde',        colors: ['#86EFAC', '#16A34A', '#14532D'] },
+  { name: 'Azul',         colors: ['#93C5FD', '#2563EB', '#1E3A8A'] },
+  { name: 'Roxo',         colors: ['#C4B5FD', '#7C3AED', '#4C1D95'] },
+  { name: 'Lilás',        colors: ['#E9D5FF', '#C084FC', '#86198F'] },
+  { name: 'Rosa',         colors: ['#FBCFE8', '#EC4899', '#9D174D'] },
+  { name: 'Cinza',        colors: ['#E2E8F0', '#94A3B8', '#334155'] },
+  { name: 'Preto/branco', colors: ['#FFFFFF', '#1F2937', '#000000'] },
+];
 
 export const normHex = (v) => {
   let s = String(v).trim().replace(/^#/, '');
@@ -80,6 +87,7 @@ let swatchPop = null;
 export function openSwatchPop(anchor, pick, current, opts) {
   closeSwatchPop();
   const showOpacity = !(opts && opts.opacity === false);
+  const paperBase = !!(opts && opts.paper); // base branca sob alpha (papel do PDF)
   const parsed = parseColor(current);
   const cur = parsed ? parsed.hex : null;
   let alpha = parsed ? parsed.alpha : 1;   // 0..1 — só o slider de Opacidade muda isso depois
@@ -87,7 +95,7 @@ export function openSwatchPop(anchor, pick, current, opts) {
   // de sempre); a opacidade em si é um eixo independente do matiz, por isso não reseta ao trocar de cor.
   const choose = (hex) => { pick(withAlpha(hex, alpha)); closeSwatchPop(); };
   swatchPop = document.createElement('div');
-  swatchPop.className = 'swatch-pop';
+  swatchPop.className = 'swatch-pop' + (paperBase ? ' paper-base' : '');
 
   const section = (label) => { const h = document.createElement('div'); h.className = 'sp-label'; h.textContent = label; swatchPop.append(h); };
   const chip = (hex) => {
@@ -113,7 +121,14 @@ export function openSwatchPop(anchor, pick, current, opts) {
 
   section('Complementares');
   const grid = document.createElement('div'); grid.className = 'sp-grid';
-  TONAL.forEach((hex) => { const b = chip(hex); b.title = hex; b.onclick = () => choose(hex); grid.append(b); });
+  SWATCH_FAMILIES.forEach(({ name, colors }) => {
+    colors.forEach((hex, i) => {
+      const b = chip(hex);
+      b.title = `${name} ${SWATCH_VARIANTS[i]} · ${hex}`;
+      b.onclick = () => choose(hex);
+      grid.append(b);
+    });
+  });
   swatchPop.append(grid);
 
   section('HEX');
@@ -122,18 +137,18 @@ export function openSwatchPop(anchor, pick, current, opts) {
   inp.type = 'text'; inp.placeholder = '#RRGGBB'; inp.value = cur || '';
   inp.spellcheck = false; inp.setAttribute('aria-label', 'Cor em HEX');
   const preview = document.createElement('span'); preview.className = 'sp-swatch';
-  // pinta o preview com o hex do campo + a opacidade atual do slider. <100% liga o fundo
-  // xadrez (classe .checker, CSS injetado abaixo) — sem ele uma cor a 20% fica visualmente
-  // idêntica a "sem cor" contra o fundo quase-preto do popover.
+  // pinta o preview com o hex do campo + a opacidade atual do slider.
+  // <100%: xadrez (default) OU base branca (opts.paper) — no callout a base branca
+  // mostra como a tinta a 10% fica no papel do PDF.
   const paintPreview = () => {
     const h = normHex(inp.value);
+    preview.classList.remove('checker', 'paper');
     if (h && alpha < 1) {
       const r = parseInt(h.slice(1, 3), 16), g = parseInt(h.slice(3, 5), 16), b = parseInt(h.slice(5, 7), 16);
       preview.style.background = '';
       preview.style.setProperty('--sp-ov', `rgba(${r},${g},${b},${alpha})`);
-      preview.classList.add('checker');
+      preview.classList.add(paperBase ? 'paper' : 'checker');
     } else {
-      preview.classList.remove('checker');
       preview.style.background = h || 'transparent';
     }
   };
@@ -151,11 +166,13 @@ export function openSwatchPop(anchor, pick, current, opts) {
     slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1';
     slider.value = String(Math.round(alpha * 100));
     slider.setAttribute('aria-label', 'Opacidade');
+    slider.setAttribute('data-snaps', '0,10,25,50,75,100');
     const val = document.createElement('span'); val.className = 'sp-opval'; val.textContent = slider.value + '%';
     // decisão: aplica em tempo real no 'input' (sem fechar o popover) — diferente de choose(),
     // que aplica+fecha. Fechar a cada tick do slider tornaria o ajuste inutilizável; manter
     // aberto deixa ver o preview mudando ao vivo, como um color picker moderno. Modula a cor
     // ATUAL (`cur`), já que trocar de matiz aqui dentro (chip/nomeada/hex) fecha o popover.
+    // enhanceRange usa capture: o ímã roda antes deste handler e o value já vem snappado.
     slider.oninput = () => {
       alpha = +slider.value / 100;
       val.textContent = slider.value + '%';
@@ -164,6 +181,7 @@ export function openSwatchPop(anchor, pick, current, opts) {
     };
     oprow.append(slider, val);
     swatchPop.append(oprow);
+    enhanceRange(slider);
   }
 
   document.body.append(swatchPop);
@@ -186,7 +204,7 @@ export function closeSwatchPop() {
   const s = document.createElement('style'); s.id = 'swatch-css';
   s.textContent = `
   .swatch { flex: 0 0 auto; width: 1.5rem; height: 1.5rem; padding: 0; border-radius: 5px; border: 1px solid var(--hair-strong); cursor: pointer; background: transparent; }
-  .colorfield { width: 100%; height: 2rem; padding: 0; border-radius: var(--r); border: 1px solid var(--hair-strong); cursor: pointer; }
+  .colorfield { width: 100%; height: var(--ctrl-h, 2rem); padding: 0; border-radius: var(--ctrl-r, var(--r)); border: 1px solid var(--hair-strong); cursor: pointer; }
   .colorfield:hover, .swatch:hover { outline: 2px solid var(--violet); outline-offset: 1px; }
   .swatch-pop {
     position: fixed; z-index: 70; width: 15rem; max-height: 80vh; overflow-y: auto;
@@ -209,10 +227,17 @@ export function closeSwatchPop() {
       repeating-conic-gradient(#6b6b6b 0% 25%, #3a3a3a 0% 50%);
     background-size: auto, 8px 8px;
   }
-  /* trilha F: colunas de largura FIXA (não 1fr) — chip não estica pra preencher a coluna,
-     fica do mesmo tamanho de .sp-swatch (nomeadas/preview HEX). Sobra de espaço à direita
-     da grade é esperada (mesmo alinhamento à esquerda das outras seções). */
-  .sp-grid { display: grid; grid-template-columns: repeat(6, 1.15rem); gap: .3rem; }
+  /* base branca (papel) + cor com alpha por cima — preview fiel ao PDF */
+  .sp-swatch.paper, .swatch.paper {
+    background-image: linear-gradient(var(--sp-ov, transparent), var(--sp-ov, transparent)),
+      linear-gradient(#ffffff, #ffffff);
+    background-color: #fff;
+  }
+  /* complementares: 9 colunas fixas (3 famílias × clara|padrão|escura por linha).
+     justify-content: space-between espalha as colunas na largura do popover
+     (antes sobrava faixa vazia à direita com 6 colunas). Chip mantém o mesmo
+     tamanho de .sp-swatch (nomeadas/preview HEX). */
+  .sp-grid { display: grid; grid-template-columns: repeat(9, 1.15rem); row-gap: .3rem; column-gap: .3rem; justify-content: space-between; }
   /* borda forte: sem ela o chip preto some no fundo do popover (que é quase preto) */
   .sp-chip { width: 1.15rem; height: 1.15rem; padding: 0; border-radius: 5px; border: 1px solid var(--hair-strong); cursor: pointer; }
   .sp-chip:hover { outline: 2px solid var(--violet); outline-offset: 1px; }
@@ -223,7 +248,8 @@ export function closeSwatchPop() {
   /* trilha F: slider de opacidade — valor em % alinhado à direita, largura tabular pra não
      "pular" o slider ao lado quando o número muda de dígito (9% → 10%). */
   .sp-op { display: flex; align-items: center; gap: .5rem; }
-  .sp-op input[type="range"] { flex: 1; accent-color: var(--violet); }
+  .sp-op .range-snap { flex: 1; min-width: 0; }
+  .sp-op input[type="range"] { flex: 1; width: 100%; accent-color: var(--violet); }
   .sp-opval { flex: 0 0 auto; min-width: 2.4em; text-align: right; font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }`;
   document.head.append(s);
 })();

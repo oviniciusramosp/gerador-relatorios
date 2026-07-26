@@ -1,8 +1,13 @@
 /* Editor de linhas do tempo — liga os controles ao renderer puro (timeline.js). */
-import { renderTimeline, layoutSize, DEFAULTS, sortEvents, toLines, parseLines } from './timeline.js';
-import { ICONS, iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
+import { renderTimeline, layoutSize, DEFAULTS, sortEvents, mergeEvents, parseSliceText, toLines, parseLines } from './timeline.js';
+import { registerIcons } from './timeline-icons.js';
+import { openIconPop, paintIconBtn } from './icon-pop.js';   // picker compartilhado com o gráfico de bolhas
+import { IONICONS_LIB } from './ionicons-lib.js';   // 421 ícones outline (gerado; ver tools/gen-ionicons.mjs)
+registerIcons(IONICONS_LIB);
 import { openSwatchPop } from './swatch.js';
 import { logoPickSvg } from './logos.js';
+import { enhanceAll } from './range-snap.js';
+import { initFeedback } from './feedback.js';
 
 const $ = (id) => document.getElementById(id);
 const out = $('out');
@@ -83,7 +88,7 @@ function buildEvents() {
     fields.className = 'ev-fields';
     const date = mkInput(ev.date ?? '', 'Data (ex.: Fevereiro/2023)', (v) => { ev.date = v; });
     date.classList.add('ev-date');
-    const text = mkInput(ev.text ?? '', 'Descrição do evento', (v) => { ev.text = v; });
+    const text = mkArea(ev.text ?? '', 'Descrição do evento (Enter quebra a linha)', (v) => { ev.text = v; });
     fields.append(date, text);
 
     const right = document.createElement('div');
@@ -130,6 +135,17 @@ function mkBtn(label, title, onclick, disabled) {
   b.type = 'button'; b.textContent = label; b.title = title; b.disabled = !!disabled; b.onclick = onclick;
   return b;
 }
+// textarea em vez de input pro texto do evento: Enter insere quebra de linha, que
+// o renderer respeita (wrap() quebra em \n antes de quebrar por largura). Cresce
+// junto com o conteúdo pra não esconder linha.
+function mkArea(value, aria, oninput) {
+  const el = document.createElement('textarea');
+  el.value = value; el.rows = 1; el.setAttribute('aria-label', aria); el.placeholder = aria;
+  const grow = () => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; };
+  el.oninput = () => { oninput(el.value); grow(); sync({ keepList: true }); };
+  requestAnimationFrame(grow);
+  return el;
+}
 function mkInput(value, aria, oninput) {
   const el = document.createElement('input');
   el.type = 'text'; el.value = value; el.setAttribute('aria-label', aria); el.placeholder = aria;
@@ -142,69 +158,11 @@ function reorder(from, to) {
   spec.events.splice(to, 0, ev);
   sync();
 }
-function paintIconBtn(btn, key) {
-  btn.innerHTML = isTextIcon(key)
-    ? `<span class="badge">${textIconLabel(key).replace(/&/g, '&amp;').replace(/</g, '&lt;')}</span>`
-    : key && ICONS[key] ? iconSvg(key, { x: 0, y: 0, w: 24, h: 24 }, 'currentColor', 1.8).replace(/ x="0" y="0"/, '')
-    : '<span class="badge">—</span>';
-}
 
 $('btnAdd').addEventListener('click', () => { spec.events.push({ date: '', text: '' }); sync(); });
 $('btnSort').addEventListener('click', () => { spec.events = sortEvents(spec.events); sync(); flash('Eventos ordenados por data.'); });
 
 $('lines').addEventListener('input', (e) => { spec.events = parseLines(e.target.value); sync({ keepLines: true }); });
-
-// ── picker de ícone ──────────────────────────────────────────────────────────
-let iconPop = null;
-function closeIconPop() {
-  if (!iconPop) return;
-  removeEventListener('pointerdown', outsideIcon);
-  iconPop.remove(); iconPop = null;
-}
-function outsideIcon(e) { if (iconPop && !iconPop.contains(e.target)) closeIconPop(); }
-function openIconPop(anchor, pick, current) {
-  closeIconPop();
-  iconPop = document.createElement('div');
-  iconPop.className = 'icon-pop';
-  const label = (t) => { const d = document.createElement('div'); d.className = 'ip-label'; d.textContent = t; iconPop.append(d); };
-
-  label('Ícone');
-  const grid = document.createElement('div');
-  grid.className = 'ip-grid';
-  const none = mkBtn('—', 'Sem ícone', () => { pick(''); closeIconPop(); });
-  if (!current) none.classList.add('on');
-  grid.append(none);
-  for (const [key, ic] of Object.entries(ICONS)) {
-    const b = document.createElement('button');
-    b.type = 'button'; b.title = ic.label;
-    b.innerHTML = iconSvg(key, { x: 0, y: 0, w: 24, h: 24 }, 'currentColor', 1.8).replace(/ x="0" y="0"/, '');
-    if (key === current) b.classList.add('on');
-    b.onclick = () => { pick(key); closeIconPop(); };
-    grid.append(b);
-  }
-  iconPop.append(grid);
-
-  label('Sigla no lugar do ícone');
-  const row = document.createElement('div');
-  row.className = 'ip-row';
-  const inp = document.createElement('input');
-  inp.type = 'text'; inp.placeholder = 'ex.: S&P, ETF'; inp.maxLength = 6;
-  inp.value = isTextIcon(current) ? textIconLabel(current) : '';
-  inp.setAttribute('aria-label', 'Sigla no nó');
-  const ok = mkBtn('Usar', 'Usar a sigla', () => {
-    const v = inp.value.trim();
-    if (v) { pick('txt:' + v); closeIconPop(); }
-  });
-  inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); ok.click(); } };
-  row.append(inp, ok);
-  iconPop.append(row);
-
-  document.body.append(iconPop);
-  const r = anchor.getBoundingClientRect(), pw = iconPop.offsetWidth, ph = iconPop.offsetHeight;
-  iconPop.style.left = Math.max(6, Math.min(r.left, innerWidth - pw - 6)) + 'px';
-  iconPop.style.top = (r.bottom + 4 + ph > innerHeight ? Math.max(6, r.top - 4 - ph) : r.bottom + 4) + 'px';
-  setTimeout(() => addEventListener('pointerdown', outsideIcon), 0);
-}
 
 // ── controles de formato ─────────────────────────────────────────────────────
 $('layoutPicker').addEventListener('click', (e) => {
@@ -299,6 +257,25 @@ $('btnCopy').addEventListener('click', async () => {
   await navigator.clipboard.writeText(JSON.stringify(spec, null, 2)); flash('Spec copiada.');
 });
 
+// Salvar/abrir projeto: o spec JÁ é o estado inteiro (é o que o Aplicar JSON
+// consome), então "arquivo do projeto" é o mesmo spec num .json baixável.
+$('btnSave').addEventListener('click', () => {
+  download(new Blob([JSON.stringify(spec, null, 2)], { type: 'application/json' }), `${slug(spec.title)}.json`);
+  flash('Projeto salvo (.json).');
+});
+$('btnOpen').addEventListener('click', () => $('fileSpec').click());
+$('fileSpec').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) openSpecFile(f); e.target.value = ''; });
+
+async function openSpecFile(file) {
+  let parsed;
+  try { parsed = JSON.parse(await file.text()); }
+  catch (err) { return flash('Arquivo inválido: ' + err.message, true); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return flash('Arquivo não é um projeto de linha do tempo.', true);
+  spec = { ...structuredClone(DEFAULTS), ...parsed };
+  fillControls(); sync();
+  flash('Projeto carregado.');
+}
+
 function fillControls() {
   spec.show = { ...DEFAULTS.show, ...spec.show };
   for (const id of ['theme', 'title', 'subtitle', 'source', 'fontScale', 'nodeSize', 'gap', 'width', 'colWidth']) {
@@ -373,9 +350,45 @@ $('btnSvg').addEventListener('click', async () => {
   } catch (e) { flash('Falhou: ' + e.message, true); }
 });
 
-// ponytail: sem modo ?embed aqui. Pra mandar a timeline direto pro relatório
-// bastaria repetir o postMessage('pdgm-chart-svg') do graficos.js + uma opção no
-// menu Adicionar Imagem da diagramação — 15 linhas, quando for pedido.
+// ── modo embutido (iframe da Diagramação) ────────────────────────────────────
+// Mesmo protocolo do graficos.js (pdgm-chart-ready / -load / -svg): a timeline
+// entra no relatório como imagem, e o spec vai junto pra poder reabrir e editar.
+if (new URLSearchParams(location.search).has('embed')) {
+  const b = document.createElement('button');
+  b.id = 'btnImport'; b.className = 'primary'; b.textContent = 'Importar para o relatório →';
+  document.querySelector('header nav').prepend(b);
+  b.addEventListener('click', async () => {
+    flash('Gerando SVG…');
+    try {
+      const svg = await svgString(spec);
+      const { w, h } = layoutSize(spec);
+      parent.postMessage({ type: 'pdgm-chart-svg', kind: 'timeline', svg, spec, title: spec.title, w, h }, location.origin);
+      await importConfirmado();
+      flash('Importado.');
+    } catch (e) { flash('Falhou: ' + e.message, true); }
+  });
+  addEventListener('message', (e) => {
+    if (e.origin !== location.origin || e.data?.type !== 'pdgm-chart-load' || !e.data.spec) return;
+    spec = { ...structuredClone(DEFAULTS), ...e.data.spec };
+    fillControls(); sync();
+  });
+  parent.postMessage({ type: 'pdgm-chart-ready' }, location.origin);   // só agora dá pra receber spec
+}
+
+// "Importado." só depois que a diagramação confirma (mesmo aperto de mão do
+// graficos.js): postMessage não avisa quando ninguém escuta do outro lado.
+function importConfirmado() {
+  return new Promise((ok, falhou) => {
+    const fim = (fn, arg) => { clearTimeout(t); removeEventListener('message', ouvir); fn(arg); };
+    const ouvir = (e) => {
+      if (e.origin !== location.origin) return;
+      if (e.data?.type === 'pdgm-chart-ok') fim(ok);
+      else if (e.data?.type === 'pdgm-chart-fail') fim(falhou, new Error(e.data.error || 'a diagramação recusou'));
+    };
+    const t = setTimeout(() => fim(falhou, new Error('o relatório não confirmou — recarregue a aba da diagramação (⌘⇧R) e importe de novo')), 8000);
+    addEventListener('message', ouvir);
+  });
+}
 
 // ── Converter imagem em linha do tempo (CLI do Claude, via server local) ─────
 $('btnIA').addEventListener('click', () => $('fileIA').click());
@@ -393,7 +406,8 @@ drop.addEventListener('drop', (e) => {
   const f = e.dataTransfer.files?.[0];
   if (!f) return;
   e.preventDefault(); drop.classList.remove('over');
-  if (f.type.startsWith('image/')) convertImage(f);
+  if (f.name.endsWith('.json')) openSpecFile(f);        // .json reabre o projeto
+  else if (f.type.startsWith('image/')) convertImage(f);
 });
 
 function iaShow() {
@@ -414,23 +428,84 @@ function iaError(msg) {
   $('iaClose').hidden = false;
 }
 
+// A ferramenta Read do CLI REDUZ imagem com lado maior acima de ~1568px. Numa
+// timeline de infográfico (862×1825) o texto de 12px vira ilegível e o modelo
+// TROCA datas e valores — medido: 21 eventos, ~40% errados ("HLP perde US$ 40
+// milhões" no lugar de "lucra"). Fatiado em pedaços de 1400px na resolução
+// NATIVA, a mesma imagem sai 10/10 exata. Daí fatiar aqui, no cliente, onde o
+// canvas já existe (o server é Node puro, sem biblioteca de imagem).
+// 950px: MEDIDO — fatia de 950px (10 eventos) fecha em ~28s; de 1400px (16
+// eventos) passou de 2 min e morreu no teto. O tempo cresce muito mais que
+// linearmente com a densidade da fatia, então fatia pequena e mais chamadas.
+const SLICE_MAX = 950;     // lado maior de cada fatia
+const SLICE_OVER = 180;    // sobreposição: evento cortado numa fatia aparece inteiro na vizinha
+
+async function sliceImage(file) {
+  const bmp = await createImageBitmap(file);
+  const horiz = bmp.width > bmp.height;                 // fatia ao longo do lado MAIOR
+  const long = horiz ? bmp.width : bmp.height;
+  const short = horiz ? bmp.height : bmp.width;
+  // lado curto acima do limite é o único caso em que reduzir é inevitável
+  const k = Math.min(1, 1500 / short);
+  if (k === 1 && long <= SLICE_MAX) return null;        // já cabe inteira: manda o arquivo original
+  const win = Math.round(SLICE_MAX / k);                // janela na escala da imagem original
+  const step = Math.max(1, win - Math.round(SLICE_OVER / k));
+  const parts = [];
+  for (let p = 0; p < long; p += step) {
+    const len = Math.min(win, long - p);
+    const c = document.createElement('canvas');
+    c.width = Math.round((horiz ? len : short) * k);
+    c.height = Math.round((horiz ? short : len) * k);
+    c.getContext('2d').drawImage(bmp,
+      horiz ? p : 0, horiz ? 0 : p, horiz ? len : short, horiz ? short : len,
+      0, 0, c.width, c.height);
+    parts.push(await new Promise((r) => c.toBlob(r, 'image/png')));
+    if (p + len >= long) break;
+  }
+  bmp.close?.();
+  return parts;
+}
+
 async function convertImage(file) {
   const timer = iaShow();
+  const title = $('iaOverlay').querySelector('.ia-title');
   try {
-    const r = await fetch('/api/timeline', {
-      method: 'POST', headers: { 'content-type': file.type || 'image/png' }, body: file,
-    });
-    const data = await r.json();
-    if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
-    if (!data.spec?.events?.length) throw new Error('o Claude não achou eventos na imagem');
-    // o que a IA manda é CONTEÚDO (eventos + textos); a forma continua sua
-    spec.events = data.spec.events;
-    ['title', 'subtitle', 'source'].forEach((k) => { if (data.spec[k]) spec[k] = data.spec[k]; });
-    if (data.spec.layout) spec.layout = data.spec.layout;
-    spec.show = { ...spec.show, title: !!spec.title, subtitle: !!spec.subtitle };
+    const parts = await sliceImage(file);
+    // uma chamada POR FATIA, em sequência: as duas juntas na mesma sessão do CLI
+    // passam de 2 min (medido), cada fatia sozinha fecha em ~30s
+    const lists = [], meta = {};
+    let custo = 0;
+    for (let i = 0; i < (parts ? parts.length : 1); i++) {
+      if (parts) title.textContent = `Lendo a fatia ${i + 1} de ${parts.length} com o Claude…`;
+      const qs = parts ? `?part=${i + 1}&parts=${parts.length}` : '';
+      const body = parts ? parts[i] : file;
+      const r = await fetch('/api/timeline' + qs, {
+        method: 'POST', headers: { 'content-type': 'image/png' }, body,
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
+      const { meta: m, events } = parseSliceText(data.text);
+      lists.push(events);
+      custo += data.cost || 0;
+      // título/subtítulo só existem na fatia que tem o cabeçalho
+      ['title', 'subtitle', 'source', 'layout'].forEach((k) => { if (m[k] && !meta[k]) meta[k] = m[k]; });
+    }
+    const events = sortEvents(mergeEvents(lists));
+    if (!events.length) throw new Error('o Claude não achou eventos na imagem');
+    // Imagem nova = timeline DO ZERO: todo o conteúdo anterior sai (eventos,
+    // título, subtítulo, fonte), inclusive o que a imagem nova não tem — senão
+    // sobra título da timeline passada em cima dos eventos novos. O FORMATO fica
+    // (tema, layout, cores, logo, medidas): aquilo é o padrão da casa que você
+    // ajustou, não conteúdo importado.
+    spec.events = events;
+    spec.title = meta.title || '';
+    spec.subtitle = meta.subtitle || '';
+    spec.source = meta.source || '';
+    if (meta.layout) spec.layout = meta.layout;
+    spec.show = { ...spec.show, title: !!spec.title, subtitle: !!spec.subtitle, source: !!spec.source };
     $('iaOverlay').hidden = true;
     fillControls(); sync();
-    flash(`${spec.events.length} eventos importados${data.cost ? ` · US$ ${data.cost.toFixed(3)}` : ''}.`);
+    flash(`${events.length} eventos importados${custo ? ` · US$ ${custo.toFixed(3)}` : ''}.`);
   } catch (e) {
     iaError(String(e.message || e));
   } finally { clearInterval(timer); }
@@ -459,5 +534,7 @@ function flash(msg, isError = false) {
 }
 
 // ── start ────────────────────────────────────────────────────────────────────
+initFeedback(); // botão Reportar → issue no GitHub (prefill)
+enhanceAll();   // ticks + ímã nos range com data-snaps (não mexe em defaults)
 fillControls();
 sync();

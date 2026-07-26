@@ -24,7 +24,7 @@
  * INTEIRO igual serializeDoc — mesmo motivo: não hardcodear onde imagem mora.
  */
 
-import { makeZip, readZip } from './zip-lite.js';
+import { makeZip, readZip, listZipEntries } from './zip-lite.js';
 
 const MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
 const extFor = (mime) => MIME_EXT[mime] || 'bin';
@@ -47,9 +47,14 @@ function base64ToBytes(b64) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
 }
+// Chunked: `bin += fromCharCode(byte)` byte-a-byte é O(n²) e trava o main thread
+// em zips grandes (vários SVG de ~1 MB) — o open parecia "não fazer nada".
 function bytesToBase64(bytes) {
+  const CHUNK = 0x8000;
   let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CHUNK, bytes.length)));
+  }
   return btoa(bin);
 }
 
@@ -70,39 +75,291 @@ function extractMedia(doc) {
   return { doc: walk(JSON.parse(JSON.stringify(doc))), media };
 }
 
-// doc (mutado in-place) + arquivos do zip → mesmo doc com "@media/N.ext" de volta a data: URL
+// Gráfico/linha do tempo colocado no relatório carrega, além do SVG, o SPEC que
+// o gerou (bloco.chart = { kind, spec }) — é ele que permite reabrir o editor e
+// mudar os dados depois. No zip o spec vira um ARQUIVO de verdade
+// (charts/N-chart.json), não um campo enterrado no doc.json: assim dá pra
+// descompactar, arrastar o .json direto pro gerador de gráficos e editar por
+// fora. Mesma mecânica de extractMedia — referência "@charts/N.json" no lugar.
+function extractCharts(doc) {
+  let n = 0;
+  const files = [];
+  const walk = (v) => {
+    if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) v[i] = walk(v[i]); return v; }
+    if (v && typeof v === 'object') {
+      if (v.chart && typeof v.chart === 'object' && v.chart.spec && typeof v.chart.spec === 'object') {
+        const kind = v.chart.kind === 'timeline' ? 'timeline' : 'chart';
+        const name = `charts/${n++}-${kind}.json`;
+        files.push({ name, data: new TextEncoder().encode(JSON.stringify(v.chart.spec, null, 2)) });
+        v.chart = { kind, spec: `@${name}` };
+      }
+      for (const k in v) v[k] = walk(v[k]);
+      return v;
+    }
+    return v;
+  };
+  return { doc: walk(JSON.parse(JSON.stringify(doc))), files };
+}
+
+// doc (mutado in-place) + arquivos do zip → mesmo doc com "@media/N.ext" de volta
+// a data: URL e "@charts/N.json" de volta ao spec do gráfico
 function injectMedia(doc, mediaFiles) {
   const byName = new Map(mediaFiles.map((f) => [f.name, f.data]));
   const walk = (v) => {
     if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) v[i] = walk(v[i]); return v; }
     if (v && typeof v === 'object') { for (const k in v) v[k] = walk(v[k]); return v; }
-    if (typeof v !== 'string' || !v.startsWith('@media/')) return v;
+    if (typeof v !== 'string' || !v.startsWith('@')) return v;
     const name = v.slice(1);
     const bytes = byName.get(name);
-    if (!bytes) return v;   // mídia faltando no zip → mantém a referência (perda visível, não silenciosa)
+    if (!bytes) return v;   // arquivo faltando no zip → mantém a referência (perda visível, não silenciosa)
+    if (name.startsWith('charts/')) {
+      try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { return v; }
+    }
+    if (!name.startsWith('media/')) return v;
     return `data:${mimeForExt(name.split('.').pop())};base64,${bytesToBase64(bytes)}`;
   };
   return walk(doc);
 }
 
-// state.doc → Blob de um .pdgm.zip (doc.json sem imagens inline + media/*)
+// state.doc → Blob de um .pdgm.zip (doc.json sem imagens inline + media/* + charts/*)
 export async function serializeDocZip(doc) {
-  const { doc: light, media } = extractMedia(doc);
+  const { doc: noCharts, files: charts } = extractCharts(doc);
+  const { doc: light, media } = extractMedia(noCharts);
   const docJson = new TextEncoder().encode(JSON.stringify({ v: 1, doc: light }));
-  return makeZip([{ name: 'doc.json', data: docJson }, ...media]);
+  return makeZip([{ name: 'doc.json', data: docJson }, ...media, ...charts]);
 }
 
-// ArrayBuffer de um .pdgm.zip → doc pronto pra virar o novo state.doc (ou null)
-export async function deserializeDocZip(buf) {
+const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|heic|tiff?)$/i;
+const isDocJsonName = (n) => {
+  const base = String(n).replace(/\\/g, '/').split('/').pop();
+  return base === 'doc.json';
+};
+
+function sampleNames(names, n = 8) {
+  const list = names.filter((x) => x && !x.endsWith('/'));
+  if (!list.length) return '';
+  const head = list.slice(0, n).map((x) => `• ${x}`).join('\n');
+  const more = list.length > n ? `\n… e mais ${list.length - n}` : '';
+  return head + more;
+}
+
+function looksLikeImagePack(names) {
+  const files = names.filter((n) => n && !n.endsWith('/'));
+  if (!files.length) return false;
+  const imgs = files.filter((n) => IMG_EXT.test(n));
+  return imgs.length >= Math.max(1, Math.floor(files.length * 0.6));
+}
+
+/** Motivo legível a partir do listing do zip (sem extrair). */
+function diagnoseZipListing(listing, fileLabel) {
+  const names = listing.map((e) => e.name);
+  const hasDoc = names.some(isDocJsonName);
+  const deflated = listing.filter((e) => e.method !== 0);
+  const store = listing.filter((e) => e.method === 0);
+  const label = fileLabel ? ` (\`${fileLabel}\`)` : '';
+
+  if (!hasDoc) {
+    if (looksLikeImagePack(names)) {
+      return {
+        code: 'NOT_PDGM_IMAGES',
+        title: 'Este ZIP não é um projeto do diagramador',
+        detail: [
+          `O arquivo${label} é um pacote de imagens, não o projeto editável (.pdgm.zip).`,
+          '',
+          'Não há `doc.json` dentro — só arquivos de mídia (comum em download do Google Drive ou pasta “Comprimir” do Finder).',
+          '',
+          'Como abrir o relatório de verdade:',
+          '1. No diagramador, use Baixar → ZIP (projeto editável)',
+          '2. Abra esse .pdgm.zip aqui (ele contém doc.json + media/)',
+          '',
+          `Conteúdo detectado (${names.length} itens):`,
+          sampleNames(names),
+        ].join('\n'),
+      };
+    }
+    return {
+      code: 'NO_DOC_JSON',
+      title: 'ZIP sem doc.json',
+      detail: [
+        `Não encontrei \`doc.json\` no arquivo${label}.`,
+        '',
+        'O projeto do diagramador precisa de um ZIP gerado por Baixar → ZIP, com:',
+        '• doc.json — o documento',
+        '• media/ — imagens (opcional)',
+        '• charts/ — specs de gráficos (opcional)',
+        '',
+        names.length
+          ? `Arquivos neste zip (${names.length}):\n${sampleNames(names)}`
+          : 'O zip parece vazio.',
+      ].join('\n'),
+    };
+  }
+
+  if (deflated.length) {
+    const ex = deflated[0].name;
+    return {
+      code: 'ZIP_DEFLATE',
+      title: 'ZIP com compressão DEFLATE',
+      detail: [
+        `O arquivo${label} tem doc.json, mas usa compressão DEFLATE (método 8) em ${deflated.length} entrada(s).`,
+        `Exemplo: “${ex}”.`,
+        '',
+        'O diagramador só lê ZIP em STORE (sem compressão) — o formato que Baixar → ZIP gera.',
+        'Recompactar no Finder, 7-Zip ou baixar pasta zipada do Drive costuma virar DEFLATE e quebra a abertura.',
+        '',
+        `Entradas: ${store.length} STORE · ${deflated.length} DEFLATE.`,
+        'Solução: abra o .pdgm.zip original baixado pelo app, sem recompactar.',
+      ].join('\n'),
+    };
+  }
+
+  return null; // listing ok — falha será na extração/parse
+}
+
+/**
+ * Abre um .pdgm.zip com diagnóstico.
+ * @returns {Promise<{ok:true, doc:object}|{ok:false, code:string, title:string, detail:string}>}
+ */
+export async function loadDocZip(buf, fileLabel) {
+  if (!buf || (buf.byteLength !== undefined && buf.byteLength < 4)
+      || (buf.length !== undefined && buf.length < 4)) {
+    return {
+      ok: false,
+      code: 'EMPTY',
+      title: 'Arquivo vazio ou incompleto',
+      detail: 'O arquivo tem poucos bytes — o download pode ter falhado. Baixe de novo o .pdgm.zip.',
+    };
+  }
+
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  if (!(u8[0] === 0x50 && u8[1] === 0x4b)) {
+    return {
+      ok: false,
+      code: 'NOT_ZIP',
+      title: 'Isso não parece um arquivo ZIP',
+      detail: [
+        fileLabel ? `“${fileLabel}” ` : '',
+        'não começa com a assinatura PK de um .zip.',
+        '',
+        'Se for um .pdgm.json, use Abrir e escolha o JSON. Se for o projeto, use o .pdgm.zip de Baixar → ZIP.',
+      ].join(''),
+    };
+  }
+
+  let listing;
+  try {
+    listing = listZipEntries(u8);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'ZIP_NO_EOCD') {
+      return {
+        ok: false,
+        code: 'ZIP_NO_EOCD',
+        title: 'ZIP corrompido ou incompleto',
+        detail: [
+          'Não achei o diretório central do ZIP (fim do arquivo).',
+          '',
+          'Costuma acontecer com download interrompido ou arquivo truncado.',
+          'Baixe de novo o .pdgm.zip (Baixar → ZIP no diagramador).',
+        ].join('\n'),
+      };
+    }
+    return {
+      ok: false,
+      code: code || 'ZIP_READ',
+      title: 'Não consegui ler o ZIP',
+      detail: (e && e.message) || String(e),
+    };
+  }
+
+  if (!listing.length) {
+    return {
+      ok: false,
+      code: 'ZIP_EMPTY',
+      title: 'ZIP vazio',
+      detail: 'O arquivo é um ZIP válido, mas não contém nenhum arquivo dentro.',
+    };
+  }
+
+  const early = diagnoseZipListing(listing, fileLabel);
+  if (early) return { ok: false, ...early };
+
   let files;
-  try { files = await readZip(buf); } catch { return null; }
-  const docFile = files.find((f) => f.name === 'doc.json');
-  if (!docFile) return null;
+  try {
+    files = await readZip(u8);
+  } catch (e) {
+    if (e && e.code === 'ZIP_DEFLATE') {
+      const d = diagnoseZipListing(e.listing || listing, fileLabel);
+      return { ok: false, ...(d || {
+        code: 'ZIP_DEFLATE',
+        title: 'ZIP com compressão DEFLATE',
+        detail: `Entrada comprimida: “${e.entry || '?'}”. Use o ZIP gerado por Baixar → ZIP (STORE).`,
+      }) };
+    }
+    return {
+      ok: false,
+      code: 'ZIP_EXTRACT',
+      title: 'Falha ao extrair o ZIP',
+      detail: (e && e.message) || String(e),
+    };
+  }
+
+  const docFile = files.find((f) => isDocJsonName(f.name));
+  if (!docFile) {
+    // listing tinha doc.json mas extract não? path estranho
+    return {
+      ok: false,
+      code: 'NO_DOC_JSON',
+      title: 'ZIP sem doc.json legível',
+      detail: 'O índice do zip mencionava doc.json, mas não consegui extrair o conteúdo.',
+    };
+  }
+
   let envelope;
-  try { envelope = JSON.parse(new TextDecoder().decode(docFile.data)); } catch { return null; }
+  try {
+    envelope = JSON.parse(new TextDecoder().decode(docFile.data));
+  } catch (e) {
+    return {
+      ok: false,
+      code: 'DOC_JSON_PARSE',
+      title: 'doc.json inválido',
+      detail: [
+        'Achei `doc.json`, mas o JSON está corrompido ou truncado.',
+        (e && e.message) ? `Parse: ${e.message}` : '',
+      ].filter(Boolean).join('\n'),
+    };
+  }
+
   const doc = deserializeDoc(envelope);
-  if (!doc) return null;
-  return injectMedia(doc, files.filter((f) => f !== docFile));
+  if (!doc) {
+    return {
+      ok: false,
+      code: 'DOC_ENVELOPE',
+      title: 'Formato de projeto desconhecido',
+      detail: [
+        'O doc.json não tem o envelope esperado `{ "v": 1, "doc": { … } }`.',
+        envelope && typeof envelope === 'object'
+          ? `Chaves no arquivo: ${Object.keys(envelope).join(', ') || '(nenhuma)'}.`
+          : '',
+        '',
+        'Abra um .pdgm.zip gerado por este diagramador (Baixar → ZIP).',
+      ].filter(Boolean).join('\n'),
+    };
+  }
+
+  // injectMedia tolera @media faltando e docs antigos sem charts/
+  const full = injectMedia(doc, files.filter((f) => f !== docFile));
+  return { ok: true, doc: full };
+}
+
+// Compat: devolve o doc ou null (sem detalhe). Prefira loadDocZip na UI.
+export async function deserializeDocZip(buf) {
+  const r = await loadDocZip(buf);
+  if (!r.ok) {
+    console.warn('[pdgm.zip]', r.code, r.title, r.detail);
+    return null;
+  }
+  return r.doc;
 }
 
 // state.doc → objeto JSON serializável, dentro do envelope versionado.
@@ -170,6 +427,27 @@ async function demo() {
   console.assert(JSON.stringify({ ...zipDoc, cover: { ...zipDoc.cover, bg: null }, blocks: zipDoc.blocks.slice(0, 2) })
     === JSON.stringify({ ...original, cover: { ...original.cover, bg: null } }), 'resto do doc (sem mídia) sai idêntico do .pdgm.zip');
   console.assert(await deserializeDocZip(new Uint8Array([1, 2, 3]).buffer) === null, '.zip corrompido → null (não lança)');
+
+  // gráfico e linha do tempo: o spec vira arquivo no zip e volta igual ao abrir
+  const chartSpec = { type: 'line', title: 'Preço', labels: ['jan'], series: [{ name: 'btc', data: [1] }] };
+  const tlSpec = { layout: 'vertical', title: 'Marcos', events: [{ date: 'Jan/26', text: 'a', icon: 'star' }] };
+  const withCharts = { ...original, blocks: [
+    { id: 'b4', type: 'image', src: svg, chart: { kind: 'chart', spec: chartSpec } },
+    { id: 'b5', type: 'image', src: svg, chart: { kind: 'timeline', spec: tlSpec } },
+  ] };
+  const cZip = await serializeDocZip(withCharts);
+  const cFiles = await readZip(await cZip.arrayBuffer());
+  console.assert(cFiles.some((f) => f.name === 'charts/0-chart.json'), 'spec do gráfico sai como arquivo no zip', cFiles.map((f) => f.name).join());
+  console.assert(cFiles.some((f) => f.name === 'charts/1-timeline.json'), 'spec da timeline sai como arquivo no zip', cFiles.map((f) => f.name).join());
+  const soltoNoZip = JSON.parse(new TextDecoder().decode(cFiles.find((f) => f.name === 'charts/0-chart.json').data));
+  console.assert(JSON.stringify(soltoNoZip) === JSON.stringify(chartSpec), 'o .json solto no zip é o spec exato (abre direto no gerador)');
+  const cBack = await deserializeDocZip(await cZip.arrayBuffer());
+  console.assert(JSON.stringify(cBack.blocks[0].chart) === JSON.stringify({ kind: 'chart', spec: chartSpec }), 'spec do gráfico volta inteiro ao abrir', JSON.stringify(cBack.blocks[0].chart));
+  console.assert(JSON.stringify(cBack.blocks[1].chart) === JSON.stringify({ kind: 'timeline', spec: tlSpec }), 'spec da timeline volta inteiro ao abrir', JSON.stringify(cBack.blocks[1].chart));
+  console.assert(cBack.blocks[0].src.startsWith('data:image/svg+xml;base64,'), 'a arte do gráfico continua vindo por media/');
+  // imagem comum (sem .chart) não pode ganhar campo nenhum
+  const semChart = await deserializeDocZip(await (await serializeDocZip(withMedia)).arrayBuffer());
+  console.assert(semChart.blocks[2].chart === undefined, 'imagem sem gráfico continua sem b.chart');
 
   console.log('doc-format: todos os asserts passaram');
 }

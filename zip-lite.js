@@ -80,40 +80,71 @@ export function makeZip(entries) {
   return new Blob([...chunks, ...central, new Uint8Array(eocd.buffer)], { type: 'application/zip' });
 }
 
-// ArrayBuffer de um .zip → [{ name, data: Uint8Array }]. Só entende STORE (o que
-// makeZip acima escreve); um zip DEFLATE de outra ferramenta cai no erro abaixo.
-export async function readZip(buf) {
-  const bytes = new Uint8Array(buf);
-  const dv = new DataView(buf);
-  // procura o fim do diretório central nos últimos 64KB (tolera um comentário de
-  // zip curto; nosso writer nunca grava um, então normalmente é achado logo de cara)
+function zipBytes(buf) {
+  return buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+}
+
+// Lista entradas do diretório central SEM extrair bytes — serve pra diagnosticar
+// (tem doc.json? usa DEFLATE?) antes de falhar genérico.
+// → [{ name, method, compSize, uncompSize, localOffset }]
+export function listZipEntries(buf) {
+  const bytes = zipBytes(buf);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // procura o fim do diretório central nos últimos 64KB (tolera comentário curto)
   const tail = Math.max(0, bytes.length - 65557);
   let eocdAt = -1;
   for (let i = bytes.length - 22; i >= tail; i--) {
     if (dv.getUint32(i, true) === 0x06054b50) { eocdAt = i; break; }
   }
-  if (eocdAt < 0) throw new Error('arquivo .zip inválido (fim de diretório central não encontrado)');
+  if (eocdAt < 0) {
+    const err = new Error('ZIP_NO_EOCD');
+    err.code = 'ZIP_NO_EOCD';
+    throw err;
+  }
 
   const count = dv.getUint16(eocdAt + 10, true);
   let p = dv.getUint32(eocdAt + 16, true);
   const out = [];
   for (let i = 0; i < count; i++) {
-    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('arquivo .zip inválido (registro central corrompido)');
+    if (dv.getUint32(p, true) !== 0x02014b50) {
+      const err = new Error('ZIP_BAD_CENTRAL');
+      err.code = 'ZIP_BAD_CENTRAL';
+      throw err;
+    }
     const method = dv.getUint16(p + 10, true);
     const compSize = dv.getUint32(p + 20, true);
+    const uncompSize = dv.getUint32(p + 24, true);
     const nameLen = dv.getUint16(p + 28, true);
     const extraLen = dv.getUint16(p + 30, true);
     const commentLen = dv.getUint16(p + 32, true);
     const localOffset = dv.getUint32(p + 42, true);
     const name = new TextDecoder().decode(bytes.subarray(p + 46, p + 46 + nameLen));
-    if (method !== 0) throw new Error(`"${name}": método de compressão ${method} não suportado (só STORE)`);
-
-    const lNameLen = dv.getUint16(localOffset + 26, true);
-    const lExtraLen = dv.getUint16(localOffset + 28, true);
-    const dataStart = localOffset + 30 + lNameLen + lExtraLen;
-    out.push({ name, data: bytes.slice(dataStart, dataStart + compSize) });
-
+    out.push({ name, method, compSize, uncompSize, localOffset });
     p += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+
+// ArrayBuffer | Uint8Array de um .zip → [{ name, data: Uint8Array }]. Só extrai
+// STORE (method 0 — o que makeZip escreve). DEFLATE (8) lança com code ZIP_DEFLATE.
+export async function readZip(buf) {
+  const bytes = zipBytes(buf);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const listing = listZipEntries(bytes);
+  const out = [];
+  for (const e of listing) {
+    if (e.method !== 0) {
+      const err = new Error(`ZIP_DEFLATE:${e.name}`);
+      err.code = 'ZIP_DEFLATE';
+      err.entry = e.name;
+      err.method = e.method;
+      err.listing = listing;
+      throw err;
+    }
+    const lNameLen = dv.getUint16(e.localOffset + 26, true);
+    const lExtraLen = dv.getUint16(e.localOffset + 28, true);
+    const dataStart = e.localOffset + 30 + lNameLen + lExtraLen;
+    out.push({ name: e.name, data: bytes.slice(dataStart, dataStart + e.compSize) });
   }
   return out;
 }

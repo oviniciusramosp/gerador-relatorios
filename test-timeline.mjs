@@ -1,6 +1,6 @@
 /* Auto-checagem do renderer de linha do tempo.  node test-timeline.mjs */
 import assert from 'node:assert/strict';
-import { renderTimeline, layoutSize, wrap, dateKey, sortEvents, toLines, parseLines } from './timeline.js';
+import { renderTimeline, layoutSize, wrap, dateKey, sortEvents, mergeEvents, parseSliceText, toLines, parseLines } from './timeline.js';
 
 const EV = [
   { date: 'Novembro/2022', text: 'Lançamento da primeira Testnet', icon: 'flask' },
@@ -53,6 +53,58 @@ assert.equal(dateKey('sem data'), null);
 const fora = [{ date: 'Maio/2026' }, { date: 'Novembro/2022' }, { date: 'sem data' }, { date: 'Março/2023' }];
 assert.deepEqual(sortEvents(fora).map((e) => e.date),
   ['Novembro/2022', 'Março/2023', 'Maio/2026', 'sem data'], 'ordenação por data');
+
+// junção de fatias (import por imagem): repetido entra 1×, truncado vira o completo
+const fatia1 = [
+  { date: 'Novembro/2022', text: 'Lançamento da primeira Testnet', icon: 'flask' },
+  { date: 'Março/2023', text: 'Começa o programa de referrals, Mainnet aberta' },
+  { date: 'Outubro/2025', text: 'Maior liquidação da história do' },        // cortado pela borda
+];
+const fatia2 = [
+  { date: 'Março/2023', text: 'Começa o programa de referrals, Mainnet aberta', icon: 'users' },  // repetido
+  { date: 'Outubro/2025', text: 'Maior liquidação da história do mercado cripto, HLP lucra US$ 40 milhões', icon: 'bolt' },
+  { date: 'Maio/2026', text: 'Primeiro ETF de HYPE nos EUA' },
+];
+const juntos = mergeEvents([fatia1, fatia2]);
+assert.equal(juntos.length, 4, 'sobreposição das fatias tem que colapsar');
+assert.equal(juntos.find((e) => e.date === 'Março/2023').icon, 'users', 'ícone da 2ª fatia não pode se perder');
+assert.match(juntos.find((e) => e.date === 'Outubro/2025').text, /40 milhões$/, 'fica a versão inteira, não a cortada');
+// acento/caixa/pontuação diferentes = mesmo evento
+assert.equal(mergeEvents([[{ date: '2026', text: 'HIP-4 inaugura mercados' }],
+  [{ date: '2026', text: 'HIP 4 inaugura mercados!' }]]).length, 1, 'normalização de texto');
+// datas iguais com eventos DIFERENTES continuam dois
+assert.equal(mergeEvents([[{ date: 'Março/2025', text: 'Volume acumulado' }],
+  [{ date: 'Março/2025', text: 'Incidente Jelly Jelly' }]]).length, 2, 'mesma data ≠ mesmo evento');
+
+// restos REAIS do fatiamento (saíram do import da timeline da Hyperliquid):
+// nota do modelo sobre a borda, e o mesmo evento sem a data (o rótulo foi cortado)
+const restos = mergeEvents([
+  [{ date: 'Julho/2025', text: 'Receita mensal ultrapassa US$ 100 milhões', icon: 'money' },
+    { date: 'Maio/2026', text: 'Primeiro ETF de HYPE nos EUA', icon: 'txt:ETF' }],
+  [{ date: 'Maio/2026', text: '(texto cortado)', icon: 'flag' },
+    { date: '', text: 'Receita mensal ultrapassa US$ 100 milhões', icon: 'money' }],
+]);
+assert.equal(restos.length, 2, 'placeholder e duplicado-sem-data têm que sumir');
+assert.ok(restos.every((e) => e.date), 'nenhum evento fica sem data quando a vizinha tem');
+// evento cortado que veio SEM data mas com texto novo não pode ser descartado
+assert.equal(mergeEvents([[{ date: '', text: 'Evento só na borda' }]]).length, 1, 'sem data ainda entra');
+
+// resposta do Claude por fatia: meta + eventos, tolerante a lixo em volta
+const resp = parseSliceText([
+  'Aqui está a transcrição:',        // preâmbulo: sem "|", tem que ser ignorado
+  '```',
+  'TITULO: Linha do Tempo: Hyperliquid',
+  'SUBTITULO: Principais produtos',
+  'FONTE:',                          // vazio: não entra no meta
+  'LAYOUT: alternada',
+  'Novembro/2022 | Lançamento da primeira Testnet | flask',
+  'Março/2025 | Incidente "Jelly Jelly" | alert',   // aspas: o que quebrava o JSON
+  '```',
+].join('\n'));
+assert.deepEqual(resp.meta, { title: 'Linha do Tempo: Hyperliquid', subtitle: 'Principais produtos', layout: 'alternada' });
+assert.equal(resp.events.length, 2, 'só linha com | é evento');
+assert.equal(resp.events[1].text, 'Incidente "Jelly Jelly"', 'aspas no texto sobrevivem');
+assert.equal(parseSliceText('').events.length, 0, 'resposta vazia não inventa evento');
 
 // lista de texto: ida e volta
 assert.deepEqual(parseLines(toLines(EV)), EV, 'toLines/parseLines não são inversas');

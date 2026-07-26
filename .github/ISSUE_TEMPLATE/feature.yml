@@ -1,0 +1,35 @@
+name: Feature ou melhoria
+description: Pedido de funcionalidade nova ou melhoria de algo que já existe
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Tipo
+      options:
+        - Feature (algo novo)
+        - Melhoria (refino do que já existe)
+    validations:
+      required: true
+  - type: textarea
+    id: ask
+    attributes:
+      label: Pedido
+      description: O que você quer? Em que tela / fluxo?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Por quê
+      description: Problema que isso resolve ou ganho esperado.
+    validations:
+      required: false
+  - type: input
+    id: page
+    attributes:
+      label: Página / ferramenta
+      placeholder: diagramacao.html · Gráficos · Linhas do tempo
+    validations:
+      required: false

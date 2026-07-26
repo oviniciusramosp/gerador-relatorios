@@ -77,6 +77,43 @@ a spec completa:
   relativa ao eixo. Barras ficam SEMPRE no modo dados.
 - Inclua TODAS as categorias (se tem 12, são 12 séries — o renderer tem 12 cores).
 
+## Modo "sankey" — diagrama de fluxo (fitas ligando caixas)
+
+Use quando o gráfico for uma **teia de fitas horizontais** ligando caixas em
+colunas, com a espessura da fita proporcional ao valor (típico de "de onde vem
+a receita e pra onde vai"). O dado NÃO são séries nem eixos — são **ligações**:
+
+```jsonc
+{
+  "mode": "sankey",
+  "type": "sankey",
+  "title": "", "subtitle": "", "source": "",
+  "links": [
+    { "from": "Receita Padrão da Corretora", "to": "Receita Perpétuos", "value": 656.04 },
+    { "from": "Receita Perpétuos", "to": "Receita HyperCore", "value": 678.44 },
+    { "from": "Receita Total", "to": "Lucro Líquido", "value": 745.51 }
+  ],
+  "y": { "format": "compact", "prefix": "US$ " }
+}
+```
+
+Como ler:
+
+- **Uma linha por FITA**, não por caixa. Siga cada fita da caixa de origem até a
+  de destino: `from` é a caixa de onde ela sai, `to` a caixa onde ela entra.
+- **`value` é o número impresso na CAIXA DE ORIGEM** da fita (`$656.04M` →
+  `656.04`). Quando uma caixa manda fita pra vários destinos, o valor de cada
+  fita é o que está escrito no destino dela.
+- **Escala uniforme**: escolha uma unidade (milhões, por exemplo) e use a mesma
+  em todos os valores — `$921.02K` no meio de milhões vira `0.92`, não `921.02`.
+  Ponha a unidade em `y.prefix`/`y.format`, não no número.
+- **Não invente caixa nem total**: só o que está desenhado. Se uma caixa aparece
+  como origem e destino (etapa do meio), ela sai naturalmente das duas linhas —
+  não crie entrada separada pra ela.
+- Nomes exatamente como impressos, incluindo acento.
+- Se algum fluxo for de custo/prejuízo, ainda assim `value` positivo: quem dá o
+  sentido é a direção `from`→`to`.
+
 ## Regras gerais
 
 - **Guarde a escala** dos rótulos como impressos: "$2.51T" fica "2.51T" no

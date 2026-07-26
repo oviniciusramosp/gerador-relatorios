@@ -1,0 +1,42 @@
+<style>
+  body { margin: 0; padding: 12px; font: 12px/1.45 Inter, system-ui, sans-serif; color: #111; }
+  p { margin: 0 0 8px; color: #555; }
+  textarea { width: 100%; height: 150px; box-sizing: border-box; resize: none;
+    font: 11px/1.4 ui-monospace, monospace; border: 1px solid #ddd; border-radius: 6px; padding: 6px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  button { font: inherit; font-weight: 600; padding: 7px 14px; border: 0; border-radius: 6px;
+    background: #4E39FF; color: #fff; cursor: pointer; }
+  button:hover { filter: brightness(1.1); }
+  #msg { font-size: 11px; color: #555; }
+  #msg.err { color: #C0362C; font-weight: 600; }
+</style>
+
+<p>No gerador, clique <b>Copiar para o Figma</b>. Cole aqui (⌘V) e gere — sai um
+frame com <b>auto-layout</b>, texto editável e ícones vetoriais.</p>
+
+<textarea id="raw" placeholder="cole aqui o conteúdo copiado do gerador" spellcheck="false"></textarea>
+
+<div class="row">
+  <button id="go">Gerar timeline</button>
+  <span id="msg"></span>
+</div>
+
+<script>
+  const raw = document.getElementById('raw');
+  const msg = document.getElementById('msg');
+  raw.focus();
+  document.getElementById('go').onclick = () => {
+    msg.className = ''; msg.textContent = 'montando…';
+    parent.postMessage({ pluginMessage: { type: 'build', raw: raw.value } }, '*');
+  };
+  // ⌘Enter também gera
+  raw.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') document.getElementById('go').click();
+  });
+  onmessage = (e) => {
+    const d = e.data.pluginMessage;
+    if (!d) return;
+    msg.className = d.type === 'erro' ? 'err' : '';
+    msg.textContent = d.msg;
+  };
+</script>

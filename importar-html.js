@@ -209,7 +209,38 @@ export function parseChartHtml(html) {
     || svgs.find((s) => plainPaths(s).length);   // SVG sem lib: sparkline de card
   if (!svg) {
     const t = parseTable(doc.body ? doc.body.textContent : '');   // fallback: era tabela
-    return t && t.series.length ? { labels: t.labels, series: t.series } : null;
+    if (t && t.series.length) return { labels: t.labels, series: t.series };
+    /* <canvas> (ECharts, Chart.js, TradingView): o dado virou PIXEL na hora de
+     * desenhar e não existe no DOM — nenhum parser de HTML tira número daí.
+     * Vale dizer isso e apontar a saída, em vez do genérico "não achei
+     * gráfico", que faz o usuário colar o mesmo HTML de novo. */
+    if (doc.querySelector('canvas')) {
+      /* O tooltip do ECharts fica no DOM e, num sankey, tem a cara "A → B" +
+       * valor. Só que ele guarda UM fluxo — o que estava sob o mouse quando o
+       * HTML foi copiado. Reconhecer isso vale pra dizer exatamente o que
+       * falta, em vez de repetir o recado genérico de canvas.
+       *
+       * Lido pela ESTRUTURA (o menor elemento com a seta), não por regex no
+       * texto todo: o textContent cola os elementos sem separador e a captura
+       * saía com o título grudado no nome do nó. */
+      const comSeta = [...doc.querySelectorAll('div, span, p')]
+        .filter((el) => /→|-&gt;|->/.test(el.textContent) && !el.querySelector('canvas'))
+        .sort((a, b) => a.textContent.length - b.textContent.length)[0];
+      if (comSeta) {
+        const partes = [...comSeta.querySelectorAll('strong, b')].map((e) => e.textContent.trim()).filter(Boolean);
+        const [de, para] = partes.length >= 2 ? partes
+          : comSeta.textContent.split(/→|-&gt;|->/).map((x) => x.trim());
+        const valor = (comSeta.textContent.match(/[R]?\$\s?[\d.,]+\s*[KMBTkmbt]?/g) || []).pop();
+        throw new Error(`isso é um sankey em <canvas> (ECharts): do gráfico inteiro, o HTML só traz o TOOLTIP de UM `
+          + `fluxo — "${de} → ${para}"${valor ? ` (${valor})` : ''} — porque foi o que estava sob o mouse na hora de copiar. `
+          + `Os outros fluxos não existem no DOM, só como pixel. Caminho: "Converter imagem em gráfico" com um print — `
+          + `a IA lê as fitas e devolve origem/destino/valor. Ou digite na caixa de texto: origem,destino,valor.`);
+      }
+      throw new Error('esse gráfico é desenhado em <canvas> (ECharts e afins) — o HTML não carrega os números, '
+        + 'eles só existem como pixel. Cole a URL da página (DefiLlama eu busco pela API), ou baixe o CSV do '
+        + 'site e cole na caixa de CSV, ou use "Converter imagem em gráfico".');
+    }
+    return null;
   }
 
   // 1 ou 2 eixos Y — combo/dual-axis (ex.: barra empilhada + linha de

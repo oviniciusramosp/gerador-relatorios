@@ -1,10 +1,20 @@
 /* Editor de gráficos — liga os controles ao renderer puro (chart.js). */
-import { renderChart, DEFAULTS, THEMES, formatValue } from './chart.js';
-import { parseTable, toTable } from './tabela.js';
+import { renderChart, DEFAULTS, THEMES, formatValue, symlog, symlogInv } from './chart.js';
+import { parseTable, toTable, parseLinks, parseBubbles } from './tabela.js';
+import { openIconPop, paintIconBtn } from './icon-pop.js';   // mesmo picker do criador de timelines
+import { registerIcons, iconSvg } from './timeline-icons.js';
+import { IONICONS_LIB } from './ionicons-lib.js';            // 421 ícones outline
+registerIcons(IONICONS_LIB);
+// ícone de UI Ionicons (viewBox 512) em currentColor — mesmo helper do Diagramador
+const uiIco = (key, size = 12, style = 'outline') =>
+  iconSvg(key, { x: 0, y: 0, w: size, h: size }, 'currentColor', 1.8, style, true)
+    .replace(/ x="0" y="0"/, '');
 import { parseChartHtml } from './importar-html.js';
 import { buildSpecFromImage } from './converter.js';
 import { openSwatchPop } from './swatch.js';   // componente de cor compartilhado
 import { logoPickSvg } from './logos.js';      // SVG do logo pro picker (Fase 0.3, trilha B)
+import { enhanceAll } from './range-snap.js';  // snap points em todos os range com data-snaps
+import { initFeedback } from './feedback.js';
 
 const $ = (id) => document.getElementById(id);
 const out = $('out');
@@ -25,6 +35,20 @@ Object.assign(spec, {
 function sync({ keepTable = false, keepJson = false } = {}) {
   chartMeta = {};
   out.innerHTML = renderChart(spec, { meta: chartMeta });
+  /* Cresce a imagem até caber todos os rótulos (hoje só o sankey pede isso: a
+   * coluna cheia empilha nome+valor de cada nó). Espremer texto pra caber numa
+   * altura fixa é o pior dos dois mundos — a imagem é que se ajusta ao dado.
+   * Só CRESCE, e re-renderiza uma vez; o `>` corta o vaivém. */
+  if (chartMeta.minHeight > spec.height || chartMeta.minWidth > spec.width) {
+    if (chartMeta.minHeight > spec.height) spec.height = chartMeta.minHeight;
+    // bolhas: a faixa de cada uma é o maior entre o diâmetro e o RÓTULO, e
+    // texto não encolhe — sem alargar, a última bolha fica metade fora
+    if (chartMeta.minWidth > spec.width) spec.width = chartMeta.minWidth;
+    chartMeta = {};
+    out.innerHTML = renderChart(spec, { meta: chartMeta });
+    if ($('height')) $('height').value = spec.height;
+    if ($('width')) $('width').value = spec.width;
+  }
   drawHandles();
   if (ghostUrl && $('ghostOn').checked) positionGhost();   // realinha a sobreposição
   $('dims').textContent = `${spec.width} × ${spec.height} px  →  PNG ${spec.width * +$('scale').value} × ${spec.height * +$('scale').value}`;
@@ -54,13 +78,54 @@ function drawHandles() {
     g.setAttribute('class', 'edit-handle-ghost');
     svg.appendChild(g);
   }
+  // sankey: a alça é o nó inteiro (a barra), não um ponto — arrastar sobe/desce
+  // o nó com o rótulo junto, pra desencavalar o que o automático deixou perto
+  for (const nd of chartMeta.sankeyNodes || []) {
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', nd.x - 3); r.setAttribute('y', nd.y);
+    r.setAttribute('width', nd.w + 6); r.setAttribute('height', Math.max(nd.h, 6));
+    r.setAttribute('rx', 3); r.setAttribute('class', 'edit-handle');
+    r.dataset.node = nd.n;
+    svg.appendChild(r);
+  }
 }
 
-// ── segmento Dados: Imagem / Corretora / HTML (mesmo padrão da diagramação) ───
+// ── segment de topo: Importar | Customizar ───────────────────────────────────
+// ion-icon: download-outline / options-outline (mesmo idioma do Diagramador)
+const MAIN_SEG_ICO = { importar: 'download', customizar: 'options' };
+const mainSegBtns = [...document.querySelectorAll('#mainSegment button[data-main]')];
+mainSegBtns.forEach((b) => {
+  const key = MAIN_SEG_ICO[b.dataset.main];
+  if (!key) return;
+  const label = b.textContent.trim();
+  b.innerHTML = `${uiIco(key, 14, 'outline')}<span>${label}</span>`;
+});
+function setMainSegment(name) {
+  mainSegBtns.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.main === name)));
+  document.querySelectorAll('.pane.sb-main').forEach((p) => {
+    p.hidden = p.dataset.pane !== name;
+  });
+}
+mainSegBtns.forEach((b) => b.addEventListener('click', () => setMainSegment(b.dataset.main)));
+setMainSegment('importar');
+
+// ── sub-segment Importar dados: Imagem / Corretora / HTML ────────────────────
+const DATA_SEG_ICO = { imagem: 'image', corretora: 'stats-chart', html: 'code-slash' };
+const SOURCE_PANES = new Set(['imagem', 'corretora', 'html']);
 const dataSegBtns = [...document.querySelectorAll('#dataSegment button')];
+dataSegBtns.forEach((b) => {
+  const key = DATA_SEG_ICO[b.dataset.seg];
+  if (!key) return;
+  const label = b.textContent.trim();
+  b.innerHTML = `${uiIco(key, 13, 'outline')}<span>${label}</span>`;
+});
 function setDataSegment(name) {
   dataSegBtns.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.seg === name)));
-  document.querySelectorAll('.pane').forEach((p) => { p.hidden = p.dataset.pane !== name; });
+  // só os panes de fonte — não mexe em .sb-main (Importar/Customizar)
+  document.querySelectorAll('.pane[data-pane]').forEach((p) => {
+    if (!SOURCE_PANES.has(p.dataset.pane)) return;
+    p.hidden = p.dataset.pane !== name;
+  });
 }
 dataSegBtns.forEach((b) => b.addEventListener('click', () => {
   setDataSegment(b.dataset.seg);
@@ -106,6 +171,102 @@ function paintTypePicker() {
     b.setAttribute('aria-pressed', b.dataset.type === spec.type));
   paintCandle();   // as opções de candle só aparecem nesse tipo
   paintBarOpts();  // idem pra barra/barra horizontal
+  paintPieOpts();  // e o "Outros" só em pizza/rosca
+  paintSankeyOpts();
+  paintBubbleOpts();
+  syncSidebarVisibility();
+}
+
+// ── visibilidade da sidebar por tipo / nº de séries ──────────────────────────
+// Famílias: cartesian (eixos/grade), lineish (traço), bars/pie/candle/bubble/sankey
+// (blocos em "Opções do tipo"), values (formato de número), legend (2+ séries).
+const CARTESIAN = new Set(['line', 'area', 'bar', 'hbar', 'stacked', 'stacked100', 'candle']);
+const LINEISH = new Set(['line', 'area']);
+const BARS = new Set(['bar', 'hbar']);
+const PIEISH = new Set(['pie', 'donut']);
+const SERIES_TITLE = {
+  bubble: 'Bolhas', sankey: 'Nós', pie: 'Fatias', donut: 'Fatias',
+  candle: 'Séries (O/H/L/C)',
+};
+const TIPO_OPTS_TITLE = {
+  bar: 'Opções de barra', hbar: 'Opções de barra',
+  pie: 'Opções de pizza', donut: 'Opções de rosca',
+  candle: 'Opções de candle', bubble: 'Opções de bolhas', sankey: 'Opções de sankey',
+};
+
+function typeFlags(t) {
+  const type = t || 'line';
+  return {
+    cartesian: CARTESIAN.has(type),
+    lineish: LINEISH.has(type),
+    bars: BARS.has(type),
+    pieish: PIEISH.has(type),
+    candle: type === 'candle',
+    bubble: type === 'bubble',
+    sankey: type === 'sankey',
+    // formato de valor: quase todos — bolha/sankey/pizza usam número formatado
+    values: CARTESIAN.has(type) || PIEISH.has(type) || type === 'bubble' || type === 'sankey',
+    // rótulos diretos nos pontos/barras (não candle: OHLCV não é série de valor único)
+    labelMode: CARTESIAN.has(type) && type !== 'candle',
+    // escala log: cartesiano + sankey (fluxo com ordens de grandeza)
+    yscale: (CARTESIAN.has(type) && type !== 'stacked100') || type === 'sankey',
+    hasTypeOpts: BARS.has(type) || PIEISH.has(type)
+      || type === 'candle' || type === 'bubble' || type === 'sankey',
+  };
+}
+
+/** Contagem “visível” pra decidir se legenda faz sentido. */
+function legendItemCount() {
+  const t = spec.type;
+  if (t === 'candle') return 0;
+  if (t === 'bubble') {
+    return new Set((spec.bubbles || []).map((b) => b.cat).filter(Boolean)).size
+      || (spec.bubbles || []).length;
+  }
+  if (t === 'sankey') return 0; // nós têm cor própria; sem controle de legenda global
+  if (PIEISH.has(t)) return (spec.labels || []).length;
+  return (spec.series || []).filter((s) => !s.hidden).length;
+}
+
+function syncSidebarVisibility() {
+  const t = spec.type || 'line';
+  const f = typeFlags(t);
+  const n = legendItemCount();
+  const flags = { ...f, legend: n >= 2 && f.cartesian && !f.candle };
+
+  // seções inteiras
+  const secOpts = $('secTipoOpts');
+  if (secOpts) secOpts.hidden = !f.hasTypeOpts;
+  const secTraco = $('secTraco');
+  if (secTraco) secTraco.hidden = !f.lineish;
+  const secEixos = $('secEixos');
+  if (secEixos) {
+    // eixos some se nenhum campo [data-show] ficar visível
+    const anyEixo = f.values || f.cartesian || f.yscale || flags.legend || f.labelMode;
+    secEixos.hidden = !anyEixo;
+  }
+
+  // títulos dinâmicos
+  const seriesLabel = $('seriesSecLabel');
+  if (seriesLabel) {
+    // preserva o chevron .det-chev se o initSidebarDetails já rodou
+    const chev = seriesLabel.querySelector('.det-chev');
+    const text = SERIES_TITLE[t] || 'Séries';
+    seriesLabel.textContent = text;
+    if (chev) seriesLabel.prepend(chev);
+  }
+  const optsLabel = $('tipoOptsLabel');
+  if (optsLabel) {
+    const chev = optsLabel.querySelector('.det-chev');
+    optsLabel.textContent = TIPO_OPTS_TITLE[t] || 'Opções do tipo';
+    if (chev) optsLabel.prepend(chev);
+  }
+
+  // campos marcados com data-show="flag1 flag2" (OR)
+  document.querySelectorAll('[data-show]').forEach((el) => {
+    const keys = el.dataset.show.trim().split(/\s+/);
+    el.hidden = !keys.some((k) => flags[k]);
+  });
 }
 
 // switches de mostrar título/subtítulo/fonte no gráfico
@@ -130,13 +291,12 @@ $('wmPicker').addEventListener('click', (e) => {
   if (wasOff && b.dataset.logo !== 'none') patch.opacity = wmDefaultOpacity(spec.watermark?.pos ?? 'footer');
   setWm(patch);
 });
-// troca o rótulo de texto ("Ícone"/"Completo"/"Nome") pelo SVG real do logo — uma vez, no
-// load (o desenho não depende do spec). "Nenhum" fica como texto: não há logo pra desenhar.
-// currentColor do path herda o color do próprio botão (.typepick button), então acompanha
-// --muted/hover/[aria-pressed] de graça, sem CSS extra.
+// SVG real do logo no picker (2 colunas × 76px, mesmo do Diagramador). "Nenhum" já
+// nasce com o círculo riscado no HTML. currentColor herda do botão (.logopick).
+// maxH/maxW maiores que o default: aproveita a célula larga.
 ['icone', 'full', 'nome'].forEach((kind) => {
   const b = $('wmPicker').querySelector(`button[data-logo="${kind}"]`);
-  if (b) b.innerHTML = logoPickSvg(kind);
+  if (b) b.innerHTML = logoPickSvg(kind, 36, 90);
 });
 // trocar de posição reseta a opacidade pro padrão da nova (centro faded/canto opaco)
 $('wmPos').addEventListener('change', (e) => setWm({ pos: e.target.value, opacity: wmDefaultOpacity(e.target.value) }));
@@ -147,6 +307,15 @@ $('wmAlign').addEventListener('change', (e) => setWm({ align: e.target.value }))
 $('wmColor').addEventListener('click', () => openSwatchPop($('wmColor'), (hex) => setWm({ color: hex }), { ...DEFAULTS.watermark, ...spec.watermark }.color, { opacity: false }));
 $('wmOpacity').addEventListener('input', (e) => setWm({ opacity: +e.target.value / 100 }));
 $('wmScale').addEventListener('input', (e) => setWm({ size: +e.target.value / 100 }));
+// ↺ — volta pro padrão da posição (opacidade) e pro size default do logo (1× no slider = 100)
+$('wmOpReset').addEventListener('click', () => {
+  const pos = { ...DEFAULTS.watermark, ...spec.watermark }.pos;
+  setWm({ opacity: wmDefaultOpacity(pos) });
+});
+$('wmScaleReset').addEventListener('click', () => {
+  // 1× (slider 100) — mesmo reset do logo na diagramação; DEFAULTS.size 0.7 é o seed do centro
+  setWm({ size: 1 });
+});
 // — candle: cores de alta/baixa e espessura do pavio —
 // up/down guardam null enquanto o usuário não escolhe: aí a cor sai do tema e
 // acompanha claro↔escuro. O swatch mostra a cor resolvida (nunca "vazio").
@@ -185,6 +354,59 @@ $('btOpacity').addEventListener('input', (e) => {
 $('btScale').addEventListener('input', (e) => {
   $('btScaleVal').textContent = e.target.value + '%'; setBarTrack({ scale: +e.target.value / 100 });
 });
+// — bolhas: posição do rótulo, piso da bolha e limites do ícone —
+const icoCfg = () => ({ ...DEFAULTS.bubbleIcon, ...spec.bubbleIcon });
+$('bbLabel').addEventListener('change', (e) => { spec.bubbleLabel = e.target.value; sync({ keepTable: true }); pushHistory(); });
+$('bbMinR').addEventListener('input', (e) => {
+  spec.bubbleMinR = +e.target.value; $('bbMinRVal').textContent = e.target.value + 'px'; sync({ keepTable: true });
+});
+$('bbIcoMin').addEventListener('input', (e) => {
+  // o piso não pode passar do teto, senão nenhum ícone aparece e parece que quebrou
+  const v = Math.min(+e.target.value, icoCfg().max);
+  spec.bubbleIcon = { ...icoCfg(), min: v };
+  $('bbIcoMinVal').textContent = v + 'px'; sync({ keepTable: true });
+});
+$('bbIcoMax').addEventListener('input', (e) => {
+  const v = Math.max(+e.target.value, icoCfg().min);
+  spec.bubbleIcon = { ...icoCfg(), max: v };
+  $('bbIcoMaxVal').textContent = v + 'px'; sync({ keepTable: true });
+});
+function paintBubbleOpts() {
+  $('bubbleOpts').hidden = spec.type !== 'bubble';
+  $('bbLabel').value = spec.bubbleLabel ?? 'below';
+  const r = spec.bubbleMinR ?? DEFAULTS.bubbleMinR;
+  $('bbMinR').value = r; $('bbMinRVal').textContent = r + 'px';
+  const ic = icoCfg();
+  $('bbIcoMin').value = ic.min; $('bbIcoMinVal').textContent = ic.min + 'px';
+  $('bbIcoMax').value = ic.max; $('bbIcoMaxVal').textContent = ic.max + 'px';
+}
+
+// — sankey: espessura das barras, separada da altura da imagem —
+$('skScale').addEventListener('input', (e) => {
+  spec.sankeyScale = +e.target.value / 100;
+  $('skScaleVal').textContent = e.target.value + '%';
+  sync({ keepTable: true });
+});
+function paintSankeyOpts() {
+  $('sankeyOpts').hidden = spec.type !== 'sankey';
+  const v = Math.round((spec.sankeyScale ?? 1) * 100);
+  $('skScale').value = v; $('skScaleVal').textContent = v + '%';
+}
+
+// — pizza/rosca: juntar a cauda longa em "Outros" —
+const gsCfg = () => ({ ...DEFAULTS.groupSmall, ...spec.groupSmall });
+const setGs = (patch) => { spec.groupSmall = { ...gsCfg(), ...patch }; buildSeries(); sync({ keepTable: true }); };
+$('gsOn').addEventListener('change', (e) => setGs({ on: e.target.checked }));
+$('gsPct').addEventListener('input', (e) => { $('gsVal').textContent = e.target.value + '%'; setGs({ pct: +e.target.value }); });
+$('gsLabel').addEventListener('input', (e) => setGs({ label: e.target.value || 'Outros' }));
+function paintPieOpts() {
+  $('pieOpts').hidden = !['pie', 'donut'].includes(spec.type);
+  const g = gsCfg();
+  $('gsOn').checked = g.on;
+  $('gsPct').value = g.pct; $('gsVal').textContent = g.pct + '%';
+  $('gsLabel').value = g.label === 'Outros' ? '' : g.label;
+}
+
 function paintBarOpts() {
   $('barOpts').hidden = !['bar', 'hbar'].includes(spec.type);
   $('barRadius').value = spec.barRadius; $('brVal').textContent = spec.barRadius + ' px';
@@ -209,17 +431,36 @@ function paintWatermark() {
   $('wmOpacity').value = Math.round(op * 100); $('wmOpVal').textContent = Math.round(op * 100) + '%';
   $('wmScale').value = Math.round((wm.size || 1) * 100);
   $('wmScaleVal').textContent = (+(wm.size || 1).toFixed(2)) + '×';
+  // title do ↺ de opacidade muda com a posição (centro = 8%, canto = 100%)
+  const defOp = Math.round(wmDefaultOpacity(wm.pos) * 100);
+  $('wmOpReset').title = `Redefinir para ${defOp}%`;
 }
 
-$('theme').addEventListener('change', (e) => {
-  const from = THEMES[spec.theme].series, to = THEMES[e.target.value].series;
+// ── tema: segment Claro/Escuro com ícones sunny / moon ───────────────────────
+const THEME_ICO = { light: 'sunny', dark: 'moon' };
+const themeSegBtns = [...document.querySelectorAll('#themeSeg button[data-theme]')];
+themeSegBtns.forEach((b) => {
+  const key = THEME_ICO[b.dataset.theme];
+  if (!key) return;
+  const label = b.textContent.trim();
+  b.innerHTML = `${uiIco(key, 14, 'outline')}<span>${label}</span>`;
+});
+function paintTheme() {
+  themeSegBtns.forEach((b) =>
+    b.setAttribute('aria-selected', String(b.dataset.theme === (spec.theme || 'light'))));
+}
+function setTheme(next) {
+  if (!THEMES[next] || next === spec.theme) { paintTheme(); return; }
+  const from = THEMES[spec.theme].series, to = THEMES[next].series;
   // cor segue a entidade: remapeia só quem estava num slot padrão
   spec.series.forEach((s) => { const i = from.indexOf(s.color); if (i >= 0) s.color = to[i]; });
-  spec.theme = e.target.value;
+  spec.theme = next;
+  paintTheme();
   buildSeries(); paintCandle(); sync({ keepTable: true });   // swatch mostra a cor do tema novo
-});
+}
+themeSegBtns.forEach((b) => b.addEventListener('click', () => setTheme(b.dataset.theme)));
 
-[['yformat', 'y.format'], ['yside', 'y.side'], ['labelMode', 'labelMode'], ['grid', 'grid'], ['legend', 'legend']]
+[['yformat', 'y.format'], ['yside', 'y.side'], ['yscale', 'y.scale'], ['labelMode', 'labelMode'], ['grid', 'grid'], ['legend', 'legend']]
   .forEach(([id, path]) => $(id).addEventListener('change', (e) => {
     set(path, e.target.value);
     // usd/brl/pct já trazem o símbolo — prefixo/sufixo manual duplicaria ("US$ US$")
@@ -248,6 +489,17 @@ $('xevery').addEventListener('input', (e) => { spec.x.every = Math.max(1, +e.tar
 $('scale').addEventListener('change', () => sync({ keepTable: true, keepJson: true }));
 
 $('tsv').addEventListener('input', (e) => {
+  // sankey lê "origem,destino,valor"; bolhas leem "rótulo,valor,ícone,grupo,categoria"
+  if (spec.type === 'sankey') {
+    spec.links = parseLinks(e.target.value);
+    buildSeries(); sync({ keepTable: true });
+    return;
+  }
+  if (spec.type === 'bubble') {
+    spec.bubbles = parseBubbles(e.target.value);
+    buildSeries(); sync({ keepTable: true });
+    return;
+  }
   const t = parseTable(e.target.value);
   if (!t) return;
   spec.labels = t.labels;
@@ -264,12 +516,102 @@ $('btnCopy').addEventListener('click', async () => {
   await navigator.clipboard.writeText(JSON.stringify(spec, null, 2)); flash('Spec copiada.');
 });
 
+// Abrir projeto: o spec JÁ é o estado inteiro. Salvar JSON / PNG / SVG saem
+// do popover "Baixar" (mesmo padrão do Diagramador).
+$('btnOpen').addEventListener('click', () => $('fileSpec').click());
+$('fileSpec').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) openSpecFile(f); e.target.value = ''; });
+
+async function openSpecFile(file) {
+  let parsed;
+  try { parsed = JSON.parse(await file.text()); }
+  catch (err) { return flash('Arquivo inválido: ' + err.message, true); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return flash('Arquivo não é um projeto de gráfico.', true);
+  spec = { ...structuredClone(DEFAULTS), ...parsed };
+  exitEditIfOn(); fillControls(); buildSeries(); sync(); pushHistory();
+  flash('Projeto carregado.');
+}
+
 // cores NOMEADAS (marca + tokens de ativos). 🤔 Strategy/HYPE/XRP são estimativas
 // (não achei hex de marca confirmado) — trocar aqui se vierem os oficiais.
 // lista de séries (cor via swatch, nome, tracejado via switch)
+/* Sankey e pizza não têm "séries": o que o usuário quer pintar são os NÓS e as
+ * FATIAS. Sem isso a lista ficava vazia (sankey) ou com uma linha só (pizza),
+ * e a única forma de trocar cor era editar nodeColors na spec à mão. */
+function buildParts() {
+  const t = THEMES[spec.theme];
+  const box = $('series');
+  const nomes = spec.type === 'sankey'
+    // ordem de aparição nas ligações = ordem em que o renderer atribui a paleta
+    ? [...new Set((spec.links || []).flatMap((l) => [l.from, l.to]).filter(Boolean))]
+    : (spec.labels || []);
+  const chave = spec.type === 'sankey' ? 'nodeColors' : 'sliceColors';
+  nomes.forEach((nome, i) => {
+    const cor = (spec[chave] || {})[nome] || t.series[i % t.series.length];
+    const row = document.createElement('div');
+    row.className = 'serie';
+    const sw = document.createElement('button');
+    sw.type = 'button'; sw.className = 'swatch'; sw.title = `Cor de ${nome}`;
+    sw.style.background = cor;
+    sw.onclick = () => openSwatchPop(sw, (hex) => {
+      spec[chave] = { ...spec[chave], [nome]: hex };
+      buildSeries(); sync({ keepTable: true }); pushHistory();
+    }, cor);
+    const nm = document.createElement('input');
+    nm.type = 'text'; nm.className = 'sname'; nm.value = nome; nm.readOnly = true;
+    nm.title = spec.type === 'sankey' ? 'O nome vem das ligações — edite no CSV' : 'O nome vem dos rótulos — edite no CSV';
+    row.append(sw, nm);
+    box.append(row);
+  });
+}
+
+/* Bolhas: uma linha por bolha, com o MESMO picker de ícone do criador de
+ * timelines (36 da casa + 421 Ionicons + sigla `txt:`). A cor vem da categoria,
+ * não da bolha — é o que faz a legenda significar alguma coisa. */
+function buildBubbles() {
+  const t = THEMES[spec.theme];
+  const box = $('series');
+  const cats = [...new Set((spec.bubbles || []).map((b) => b.cat).filter(Boolean))];
+  (spec.bubbles || []).forEach((b) => {
+    const row = document.createElement('div');
+    row.className = 'serie';
+
+    const ico = document.createElement('button');
+    ico.type = 'button'; ico.className = 'ev-icon'; ico.title = 'Ícone dentro da bolha';
+    paintIconBtn(ico, b.icon);
+    ico.onclick = () => openIconPop(ico, (key) => {
+      if (key) b.icon = key; else delete b.icon;
+      paintIconBtn(ico, b.icon); sync({ keepTable: true }); pushHistory();
+    }, b.icon);
+
+    const cor = (spec.bubbleCats || {})[b.cat] || t.series[Math.max(0, cats.indexOf(b.cat)) % t.series.length];
+    const sw = document.createElement('button');
+    sw.type = 'button'; sw.className = 'swatch';
+    sw.title = b.cat ? `Cor da categoria "${b.cat}" (vale pra todas as bolhas dela)` : 'Sem categoria — defina uma no CSV pra agrupar a cor';
+    sw.style.background = cor;
+    sw.onclick = () => openSwatchPop(sw, (hex) => {
+      // a cor é da CATEGORIA: mudar aqui repinta todas as bolhas do mesmo tipo,
+      // que é o que mantém a legenda verdadeira
+      if (b.cat) spec.bubbleCats = { ...spec.bubbleCats, [b.cat]: hex };
+      buildSeries(); sync({ keepTable: true }); pushHistory();
+    }, cor);
+
+    const nm = document.createElement('input');
+    nm.type = 'text'; nm.className = 'sname'; nm.value = b.label ?? '';
+    nm.setAttribute('aria-label', 'Rótulo da bolha');
+    nm.oninput = () => { b.label = nm.value; sync({ keepTable: true }); };
+
+    row.append(ico, sw, nm);
+    box.append(row);
+  });
+}
+
 function buildSeries() {
   const t = THEMES[spec.theme];
   $('series').innerHTML = '';
+  if (spec.type === 'bubble') { buildBubbles(); syncSidebarVisibility(); return; }
+  if (spec.type === 'sankey' || spec.type === 'pie' || spec.type === 'donut') {
+    buildParts(); syncSidebarVisibility(); return;
+  }
   spec.series.forEach((s, i) => {
     const color = s.color || t.series[i % t.series.length];
     const row = document.createElement('div');
@@ -294,6 +636,7 @@ function buildSeries() {
       vis.setAttribute('aria-checked', !s.hidden);
       row.classList.toggle('off', !!s.hidden);
       sync({ keepTable: true });
+      syncSidebarVisibility(); // legenda some/aparece com 1 vs 2+ séries visíveis
     };
     row.classList.toggle('off', !!s.hidden);
 
@@ -327,12 +670,14 @@ function buildSeries() {
     }
     $('series').append(row);
   });
+  syncSidebarVisibility();
 }
 
 function fillControls() {
   const v = { ...spec, yformat: spec.y.format, ymin: spec.y.min ?? '', ymax: spec.y.max ?? '', ytitle: spec.y.title ?? '',
-    yprefix: spec.y.prefix ?? '', ysuffix: spec.y.suffix ?? '', xevery: spec.x.every, yside: spec.y.side ?? 'left' };
-  for (const id of ['theme', 'title', 'subtitle', 'source', 'yformat', 'yside', 'labelMode', 'grid', 'legend',
+    yprefix: spec.y.prefix ?? '', ysuffix: spec.y.suffix ?? '', xevery: spec.x.every, yside: spec.y.side ?? 'left',
+    yscale: spec.y.scale ?? 'linear' };
+  for (const id of ['title', 'subtitle', 'source', 'yformat', 'yside', 'yscale', 'labelMode', 'grid', 'legend',
     'ymin', 'ymax', 'ytitle', 'yprefix', 'ysuffix', 'xevery', 'strokeWidth', 'dotSize', 'fontScale', 'width', 'height']) {
     if ($(id)) $(id).value = v[id];
   }
@@ -340,7 +685,8 @@ function fillControls() {
   $('swVal').textContent = spec.strokeWidth + ' px';
   $('dotVal').textContent = spec.dotSize ? spec.dotSize + ' px' : 'off';
   $('fsVal').textContent = spec.fontScale + '×';
-  paintTypePicker();
+  paintTheme();
+  paintTypePicker(); // inclui syncSidebarVisibility (seções/campos por tipo)
   // switches de mostrar label (garante o objeto show mesmo em spec vinda de fora)
   spec.show = { title: false, subtitle: false, source: false, ...spec.show };
   ['title', 'subtitle', 'source'].forEach((k) =>
@@ -395,20 +741,60 @@ async function toPng(sp, scale) {
   } finally { URL.revokeObjectURL(url); }
 }
 
-$('btnPng').addEventListener('click', async () => {
+async function exportPng() {
   flash('Gerando PNG…');
   try {
     download(await toPng(spec, +$('scale').value), `${slug(spec.title)}.png`);
     flash('PNG baixado.');
   } catch (e) { flash('Falhou: ' + e.message, true); }
-});
-
-$('btnSvg').addEventListener('click', async () => {
+}
+async function exportSvg() {
   try {
-    download(new Blob([await svgString(spec)], { type: 'image/svg+xml' }), `${slug(spec.title)}.svg`);
-    flash('SVG baixado (fonte embutida).');
+    // SVG de export sempre sem fundo (cola em qualquer arte; PNG mantém o tema)
+    download(new Blob([await svgString({ ...spec, transparent: true })], { type: 'image/svg+xml' }), `${slug(spec.title)}.svg`);
+    flash('SVG baixado (fundo transparente).');
   } catch (e) { flash('Falhou: ' + e.message, true); }
+}
+function exportJson() {
+  download(new Blob([JSON.stringify(spec, null, 2)], { type: 'application/json' }), `${slug(spec.title)}.json`);
+  flash('Projeto salvo (.json).');
+}
+
+// ── popover "Baixar" (PNG / SVG / JSON) — ancora no botão, fecha ao clicar fora ──
+const downloadMenu = $('downloadMenu');
+const btnDownload = $('btnDownload');
+const DL_ICO = { png: 'image', svg: 'code-slash', json: 'document-text' };
+downloadMenu.querySelectorAll('button[data-dl]').forEach((b) => {
+  const key = DL_ICO[b.dataset.dl];
+  if (!key) return;
+  const label = b.querySelector('.dl-label')?.textContent?.trim() || b.textContent.trim();
+  const badge = b.querySelector('.dl-badge');
+  const badgeHtml = badge ? badge.outerHTML : '';
+  b.innerHTML = `${uiIco(key, 16, 'outline')}<span class="dl-label">${label}</span>${badgeHtml}`;
 });
+function openDownloadMenu() {
+  const r = btnDownload.getBoundingClientRect();
+  downloadMenu.hidden = false;
+  btnDownload.setAttribute('aria-expanded', 'true');
+  const mw = downloadMenu.offsetWidth || 240;
+  downloadMenu.style.left = Math.max(8, r.right - mw) + 'px';
+  downloadMenu.style.top = (r.bottom + 6) + 'px';
+}
+function closeDownloadMenu() {
+  downloadMenu.hidden = true;
+  btnDownload.setAttribute('aria-expanded', 'false');
+}
+btnDownload.addEventListener('click', () => {
+  if (downloadMenu.hidden) openDownloadMenu(); else closeDownloadMenu();
+});
+document.addEventListener('mousedown', (e) => {
+  if (downloadMenu.hidden) return;
+  if (e.target.closest('#downloadMenu') || e.target.closest('#btnDownload')) return;
+  closeDownloadMenu();
+});
+downloadMenu.querySelector('[data-dl="png"]').addEventListener('click', () => { closeDownloadMenu(); exportPng(); });
+downloadMenu.querySelector('[data-dl="svg"]').addEventListener('click', () => { closeDownloadMenu(); exportSvg(); });
+downloadMenu.querySelector('[data-dl="json"]').addEventListener('click', () => { closeDownloadMenu(); exportJson(); });
 
 $('btnCsv').addEventListener('click', () => {
   download(new Blob([toTable(spec)], { type: 'text/csv;charset=utf-8' }), `${slug(spec.title)}.csv`);
@@ -424,9 +810,38 @@ if (new URLSearchParams(location.search).has('embed')) {
     flash('Gerando SVG…');
     try {
       const svg = await svgString(spec);
-      parent.postMessage({ type: 'pdgm-chart-svg', svg, title: spec.title, w: spec.width, h: spec.height }, location.origin);
+      // o spec vai JUNTO com o SVG: a diagramação guarda os dois no bloco, e é o
+      // spec que permite reabrir este gráfico aqui dentro e editar depois — sem
+      // ele o relatório só teria um PNG vetorial burro, sem volta.
+      parent.postMessage({ type: 'pdgm-chart-svg', kind: 'chart', svg, spec, title: spec.title, w: spec.width, h: spec.height }, location.origin);
+      await importConfirmado();
       flash('Importado.');
     } catch (e) { flash('Falhou: ' + e.message, true); }
+  });
+  // caminho de volta: a diagramação manda o spec de um gráfico já colocado no
+  // relatório pra reabrir aqui exatamente como estava
+  addEventListener('message', (e) => {
+    if (e.origin !== location.origin || e.data?.type !== 'pdgm-chart-load' || !e.data.spec) return;
+    spec = { ...structuredClone(DEFAULTS), ...e.data.spec };
+    exitEditIfOn(); fillControls(); buildSeries(); sync(); pushHistory();
+  });
+  parent.postMessage({ type: 'pdgm-chart-ready' }, location.origin);   // só agora dá pra receber spec
+}
+
+// "Importado." é uma promessa: só sai depois que a diagramação confirma que o
+// bloco ENTROU no documento. postMessage não avisa quando ninguém escuta do outro
+// lado (aba do relatório aberta antes desta versão, handler que estourou) — sem
+// esse aperto de mão o editor dizia "Importado." e o gráfico sumia sem rastro.
+function importConfirmado() {
+  return new Promise((ok, falhou) => {
+    const fim = (fn, arg) => { clearTimeout(t); removeEventListener('message', ouvir); fn(arg); };
+    const ouvir = (e) => {
+      if (e.origin !== location.origin) return;
+      if (e.data?.type === 'pdgm-chart-ok') fim(ok);
+      else if (e.data?.type === 'pdgm-chart-fail') fim(falhou, new Error(e.data.error || 'a diagramação recusou'));
+    };
+    const t = setTimeout(() => fim(falhou, new Error('o relatório não confirmou — recarregue a aba da diagramação (⌘⇧R) e importe de novo')), 8000);
+    addEventListener('message', ouvir);
   });
 }
 
@@ -440,9 +855,28 @@ function iaShow() {
   $('iaClose').hidden = true;
   ov.querySelector('.ia-title').textContent = 'Lendo o gráfico com o Claude…';
   const t0 = Date.now();
-  const tick = () => { ov.querySelector('#iaTimer').textContent = `${Math.round((Date.now() - t0) / 1000)}s · pode levar até 1 min`; };
+  // O que o usuário vê é o progresso REAL vindo do servidor (/api/progress),
+  // não um palpite: numa imagem com muitas séries a IA passa minutos só
+  // ESCREVENDO o JSON dos dados, e um cronômetro sozinho parece travamento.
+  let fase = '';
+  const tick = () => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    ov.querySelector('#iaTimer').textContent = `${s}s${fase ? ' · ' + fase : ' · lendo…'}`;
+  };
+  const puxa = async () => {
+    try {
+      const p = await (await fetch('/api/progress')).json();
+      if (!p.rodando) return;
+      fase = p.chars > 0
+        // gráfico com muitas séries = centenas de números pra transcrever;
+        // mostrar o tamanho do que já saiu deixa claro que está andando
+        ? `escrevendo os dados (${p.chars.toLocaleString('pt-BR')} caracteres)`
+        : (p.fase || '');
+    } catch { /* servidor ocupado respondendo: tenta no próximo tick */ }
+  };
   tick();
-  return setInterval(tick, 1000);   // cronômetro ao vivo
+  const iv = setInterval(() => { tick(); puxa(); }, 1000);
+  return iv;   // cronômetro + progresso ao vivo
 }
 function iaError(msg) {
   const ov = $('iaOverlay');
@@ -649,7 +1083,7 @@ $('btnCandles').addEventListener('click', async () => {
     }
     spec = { ...structuredClone(DEFAULTS), ...cSpec };
     exitEditIfOn(); fillControls(); buildSeries(); sync(); pushHistory();
-    hideChat();   // dados de API, não de imagem — o chat da extração não se aplica
+    clearIaSession();   // dados de API, não de imagem — o chat da extração não se aplica
     flash(`${rows.length} candles de ${shownSymbol(symbol)}.`);
   } catch (e) {
     flash('Candles: ' + e.message, true);
@@ -660,15 +1094,64 @@ $('btnCandles').addEventListener('click', async () => {
 function exitEditIfOn() { if (editMode) exitEdit(); }
 
 // ── Importar de HTML/SVG: reconstrói a spec do markup colado (sem IA) ─────────
+/* DefiLlama: o gráfico do site é ECharts em <canvas>, então o HTML não carrega
+ * dado nenhum (diferente do recharts, que guarda a curva no `d` do <path>).
+ * Mas a URL — do embed ou da página — traz o slug e quais métricas estão
+ * ligadas, e a API deles é aberta: em vez de tentar ler pixel, busca a fonte.
+ * Aceita tanto a URL solta quanto o <iframe …> inteiro colado. */
+function parseLlamaUrl(texto) {
+  const m = /defillama\.com\/(?:chart\/)?protocol\/([\w.-]+)([^\s"'<>]*)/i.exec(texto);
+  if (!m) return null;
+  const q = new URLSearchParams((m[2].split('?')[1] || '').replace(/&amp;/g, '&'));
+  const on = (k, padrao) => (q.has(k) ? q.get(k) !== 'false' : padrao);
+  // TVL é o que a página abre por padrão; as outras só entram se a URL pedir
+  return { slug: m[1], tvl: on('tvl', true), openInterest: on('openInterest', false), fees: on('fees', false) };
+}
+
+async function importarLlama(alvo) {
+  const btn = $('btnImportHtml');
+  btn.disabled = true; flash(`Buscando ${alvo.slug} no DefiLlama…`);
+  try {
+    const qs = new URLSearchParams({ slug: alvo.slug });
+    ['tvl', 'openInterest', 'fees'].forEach((k) => { if (alvo[k]) qs.set(k, '1'); });
+    const r = await fetch('/api/llama?' + qs);
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+    const n = j.dias.length;
+    // Rótulo pelo ALCANCE, não fixo: em 3 anos de história "02/03/23" repetido
+    // 12 vezes não cabe no eixo e os textos encavalam — aí "Mar/23" basta.
+    const anos = (Date.parse(j.dias.at(-1)) - Date.parse(j.dias[0])) / 31557600000;
+    const labels = j.dias.map((iso) => {
+      const [a, m, d] = iso.split('-');
+      return anos > 1.5 ? `${capFirst(MES[+m - 1])}/${a.slice(2)}` : `${+d}/${capFirst(MES[+m - 1])}`;
+    });
+    spec = { ...structuredClone(DEFAULTS),
+      type: 'line', labels, series: j.series,
+      y: { ...DEFAULTS.y, format: 'compact', prefix: 'US$ ' },
+      x: { ...DEFAULTS.x, every: Math.max(1, Math.ceil(n / MAX_X_LABELS)) } };
+    clearIaSession();                 // dado de API, não de imagem
+    exitEditIfOn(); fillControls(); buildSeries(); sync(); pushHistory();
+    const quais = j.series.map((s) => s.name).join(' + ');
+    flash(`DefiLlama: ${quais} — ${n} pontos, ${labels[0]} a ${labels.at(-1)}.`);
+  } catch (e) {
+    flash(/Failed to fetch|NetworkError/.test(e.message)
+      ? 'Pra buscar no DefiLlama o servidor precisa estar no ar: node --watch server.mjs'
+      : 'DefiLlama: ' + e.message, true);
+  } finally { btn.disabled = false; }
+}
+
 $('btnImportHtml').addEventListener('click', () => {
   const html = $('htmlIn').value.trim();
   if (!html) return flash('Cole o HTML do elemento primeiro.', true);
+  const llama = parseLlamaUrl(html);
+  if (llama) return importarLlama(llama);   // URL/iframe do DefiLlama: busca a API
   let partial;
   try { partial = parseChartHtml(html); }
   catch (err) { return flash('Não deu: ' + err.message, true); }
   if (!partial || !partial.series?.length) return flash('Não achei gráfico nem tabela nesse HTML.', true);
   spec = { ...structuredClone(DEFAULTS), ...partial };
   const datou = datarX();                     // se as datas já estiverem preenchidas
+  clearIaSession();   // dados do HTML colado, não de imagem — o chat da extração não se aplica
   fillControls(); buildSeries(); sync();
   enterEdit(); pushHistory();
   const n = spec.series[0].data.length, cal = partial._calibrated;
@@ -736,19 +1219,27 @@ async function convertImage(file) {
     delete specIn.plotRect;                      // não são campos da spec do renderer
     delete specIn.mode;
     if (Array.isArray(specIn.labels)) specIn.labels = specIn.labels.map(capFirst);   // meses com inicial maiúscula
+    // sankey não tem série nem eixo: o dado são as ligações que a IA leu das
+    // fitas. Sem isso a spec chegava com `links` mas era tratada como cartesiana.
+    const ehSankey = specIn.type === 'sankey' && Array.isArray(specIn.links);
     spec = { ...structuredClone(DEFAULTS), ...specIn };
-    if (spec.series?.length) spec.x.every = Math.max(spec.x.every || 1, Math.ceil((spec.labels?.length || spec.series[0].data.length) / 12));
+    if (!ehSankey && spec.series?.length) spec.x.every = Math.max(spec.x.every || 1, Math.ceil((spec.labels?.length || spec.series[0].data.length) / 12));
     fillControls(); buildSeries(); sync();
-    $('ghostOn').checked = true; applyGhost();   // sobrepõe pra conferir na hora
+    /* Sobreposição da original pra conferir — MENOS no sankey: lá o desenho é
+     * recalculado do zero (colunas, ordem dos nós, altura), então a imagem
+     * nunca alinha com o resultado e só atrapalha a leitura. `setReference`
+     * liga o ghost lá em cima, então aqui é preciso DESLIGAR, não só não ligar. */
+    $('ghostOn').checked = !ehSankey; applyGhost();
     $('iaOverlay').hidden = true;
-    enterEdit();                                 // já entra no modo de edição
+    if (!ehSankey) enterEdit();                  // sankey: o modo edição move nó, não ponto
     pushHistory();
     iaSession = j.sessionId || null;             // habilita o chat com a mesma sessão
     if (iaSession) showChat('Extração pronta. Me peça pra corrigir algum dado, rótulo ou o título — reexamino a imagem.');
     else hideChat();
     flash(`Pronto — ${(j.ms / 1000).toFixed(0)}s${j.cost ? `, ~US$ ${j.cost.toFixed(3)}` : ''}`
       + (rep ? ` · ${rep.pontos} pontos por pixel, cobertura ${rep.series[0].cobertura}%` : '')
-      + '. Arraste os pontos pra ajustar.');
+      + (ehSankey ? ` · ${spec.links.length} fluxos. Confira os valores na caixa de texto.`
+        : '. Arraste os pontos pra ajustar.'));
   } catch (err) {
     iaError(/Failed to fetch|NetworkError/.test(err.message)
       ? 'Servidor de IA fora do ar. No terminal, rode:<br><code>node server.mjs</code>' : err.message);
@@ -766,6 +1257,13 @@ function openChat() {
 }
 function minChat() { $('iaPanel').hidden = true; $('iaFab').hidden = false; }
 function hideChat() { $('iaPanel').hidden = true; $('iaFab').hidden = true; }
+// dados que não vieram de imagem (API, HTML colado): o chat de correção lê a
+// imagem original pra conferir o pedido — sem isso ele reexaminaria uma
+// imagem de OUTRO gráfico (a última convertida na sessão) e nunca acertaria o
+// pedido, só gastaria minutos. null a sessão, não só esconder o painel: se
+// sobrar um FAB aberto de uma conversão anterior, clicar nele já bloqueia
+// (`refineChart` recusa sem sessão) em vez de rodar a IA contra o gráfico errado.
+function clearIaSession() { iaSession = null; hideChat(); }
 function showChat(msg) {   // após conversão: liga o FAB e abre uma vez com boas-vindas
   $('iaLog').innerHTML = '';
   if (msg) appendChat('bot', msg);
@@ -789,10 +1287,25 @@ async function refineChart(message) {
   const pending = appendChat('bot', 'pensando… 0s');
   pending.classList.add('pending');
   const t0 = Date.now();
-  const timer = setInterval(() => { pending.textContent = `pensando… ${Math.round((Date.now() - t0) / 1000)}s`; }, 500);
+  // mesma ideia do overlay da conversão: progresso REAL do servidor, porque a
+  // correção relê a imagem e pode passar minutos reescrevendo os dados
+  let fase = '';
+  const timer = setInterval(async () => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    pending.textContent = `pensando… ${s}s${fase ? ' · ' + fase : ''}`;
+    try {
+      const p = await (await fetch('/api/progress')).json();
+      if (p.rodando) fase = p.chars > 0 ? `escrevendo (${p.chars.toLocaleString('pt-BR')} caracteres)` : (p.fase || '');
+    } catch { /* ignora: é só o indicador */ }
+  }, 1000);
   $('iaSend').disabled = $('iaMsg').disabled = true;
   const ctrl = new AbortController();
-  const kill = setTimeout(() => ctrl.abort(), 180000);   // teto de 3 min: nunca trava pra sempre
+  // Sem teto curto aqui: quem decide é o servidor, que mata por INATIVIDADE
+  // (4 min mudo, 15 min se a API avisou que estamos na fila) em vez de por
+  // tempo total. O teto de 3 min do cliente era o que produzia o "demorou
+  // demais" bem quando a resposta estava quase chegando. 16 min é só a rede
+  // pro caso de a conexão em si morrer.
+  const kill = setTimeout(() => ctrl.abort(), 960000);
   // manda só os campos de dado; tema/marca d'água/formato ficam locais
   const dataSpec = {
     type: spec.type, title: spec.title, subtitle: spec.subtitle, source: spec.source,
@@ -809,11 +1322,14 @@ async function refineChart(message) {
     if (j.sessionId) iaSession = j.sessionId;   // a conversa acumula contexto
     applyRefine(j.spec);
     pending.classList.remove('pending');
-    pending.textContent = `✓ atualizado (${((j.ms || 0) / 1000).toFixed(0)}s)`;
+    // stalledMs = maior silêncio da API dentro da chamada. Só vale dizer quando
+    // foi grande: aí a demora não foi a ferramenta, foi espera externa.
+    const parado = j.stalledMs > 30000 ? `, ${Math.round(j.stalledMs / 60000)} min parado esperando a API` : '';
+    pending.textContent = `✓ atualizado (${((j.ms || 0) / 1000).toFixed(0)}s${parado})`;
   } catch (e) {
     pending.classList.remove('pending'); pending.classList.add('err');
-    pending.textContent = e.name === 'AbortError' ? '✗ demorou demais (>3 min) — tente de novo ou recarregue a página'
-      : /Failed to fetch|NetworkError/.test(e.message) ? '✗ servidor de IA fora do ar — rode node server.mjs no terminal'
+    pending.textContent = e.name === 'AbortError' ? '✗ conexão perdida — tente de novo ou recarregue a página'
+      : /Failed to fetch|NetworkError/.test(e.message) ? '✗ servidor de IA fora do ar — rode node --watch server.mjs no terminal'
         : '✗ ' + e.message;
   } finally {
     clearInterval(timer); clearTimeout(kill);
@@ -923,13 +1439,16 @@ $('ghostMove').addEventListener('click', () => {
   gh.addEventListener('dblclick', () => { if (ghostMove) { ghostAdjust = { dx: 0, dy: 0, scale: 1 }; positionGhost(); } });
 }
 
-// arrastar uma imagem pra janela também converte
+// arrastar uma imagem pra janela também converte; um .json reabre o projeto
 const drop = $('drop');
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => {
   e.preventDefault(); drop.classList.remove('over');
-  const f = [...e.dataTransfer.files].find((f) => f.type.startsWith('image/'));
+  const files = [...e.dataTransfer.files];
+  const j = files.find((f) => f.name.endsWith('.json'));
+  if (j) return openSpecFile(j);
+  const f = files.find((f) => f.type.startsWith('image/'));
   if (f) convertImage(f);
 });
 
@@ -952,6 +1471,10 @@ function enterEdit() {
   $('editToggle').classList.add('on'); $('editToggle').textContent = '✓ Editando';
   editLayer.classList.add('on');
   ['undo', 'redo', 'editHint'].forEach((id) => ($(id).hidden = false));
+  // sankey não tem ponto nem rótulo de eixo: a alça é o próprio nó
+  $('editHint').textContent = spec.type === 'sankey'
+    ? 'arraste um nó (a barra) pra cima ou pra baixo — o rótulo e os fluxos vão junto. Só na vertical: a horizontal é a etapa do fluxo.'
+    : 'arraste os pontos · no rótulo do eixo: clique renomeia, arraste desloca o texto na horizontal, botão-direito oculta/mostra · 2 cliques no gráfico adiciona ponto · botão-direito num ponto remove';
   fillControls(); sync(); updateUndoBtns();
 }
 function exitEdit() {
@@ -1011,6 +1534,7 @@ function midLabel(a, b) {
 const editLayer = $('editLayer'), tip = $('dragTip');
 let drag = null, raf = 0;
 let labelDrag = null;   // { i, lbl, startClientX, startClientY, startDx, moved } — só horizontal
+let nodeDrag = null;    // { n, startY, startOff } — nó do sankey, só vertical
 
 // depois de inserir (delta=+1, at=índice novo) ou remover (delta=-1, at=índice
 // removido) um ponto, realinha os índices guardados em x.hidden/x.offsets —
@@ -1036,6 +1560,15 @@ function toViewBox(clientX, clientY) {
   const r = svg.getBoundingClientRect();
   return { x: (clientX - r.left) * (spec.width / r.width), y: (clientY - r.top) * (spec.height / r.height), r };
 }
+// nó do sankey sob o ponto (px do viewBox). A folga lateral existe porque a
+// barra é fina: sem ela, pegar o nó vira mira de precisão.
+function nodeZone(vb) {
+  for (const nd of chartMeta.sankeyNodes || []) {
+    if (vb.x >= nd.x - 8 && vb.x <= nd.x + nd.w + 8 && vb.y >= nd.y - 4 && vb.y <= nd.y + nd.h + 4) return nd;
+  }
+  return null;
+}
+
 // marca mais próxima do ponto (em px do viewBox), dentro do raio
 function nearestMark(vx, vy) {
   let best = null, bd = 26 ** 2;
@@ -1116,12 +1649,22 @@ function valueAt(vb) {
   const { plot } = chartMeta;
   const scale = scaleOf(drag.axis);
   const frac = plot.horiz ? (vb.x - plot.left) / plot.plotW : (plot.bottom - vb.y) / plot.plotH;
-  const dom = scale.dMin + frac * (scale.dMax - scale.dMin);
+  // em log/symlog o pixel anda na curva, não no valor — interpolar linear aqui
+  // faria o ponto largado pular pra outra ordem de grandeza
+  const dom = scale.sym
+    ? symlogInv(symlog(scale.dMin, scale.T) + frac * (symlog(scale.dMax, scale.T) - symlog(scale.dMin, scale.T)), scale.T)
+    : scale.log
+      ? 10 ** (Math.log10(scale.dMin) + frac * (Math.log10(scale.dMax) - Math.log10(scale.dMin)))
+      : scale.dMin + frac * (scale.dMax - scale.dMin);
   return dom - drag.base;
 }
 // arredonda pra um passo "redondo" pela amplitude do eixo (nada de 47.31284%)
 function roundNice(v, axis) {
   const sc = scaleOf(axis);
+  // log/sym: passo fixo não serve — 0,01 e 10.000 convivem no mesmo eixo. Fixa
+  // em 3 dígitos significativos, que é "redondo" em qualquer ordem de grandeza
+  // (e em sym o sinal vem junto: -1,23 mil é tão válido quanto 1,23 mil).
+  if (sc.log || sc.sym) return v === 0 ? 0 : +v.toPrecision(3);
   const span = sc.dMax - sc.dMin || 1;
   const step = 10 ** Math.floor(Math.log10(span / 200));
   return Math.round(v / step) * step;
@@ -1140,11 +1683,18 @@ editLayer.addEventListener('pointermove', (e) => {
     }
     return;
   }
+  if (nodeDrag) {   // nó do sankey: só vertical, o horizontal é a etapa do fluxo
+    const vb0 = nodeDrag.vb0;
+    const dy = (e.clientY - nodeDrag.startY) * (spec.height / vb0.r.height);
+    spec.nodeOffsets = { ...spec.nodeOffsets, [nodeDrag.n]: Math.round(nodeDrag.startOff + dy) };
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; sync({ keepTable: true, keepJson: true }); });
+    return;
+  }
   if (!drag) {   // hover: mostra que dá pra pegar (ponto) ou renomear (rótulo)
     const vb = toViewBox(e.clientX, e.clientY);
     const onLabel = !!(vb && labelZone(vb));
     editLayer.classList.toggle('can-edit', onLabel);
-    editLayer.classList.toggle('can-drag', !onLabel && !!(vb && nearestMark(vb.x, vb.y)));
+    editLayer.classList.toggle('can-drag', !onLabel && !!(vb && (nearestMark(vb.x, vb.y) || nodeZone(vb))));
     return;
   }
   const vb = toViewBox(e.clientX, e.clientY);
@@ -1172,6 +1722,13 @@ editLayer.addEventListener('pointerdown', (e) => {
     editLayer.setPointerCapture(e.pointerId);
     return;
   }
+  const nd = nodeZone(vb);                // sankey: pegou um nó
+  if (nd) {
+    e.preventDefault();
+    nodeDrag = { n: nd.n, startY: e.clientY, startOff: (spec.nodeOffsets || {})[nd.n] || 0, vb0: vb };
+    editLayer.setPointerCapture(e.pointerId); editLayer.classList.add('dragging');
+    return;
+  }
   const m = nearestMark(vb.x, vb.y);
   if (m) { drag = m; editLayer.setPointerCapture(e.pointerId); editLayer.classList.add('dragging'); }
 });
@@ -1181,6 +1738,28 @@ editLayer.addEventListener('pointerdown', (e) => {
 const releaseCapture = (e) => { if (e && editLayer.hasPointerCapture?.(e.pointerId)) editLayer.releasePointerCapture(e.pointerId); };
 
 function endDrag(e) {
+  if (nodeDrag) {
+    const nd = nodeDrag; nodeDrag = null;
+    releaseCapture(e); editLayer.classList.remove('dragging');
+    /* Regrava o deslocamento que DE FATO foi aplicado (o renderer corta o que
+     * jogaria o nó pra fora da imagem). Sem isso, um arraste longo demais
+     * deixava um offset gigante guardado — o nó parava na borda e voltar exigia
+     * desfazer todo o excesso antes de ver qualquer movimento.
+     *
+     * O sync vem ANTES de ler: durante o arraste o desenho é atualizado dentro
+     * de um requestAnimationFrame, então no momento do "soltar" o chartMeta
+     * ainda pode ser o do quadro anterior — e aí o valor lido seria o de antes
+     * do arraste (medido: gravava 0 e o nó não saía do lugar). */
+    sync();
+    const real = (chartMeta.sankeyNodes || []).find((x) => x.n === nd.n);
+    if (real && Math.abs(real.offset - (spec.nodeOffsets?.[nd.n] ?? 0)) > 0.5) {
+      spec.nodeOffsets = { ...spec.nodeOffsets, [nd.n]: Math.round(real.offset) };
+      sync();
+    }
+    pushHistory();
+    flash(`"${nd.n}" reposicionado. Zerar: apague nodeOffsets na spec.`);
+    return;
+  }
   if (labelDrag) {
     const ld = labelDrag; labelDrag = null;
     releaseCapture(e);
@@ -1251,7 +1830,192 @@ function flash(msg, isError = false) {
   clearTimeout(flashT); flashT = setTimeout(() => { el.textContent = ''; el.classList.remove('err'); }, isError ? 8000 : 4000);
 }
 
+// ── expand/collapse animado dos <details> da sidebar (mesmo do Diagramador) ──
+// Intercepta o click no <summary>, anima height+opacity do .body, chevron via
+// .is-open (não espera [open] no close). Estado em LS sobrevive a reload.
+const LS_SIDEBAR = 'paradigma.graficos.sidebarSecs';
+const SIDEBAR_SEC_DEFAULTS = {
+  dados: true, csv: true, tipo: true, tipoOpts: true, series: true,
+  eixos: false, traco: false, textos: true, canvas: false, spec: false,
+};
+const DET_MS = 260;
+const DET_EASE = 'cubic-bezier(.4, 0, .2, 1)';
+
+function readSidebarSecs() {
+  const out = {};
+  document.querySelectorAll('aside details[data-sec]').forEach(d => {
+    out[d.dataset.sec] = !!d.open;
+  });
+  return out;
+}
+function persistSidebarSecsNow() {
+  try { localStorage.setItem(LS_SIDEBAR, JSON.stringify(readSidebarSecs())); } catch {}
+}
+function setDetailsOpen(det, open) {
+  const body = det.querySelector(':scope > .body');
+  const want = !!open;
+  const reduced = typeof matchMedia === 'function'
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const setOpenClass = (on) => det.classList.toggle('is-open', on);
+
+  if (!body || reduced) {
+    det.open = want;
+    setOpenClass(want);
+    delete det.dataset.detDir;
+    persistSidebarSecsNow();
+    return;
+  }
+  if (typeof det._detCleanup === 'function') det._detCleanup();
+
+  if (!!det.open === want) {
+    setOpenClass(want);
+    persistSidebarSecsNow();
+    return;
+  }
+
+  const clearInline = () => {
+    body.style.height = '';
+    body.style.opacity = '';
+    body.style.overflow = '';
+    body.style.transition = '';
+    det.classList.remove('sb-det-animating');
+    det._detCleanup = null;
+  };
+
+  setOpenClass(want);
+
+  if (want) {
+    det.dataset.detDir = 'open';
+    det.open = true;
+    det.classList.add('sb-det-animating');
+    body.style.overflow = 'hidden';
+    body.style.opacity = '0';
+    body.style.height = '0px';
+    const h = body.scrollHeight;
+    void body.offsetHeight;
+    body.style.transition = `height ${DET_MS}ms ${DET_EASE}, opacity ${Math.round(DET_MS * 0.85)}ms ease`;
+    body.style.height = h + 'px';
+    body.style.opacity = '1';
+    let tid = 0;
+    const finish = () => {
+      body.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      delete det.dataset.detDir;
+      clearInline();
+      persistSidebarSecsNow();
+    };
+    const onEnd = (e) => {
+      if (e.target !== body) return;
+      if (e.propertyName !== 'height' && e.propertyName !== 'opacity') return;
+      finish();
+    };
+    body.addEventListener('transitionend', onEnd);
+    tid = setTimeout(finish, DET_MS + 40);
+    det._detCleanup = () => {
+      body.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      delete det.dataset.detDir;
+      clearInline();
+    };
+  } else {
+    det.dataset.detDir = 'close';
+    det.classList.add('sb-det-animating');
+    body.style.overflow = 'hidden';
+    body.style.opacity = '1';
+    body.style.height = body.scrollHeight + 'px';
+    void body.offsetHeight;
+    body.style.transition = `height ${DET_MS}ms ${DET_EASE}, opacity ${Math.round(DET_MS * 0.85)}ms ease`;
+    body.style.height = '0px';
+    body.style.opacity = '0';
+    let tid = 0;
+    const finish = () => {
+      body.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      det.open = false;
+      delete det.dataset.detDir;
+      clearInline();
+      persistSidebarSecsNow();
+    };
+    const onEnd = (e) => {
+      if (e.target !== body) return;
+      if (e.propertyName !== 'height' && e.propertyName !== 'opacity') return;
+      finish();
+    };
+    body.addEventListener('transitionend', onEnd);
+    tid = setTimeout(finish, DET_MS + 40);
+    det._detCleanup = () => {
+      body.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      det.open = false;
+      delete det.dataset.detDir;
+      clearInline();
+    };
+  }
+}
+function initSidebarDetails() {
+  let saved = null;
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_SIDEBAR));
+    if (raw && typeof raw === 'object') saved = raw;
+  } catch {}
+
+  document.querySelectorAll('aside details[data-sec]').forEach(det => {
+    const id = det.dataset.sec;
+    const open = (saved && Object.prototype.hasOwnProperty.call(saved, id))
+      ? !!saved[id]
+      : !!SIDEBAR_SEC_DEFAULTS[id];
+    det.open = open;
+    det.classList.toggle('is-open', open);
+
+    const sum = det.querySelector(':scope > summary');
+    if (!sum) return;
+    // ion-icon name="chevron-forward-outline" — gira 90° com .is-open
+    if (!sum.querySelector('.det-chev')) {
+      const chev = document.createElement('span');
+      chev.className = 'det-chev';
+      chev.setAttribute('aria-hidden', 'true');
+      chev.innerHTML = uiIco('chevron-forward', 12, 'outline');
+      sum.prepend(chev);
+    }
+    sum.addEventListener('click', (e) => {
+      // ⓘ / badge: não toggle (reforço; o botão já tem preventDefault próprio)
+      if (e.target.closest('.infoicon') || e.target.closest('.sec-badge')) return;
+      e.preventDefault();
+      const dir = det.dataset.detDir;
+      const next = dir === 'open' ? false : dir === 'close' ? true : !det.open;
+      setDetailsOpen(det, next);
+    });
+  });
+
+  // ion-icon name="information-circle-outline" + não borbulha pro <summary>
+  document.querySelectorAll('aside .infoicon').forEach((btn) => {
+    if (!btn.querySelector('svg')) btn.innerHTML = uiIco('information-circle', 14, 'outline');
+    btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+  });
+}
+
+// ── sidebar recolhível (menu-outline) — slide width, igual Diagramador ───────
+const btnSidebar = document.getElementById('btnSidebar');
+const mainEl = document.querySelector('main');
+const sidebarEl = document.getElementById('sidebar');
+if (btnSidebar && mainEl && sidebarEl) {
+  btnSidebar.innerHTML = uiIco('menu', 18, 'outline');
+  btnSidebar.addEventListener('click', () => {
+    const open = btnSidebar.getAttribute('aria-pressed') !== 'true';
+    btnSidebar.setAttribute('aria-pressed', String(open));
+    mainEl.classList.toggle('sidebar-collapsed', !open);
+    btnSidebar.title = open ? 'Esconder o menu' : 'Mostrar o menu';
+    // inert quando fechado: não entra no tab order nem recebe clique sob o clip
+    if (open) sidebarEl.removeAttribute('inert');
+    else sidebarEl.setAttribute('inert', '');
+  });
+}
+
 // ── start ────────────────────────────────────────────────────────────────────
+initFeedback(); // botão Reportar → issue no GitHub (prefill)
+initSidebarDetails(); // chevron + expand animado + borda full-bleed
+enhanceAll();   // ticks + ímã nos range com data-snaps (não mexe em defaults)
 fillControls();
 buildSeries();
 sync();

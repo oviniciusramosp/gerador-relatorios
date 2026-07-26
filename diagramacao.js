@@ -15,21 +15,26 @@
  * parágrafos por linha via Range.getClientRects() quando precisar de fluxo denso.
  */
 
-import { openSwatchPop } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
-import { autocropWhite } from './autocrop.js'; // trilha C (t3): recrop da margem branca de imagens
+import { openSwatchPop, parseColor } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
+import { enhanceAll } from './range-snap.js';  // snap points em ranges (sidebar + painéis dinâmicos)
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
-import { deserializeDoc, serializeDocZip, deserializeDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
-import { IONICONS, ioniconSvg } from './ionicons.js';   // conjunto curado de Ionicons pro ícone do Callout
+import { deserializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
+import { registerIcons, findIcon, iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
+import { IONICONS_LIB, IONICONS_LIB_SOLID } from './ionicons-lib.js';  // outline + solid (charts / callout)
+import { openIconPop, paintIconBtn } from './icon-pop.js';
+import { initFeedback, openFeedbackReport } from './feedback.js';
+registerIcons(IONICONS_LIB);                          // outline (default do app)
+registerIcons(IONICONS_LIB_SOLID, { style: 'solid' }); // filled (callout default)
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
 const CONTENT_TOP = 88, CONTENT_H = 666;          // [88 .. 754]
 
-// seletor de coluna reutilizável (o MESMO do popover de Imagem e da Capa): 3 botões ícone+label
+// seletor de coluna reutilizável (popover de Imagem, Capa e aba Conteúdo): SVGs de coluna
 const COL_ICON = {
   left: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="4" width="4.5" height="8" fill="currentColor"/></svg>',
   full: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="4" width="10" height="8" fill="currentColor"/></svg>',
@@ -42,28 +47,15 @@ const ALIGN_ICON = {
   center: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2" rx="1" fill="currentColor"/><rect x="4.5" y="7" width="7" height="2" rx="1" fill="currentColor"/><rect x="3.5" y="11" width="9" height="2" rx="1" fill="currentColor"/></svg>',
   right: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2" rx="1" fill="currentColor"/><rect x="7" y="7" width="7" height="2" rx="1" fill="currentColor"/><rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor"/></svg>',
 };
-// cur = valor atual; vals = { left, full, right } valores emitidos; onPick(v)
-function columnField(cur, vals, onPick) {
-  const wrap = document.createElement('div'); wrap.className = 'placebtns';
-  const opt = (v, label, icon) => {
-    const b = document.createElement('button'); b.type = 'button';
-    b.innerHTML = icon + `<span>${label}</span>`;
-    if (cur === v) b.classList.add('on');
-    b.addEventListener('mousedown', (e) => e.preventDefault());   // não rouba o caret do bloco em edição
-    b.onclick = () => onPick(v);
-    wrap.append(b);
-  };
-  opt(vals.left, 'Coluna Esquerda', COL_ICON.left);
-  opt(vals.full, 'Largura Total', COL_ICON.full);
-  opt(vals.right, 'Coluna Direita', COL_ICON.right);
-  return wrap;
-}
-// segment control (mesma pílula do Documento/Conteúdo) só com ÍCONE — não reaproveita
-// columnField: aquele é uma LISTA vertical de botões ícone+texto (ainda usado no "Coluna" do
-// bloco em foco, na aba Conteúdo); os popovers de Texto/Imagem da capa e o de Imagem do miolo
-// pediram o visual do segment horizontal, com os MESMOS ícones (COL_ICON/ALIGN_ICON conforme o
-// caso). `opts` = [{val,label,icon}, ...], na ordem em que os botões aparecem; 3 opções usa a
-// mesma grade de 3 colunas do segment Documento/Conteúdo (.cols-3, já existe em paradigma.css).
+// posição vertical do logo na capa/contracapa (header = topo, footer = base) — mesma
+// linguagem de COL_ICON (quadro + faixa preenchida), só que a faixa é horizontal.
+const POS_ICON = {
+  header: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="4" width="10" height="3" fill="currentColor"/></svg>',
+  footer: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="9" width="10" height="3" fill="currentColor"/></svg>',
+};
+// segment control (mesma pílula do Documento/Conteúdo) só com ÍCONE — visual do popover de
+// Imagem/Texto da capa, do miolo e da aba Conteúdo (Posição do bloco em foco). `opts` =
+// [{val,label,icon}, ...]; 3 opções usam .cols-3 (paradigma.css).
 function widthSeg(cur, opts, onPick) {
   const wrap = document.createElement('div');
   wrap.className = 'segment iconseg' + (opts.length >= 3 ? ' cols-3' : '');
@@ -72,6 +64,7 @@ function widthSeg(cur, opts, onPick) {
     const b = document.createElement('button'); b.type = 'button'; b.title = label;
     b.innerHTML = icon;
     b.setAttribute('aria-selected', String(cur === val));
+    b.addEventListener('mousedown', (e) => e.preventDefault());   // não rouba o caret do bloco em edição
     b.onclick = () => onPick(val);
     wrap.append(b);
   }
@@ -99,17 +92,25 @@ const LIST_GAP = 6;   // distância atual entre itens da MESMA lista (compacta)
 function gapBefore(b, prev) {
   // override do usuário (menu ⋮ da paleta) substitui a regra INTEIRA pro tipo — inclusive a
   // nuance contextual (H2 colado no H1 etc.): uma vez customizado, o valor é fixo.
+  // Exceção: depois de TABELA o respiro mínimo é o de parágrafo (PARA_LH), mesmo com
+  // gap customizado menor — senão o bloco seguinte (quase sempre um p) cola na borda.
+  const pt = prev && prev.type;
   const custom = state.doc.blockStyles && state.doc.blockStyles[b.type];
   if (custom) {
     const v = HEAD_TYPES.has(b.type) ? custom.marginTop : custom.gap;
-    if (v != null) return v;
+    if (v != null) {
+      if (pt === 'table' && !HEAD_TYPES.has(b.type)) return Math.max(PARA_LH, v);
+      return v;
+    }
   }
-  const pt = prev && prev.type;
   if (b.type === 'h1') return 48;                                      // = padding da página
   if (b.type === 'h2') return pt === 'h1' ? PARA_LH : 32;              // colado no H1, senão 32
   if (b.type === 'h3') return (pt === 'h1' || pt === 'h2') ? PARA_LH : 24;
-  // itens consecutivos da MESMA lista (pontos/numérica/checklist) ficam compactos
-  if ((b.type === 'li' && pt === 'li') || (b.type === 'ol' && pt === 'ol') || (b.type === 'check' && pt === 'check')) return LIST_GAP;
+  // qualquer lista consecutiva (mesmo misturando pontos/número/check) fica compacta —
+  // permite "1. pai → subitem • → 2. continua" sem folga de parágrafo no meio
+  if (LIST_TYPES.has(b.type) && LIST_TYPES.has(pt)) return LIST_GAP;
+  // após tabela: mesmo respiro p↔p (1 linha). Headings já saíram nas regras acima.
+  if (pt === 'table') return PARA_LH;
   return PARA_LH;                     // demais blocos (inclui 'callout', trilha G): folga de 1 linha, sem regra especial
 }
 
@@ -117,38 +118,118 @@ const HEAD_TYPES = new Set(['h1', 'h2', 'h3', 'h4']);
 // 'check' (checklist, trilha B t7) e 'callout' (trilha G) são editáveis e reusam buildText;
 // 'table' NÃO é text (célula própria)
 const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'ol', 'quote', 'check', 'callout']);  // blocos editáveis
-const PH = { h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4', p: 'Escreva…', li: 'Item', ol: 'Item', quote: 'Citação', check: 'Item', callout: 'Escreva…' };
+// listas com subitens via Tab / Shift+Tab (b.indent = 0..MAX_LIST_INDENT)
+const LIST_TYPES = new Set(['li', 'ol', 'check']);
+const MAX_LIST_INDENT = 4;   // 5 níveis (0..4)
+const LIST_INDENT_PX = 18;   // recuo visual por nível
+// símbolos da lista de pontos (item / subitem) — padrão Word/Docs: cheio → oco
+const LI_MARKER_OPTS = ['•', '◦', '▪', '–', '▸', '○'];
+// estilo do SUBITEM da lista numérica (nível ≥ 1): number → 1.1. · letter → a. · bullet → •
+const OL_SUBSTYLE_OPTS = [
+  { val: 'number', label: 'Número', hint: '1.1.' },
+  { val: 'letter', label: 'Letra', hint: 'a.' },
+  { val: 'bullet', label: 'Pontos', hint: '•' },
+];
+const listIndentOf = (b) => Math.max(0, Math.min(MAX_LIST_INDENT, (b && b.indent) | 0));
+function setListIndent(b, n) {
+  const v = Math.max(0, Math.min(MAX_LIST_INDENT, n | 0));
+  if (v) b.indent = v; else delete b.indent;
+}
+// empurra o item inteiro (marcador + texto) — no check o envelope; no li/ol o próprio .b
+function applyListIndentStyle(el, b) {
+  const ind = listIndentOf(b);
+  if (ind > 0) {
+    el.style.marginLeft = (ind * LIST_INDENT_PX) + 'px';
+    el.dataset.indent = String(ind);
+  }
+}
+// 1 → a, 26 → z, 27 → aa (estilo Word/Docs para subnível em letra)
+function toAlphaMarker(n) {
+  let s = '', x = Math.max(1, n | 0);
+  while (x > 0) { x--; s = String.fromCharCode(97 + (x % 26)) + s; x = Math.floor(x / 26); }
+  return s;
+}
+// texto do marcador da lista numérica (após numberLists preencher _num/_nums)
+function olMarkerText(b) {
+  const ind = listIndentOf(b);
+  const sub = (typeStyleOf('ol').subStyle || 'number');
+  if (ind === 0) return (b._num || 1) + '.';
+  if (sub === 'letter') return toAlphaMarker(b._num || 1) + '.';
+  if (sub === 'bullet') return '•';
+  // number (default Docs/Word multilevel): "1.1." / "1.2.3."
+  const path = (b._nums && b._nums.length) ? b._nums : [b._num || 1];
+  return path.join('.') + '.';
+}
+function liMarkerText(b) {
+  const st = typeStyleOf('li');
+  return listIndentOf(b) > 0 ? (st.subMarker || '◦') : (st.marker || '•');
+}
+function applyListMarkers(el, b) {
+  const st = typeStyleOf(b.type);
+  const markColor = st.markerColor || '#29E899';
+  el.style.setProperty('--list-marker-color', markColor);
+  if (b.type === 'ol') {
+    const mark = olMarkerText(b);
+    el.dataset.num = mark;
+    // "1.12." precisa de mais espaço que "1." — reserva ~5.5px/char + folga
+    el.style.paddingLeft = Math.max(16, 6 + mark.length * 5.5) + 'px';
+    el.classList.toggle('ol-as-bullet', mark === '•');
+  } else if (b.type === 'li') {
+    el.dataset.marker = liMarkerText(b);
+  }
+}
+// li/ol/check: sem texto de placeholder — o marcador (• / 1. / checkbox) já comunica o tipo
+const PH = {
+  title: 'Título do relatório', subtitle: 'Subtítulo',
+  h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4',
+  p: 'Escreva…', li: '', ol: '', quote: 'Citação', check: '', callout: 'Escreva…',
+};
 const URL_RE = /^(https?:\/\/|www\.)[^\s]+$/i;
 
 // ── estilo por TIPO de bloco, editável pelo menu ⋮ da paleta (aba Conteúdo) ──────────────────
-// state.doc.blockStyles[type] = { color, fontSize, lineHeight, letterSpacing, gap, marginTop } —
-// campos ausentes usam o padrão do app (TYPE_STYLE_DEFAULTS abaixo, que só DOCUMENTA os valores
-// que já estavam fixos na CSS/gapBefore — não são lidos no render, servem de "valor inicial do
-// slider" e de alvo do botão redefinir). Não existe override por bloco individual: editar o tipo
-// edita TODOS os blocos daquele tipo hoje E os que forem criados depois — é o "editar todos" e
-// o "padrão do projeto" ao mesmo tempo, de graça, porque todo bloco do tipo lê do MESMO lugar.
+// state.doc.blockStyles[type] = { color, fontSize, lineHeight, letterSpacing, gap, marginTop,
+// checkColor, checkedOpacity, borderColor } — campos ausentes usam TYPE_STYLE_DEFAULTS (valor
+// inicial do slider + alvo do ↺). Não existe override por bloco individual: editar o tipo
+// edita TODOS os blocos daquele tipo hoje E os que forem criados depois.
+//
+// li / ol / check NÃO têm tipografia própria: cor + tamanhos de texto vêm sempre do Parágrafo
+// (p). Só o espaçamento entre itens (gap) — e no check, cor do ✓ e opacidade do item marcado —
+// é configurável no ⋮ do tipo. quote tem tipografia própria (default = p) + cor da borda.
 const TYPE_STYLE_DEFAULTS = {
   h1: { fontSize: 24, lineHeight: 31, color: '#000000', letterSpacing: -0.01, marginTop: 48 },
   h2: { fontSize: 20, lineHeight: 26, color: '#000000', letterSpacing: -0.01, marginTop: 32 },
   h3: { fontSize: 16, lineHeight: 21, color: '#000000', letterSpacing: -0.01, marginTop: 24 },
   h4: { fontSize: 13, lineHeight: 17, color: '#000000', letterSpacing: -0.01, marginTop: 14 },
   p: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
-  li: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 6 },
-  ol: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 6 },
-  check: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 6 },
-  quote: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
+  li: { gap: 6, marker: '•', subMarker: '◦', markerColor: '#29E899' },
+  ol: { gap: 6, subStyle: 'number', markerColor: '#29E899' },   // subStyle: number | letter | bullet
+  check: { gap: 6, checkColor: '#29E899', checkedOpacity: 0.55 },
+  quote: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14, borderColor: '#29E899' },
   callout: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
 };
-// aplica o override (se existir) direto no elemento que RENDERIZA o texto — pro check/callout
-// isso é o .ck-txt/.co-txt (não o envelope .b.check/.b.callout), então funciona sem depender de
-// herança de CSS: inline style no nó certo sempre vence, seja qual for a regra de onde ele herdava.
+// tipos cuja tipografia (cor/tamanho/lh/tracking) espelha o parágrafo — não tem controles
+// próprios no popover ⋮ e applyTypeStyle lê de blockStyles.p.
+const TEXT_FROM_P = new Set(['li', 'ol', 'check']);
+function typeStyleOf(type) {
+  const def = TYPE_STYLE_DEFAULTS[type] || {};
+  const cur = (state.doc.blockStyles && state.doc.blockStyles[type]) || {};
+  return { ...def, ...cur };
+}
+// aplica tipografia no elemento que RENDERIZA o texto — pro check/callout isso é o
+// .ck-txt/.co-txt (não o envelope). li/ol/check leem de p; quote também aplica borderColor.
 function applyTypeStyle(el, type) {
-  const o = state.doc.blockStyles && state.doc.blockStyles[type];
-  if (!o) return;
-  if (o.color) el.style.color = o.color;
-  if (o.fontSize != null) el.style.fontSize = o.fontSize + 'px';
-  if (o.lineHeight != null) el.style.lineHeight = o.lineHeight + 'px';
-  if (o.letterSpacing != null) el.style.letterSpacing = o.letterSpacing + 'em';
+  const textType = TEXT_FROM_P.has(type) ? 'p' : type;
+  const o = state.doc.blockStyles && state.doc.blockStyles[textType];
+  if (o) {
+    if (o.color) el.style.color = o.color;
+    if (o.fontSize != null) el.style.fontSize = o.fontSize + 'px';
+    if (o.lineHeight != null) el.style.lineHeight = o.lineHeight + 'px';
+    if (o.letterSpacing != null) el.style.letterSpacing = o.letterSpacing + 'em';
+  }
+  if (type === 'quote') {
+    const border = typeStyleOf('quote').borderColor;
+    if (border) el.style.borderLeftColor = border;
+  }
 }
 
 // ─────────────────────────── estado ─────────────────────────────────────────
@@ -163,13 +244,23 @@ const state = {
   doc: null,          // { blocks:[], footText, firstPage, source }
   sel: null,          // id da imagem selecionada
   zoom: 'fit',
-  autocrop: true,     // trilha C (t3): recortar margem branca ao inserir imagem (não persiste)
 };
 
-const mkBlock = (type, html = '') => ({ id: uid(), type, html });
-// item de capa/contracapa: texto livre — tamanho, coluna (esq/dir/ambas), alinhamento, cor
-// e posição Y livre (arrastável, como as imagens da coluna direita).
-const coverItem = (html, size, span, align, color = null, y = 0) => ({ id: uid(), html, size, span, align, color, y });
+const mkBlock = (type, html = '') => {
+  const b = { id: uid(), type, html };
+  if (type === 'callout') {
+    b.iconSet = 'ionicon';
+    b.icon = DEFAULT_CALLOUT_ICON;
+    b.iconStyle = DEFAULT_CALLOUT_ICON_STYLE;
+  }
+  return b;
+};
+// item de capa/contracapa: bloco livre (type = mesmo da paleta: p/h1/image/table/…)
+// com coluna (esq/dir/ambas), alinhamento, cor, size (texto) e Y arrastável.
+// Legado sem `type` = texto (p).
+const coverItem = (html, size, span, align, color = null, y = 0, type = 'p') => (
+  { id: uid(), type, html, size, span, align, color, y }
+);
 // logo da Paradigma FIXO no cabeçalho/rodapé da capa/contracapa — NÃO é coverItem
 // arrastável: mora fora do fluxo de itens e do anti-sobreposição. Tingido via
 // currentColor (como nos gráficos), escalado por size. defaultLogo() serve o seed
@@ -192,11 +283,12 @@ function seedDoc() {
     // bgX/bgY = posição do fundo (Fill) em %; bgScale = zoom (100 = sem zoom, "cover" puro);
     // itens posicionados por coluna (x) + y livre.
     cover: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, logo: defaultLogo(), items: [
-      coverItem('Título do relatório', 40, 'full', 'left', null, 330),
-      coverItem('Subtítulo · Paradigma Education', 15, 'full', 'left', null, 392),
+      // title/subtitle = tipos da capa (40px/15px) — retrocompat com o visual antigo
+      coverItem('Título do relatório', 40, 'full', 'left', null, 330, 'title'),
+      coverItem('Subtítulo · Paradigma Education', 15, 'full', 'left', null, 392, 'subtitle'),
     ] },
     back: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, logo: defaultLogo(), items: [
-      coverItem('paradigma.education', 18, 'full', 'center', null, 360),
+      coverItem('paradigma.education', 18, 'full', 'center', null, 360, 'p'),
     ] },
     // t2.11: índice (lista de títulos) e resumo agora ligam/desligam independente —
     // resumoOn é o switcher novo; ambos vivem na mesma página física (index.on segue
@@ -208,7 +300,33 @@ function seedDoc() {
       color: 'padrao', width: 'curto', resumoWidth: 'full',
       resumo: '<p>Escreva aqui o resumo do relatório.</p>',
     },
+    // ids de H1/H2 marcados como “revisado” no índice flutuante do preview.
+    // Vive no doc (não em chrome de UI) pra ir no .pdgm.zip via serializeDocZip
+    // (dump genérico do objeto). applyDoc = Object.assign(seedDoc(), doc) cobre
+    // arquivos antigos sem o campo. Não entra no hist/undo (só blocks/foot/page).
+    reviewed: [],
   };
+}
+
+// ── seções <details> da sidebar: default + leitura do estado persistido ─────
+// Por padrão só Documento e Cabeçalho & rodapé abertos; o resto fecha até o user abrir.
+// Estado vive em cfg.sidebarSecs (mesmo LS_KEY do save) — sobrevive a reload.
+const SIDEBAR_SEC_DEFAULTS = {
+  documento: true, capa: false, index: false, back: false, header: true,
+};
+function readSidebarSecs() {
+  const out = {};
+  document.querySelectorAll('aside details[data-sec]').forEach(d => {
+    out[d.dataset.sec] = !!d.open;
+  });
+  return out;
+}
+function persistSidebarSecsNow() {
+  try {
+    const cfg = JSON.parse(localStorage.getItem(LS_KEY)) || {};
+    cfg.sidebarSecs = readSidebarSecs();
+    localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+  } catch {}
 }
 
 // load() é SÍNCRONO e serve o primeiro paint: lê do localStorage o que é pequeno
@@ -237,15 +355,8 @@ function load() {
     const idx = state.doc.index;
     if (!idx.levels) idx.levels = { h1: true, h2: true, h3: false, h4: false };
     idx.color ||= 'padrao'; idx.width ||= 'curto'; idx.resumoWidth ||= 'full';
-    // migração: capas salvas antes do Y livre não têm item.y → empilha;
-    // capas salvas antes do logo não têm cov.logo → default (não quebra LS antigo)
-    [state.doc.cover, state.doc.back].forEach(cov => {
-      if (!cov) return;
-      if (!cov.logo) cov.logo = defaultLogo();
-      if (!cov.items) return;
-      let yy = 40;
-      cov.items.forEach(it => { if (typeof it.y !== 'number') { it.y = yy; yy += 60; } });
-    });
+    // migração: capas salvas antes do Y livre / logo / type — ver migrateSpecialPages
+    migrateSpecialPages(state.doc);
   } catch {}
 }
 let saveT;
@@ -258,6 +369,8 @@ function save() { clearTimeout(saveT); saveT = setTimeout(() => {
   const cfg = {
     footText: state.doc.footText, headText: state.doc.headText, firstPage: state.doc.firstPage,
     source: state.doc.source || null, cover: state.doc.cover, back: state.doc.back, index: state.doc.index,
+    // seções expandíveis da sidebar (Texto/Capa/…) — UI chrome, não documento
+    sidebarSecs: readSidebarSecs(),
   };
   try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); }
   catch {                                    // quota (imagem de fundo grande) → salva sem os bg
@@ -330,14 +443,48 @@ const mL = measurer.querySelector('.mcol.l');
 const mF = measurer.querySelector('.mcol.f');
 
 function measure(b) {
-  const el = buildBlock(b, /*editing*/ false);
+  // mesmo `editing` do render (contenteditable/chrome). A toolbar da tabela é flutuante
+  // (popover #tablePanel é flutuante — não afeta altura).
+  const el = buildBlock(b, editing);
   // bloco 'full' (imagem, tabela, título…) mede na coluna cheia, senão a altura (e a
   // paginação) sai errada por medir num container estreito demais.
   const col = placementOf(b) === 'full' ? mF : mL;
   col.appendChild(el);
-  const h = el.getBoundingClientRect().height;
+  // ceil: subpixel pra baixo no measure empilhava erro e o último bloco vazava
+  // alguns px além de CONTENT_H (a guia tracejada da coluna cortava o texto).
+  const h = Math.ceil(el.getBoundingClientRect().height);
   col.removeChild(el);
   return h;
+}
+
+// Coluna de prova (largura do miolo). A paginação empilha de verdade aqui e lê a altura
+// real do stack — somar measure()+gap diverge do layout (subpixel, full-width, etc.) e
+// deixava o último item pintado abaixo da guia da coluna.
+const trialCol = document.createElement('div');
+trialCol.style.width = COL_L + 'px';
+measurer.appendChild(trialCol);
+
+function trialClear() { trialCol.replaceChildren(); }
+function trialHeight() { return Math.ceil(trialCol.getBoundingClientRect().height); }
+function trialAppend(f) {
+  if (f.b.type === 'pagebreak') {
+    const el = document.createElement('div');
+    el.style.cssText = `height:10px;margin-top:${f.gap || 0}px`;
+    trialCol.appendChild(el);
+    return el;
+  }
+  const el = buildBlock(f.b, editing);
+  if (f.clipH == null) {
+    el.style.marginTop = (f.gap || 0) + 'px';
+    trialCol.appendChild(el);
+    return el;
+  }
+  const w = document.createElement('div');
+  w.style.cssText = `overflow:clip;display:flow-root;height:${f.clipH}px;margin-top:${f.gap || 0}px`;
+  el.style.marginTop = -f.clipTop + 'px';
+  w.appendChild(el);
+  trialCol.appendChild(w);
+  return w;
 }
 
 // Base de CADA linha visual do bloco, relativa ao topo do box. Um Range sobre o conteúdo
@@ -385,12 +532,51 @@ function splitFit(b, lines, from, room) {
   return k ? lines[i0 + k - 1] : null;
 }
 
-// defaults do callout: mesma cor-base do app (--lilac #BAB1FF), em duas opacidades — fundo
-// bem sutil (10%), ícone mais presente (40%). rgba de verdade (não um hex pré-misturado como
-// antes) porque o swatch.js já entende rgba nativamente: abrir o picker num callout que nunca
-// teve cor escolhida já mostra o chip lilás destacado e o slider na porcentagem certa, de graça.
-const DEFAULT_CALLOUT_BG = 'rgba(186,177,255,0.10)';
-const DEFAULT_ICON_COLOR = 'rgba(186,177,255,0.40)';
+// defaults do callout: cinza do swatch (#94A3B8) — fundo a 10% de opacidade, ícone a 100%.
+// Ícone padrão = information-circle SOLID; o popover tem toggle Solid|Outline.
+const SWATCH_GRAY = '#94A3B8';
+const DEFAULT_CALLOUT_BG = 'rgba(148,163,184,0.10)';
+const DEFAULT_ICON_COLOR = SWATCH_GRAY;
+const DEFAULT_CALLOUT_ICON = 'information-circle';
+const DEFAULT_CALLOUT_ICON_STYLE = 'solid';   // 'solid' | 'outline'
+
+function calloutIconStyle(b) {
+  return b.iconStyle === 'outline' ? 'outline' : DEFAULT_CALLOUT_ICON_STYLE;
+}
+// SVG do ícone do callout — sempre Ionicons oficial (preferLib), nunca o set 24×24 da casa
+function calloutIconHtml(key, size = 14, style = 'solid') {
+  if (isTextIcon(key)) return `<span class="co-icon-txt">${textIconLabel(key)}</span>`;
+  if (!findIcon(key, style, true) && !findIcon(key, 'outline', true)) return '';
+  return iconSvg(key, { x: 0, y: 0, w: size, h: size }, 'currentColor', 1.8, style, true).replace(/ x="0" y="0"/, '');
+}
+// chave efetiva do ícone: default info; ''/none = sem ícone; sigla txt:…; emoji legado
+function calloutIconKey(b) {
+  if (b.iconSet === 'none' || b.icon === '') return null; // explicitamente sem ícone
+  const st = calloutIconStyle(b);
+  if (b.icon && isTextIcon(b.icon)) return b.icon;
+  if (b.icon && (findIcon(b.icon, st, true) || findIcon(b.icon, 'outline', true))) return b.icon;
+  if (b.iconSet === 'emoji') return null; // emoji livre: calloutIconKey null, render usa b.icon texto
+  if (b.iconSet === 'ionicon' || b.icon == null) return DEFAULT_CALLOUT_ICON;
+  return null;
+}
+function calloutHasIcon(b) {
+  if (b.iconSet === 'none' || b.icon === '') return false;
+  if (calloutIconKey(b)) return true;
+  // emoji livre (não é txt:SIGLA nem chave ionicon)
+  if (b.iconSet === 'emoji' && b.icon) return true;
+  return false;
+}
+// semeia defaults só em callout NOVO (sem icon/iconSet) — não sobrescreve legado nem "none"
+function ensureCalloutDefaults(b) {
+  if (!b || b.type !== 'callout') return;
+  if (b.iconSet === 'none') return;
+  if (b.iconSet == null && (b.icon == null || b.icon === undefined)) {
+    b.iconSet = 'ionicon';
+    b.icon = DEFAULT_CALLOUT_ICON;
+    b.iconStyle = DEFAULT_CALLOUT_ICON_STYLE;
+  }
+  if (b.iconStyle == null && b.iconSet === 'ionicon') b.iconStyle = DEFAULT_CALLOUT_ICON_STYLE;
+}
 
 // ─────────────────────────── construção de elementos ────────────────────────
 function buildText(b, editing) {
@@ -403,56 +589,62 @@ function buildText(b, editing) {
   el.className = isCheck ? 'ck-txt' : isCallout ? 'co-txt' : 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
   el.dataset.id = b.id;
   el.dataset.ph = PH[b.type] || '';
-  if (b.type === 'ol') el.dataset.num = (b._num || 1) + '.';   // número calculado por numberLists()
   el.innerHTML = b.html || '';
   if (editing) {
     el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR';  // corretor nativo PT-BR
-    if (b.id === state.activeId) el.classList.add('active-block');
   }
   applyTypeStyle(el, b.type);
+  // indent de lista (Tab): li/ol aplicam no próprio .b; check aplica no envelope abaixo
+  if (!isCheck && !isCallout && LIST_TYPES.has(b.type)) applyListIndentStyle(el, b);
+  // marcador: ol usa _num/_nums (numberLists); li usa marker/subMarker do ⋮
+  if (!isCheck && !isCallout && (b.type === 'ol' || b.type === 'li')) applyListMarkers(el, b);
+  // active-block NÃO é aplicado aqui — paintActiveBlock() pinta o envelope
+  // (`.col-left > [data-id]`, que no corte entre páginas é o .frag, e no check/callout
+  // é o wrap). Assim a borda roxa cobre a altura total e a alça ⠿ ancora no mesmo box.
   if (!isCheck && !isCallout) return el;
   if (isCallout) {
-    // callout = [.callout-row: ícone+texto] + [.callout-bar: trocar ícone / cor — só em edição,
-    // some do PDF de graça igual à barra da tabela]. Ícone tem dois modos: 'emoji' (padrão, digita
-    // por cima do caractere, como sempre foi) ou 'ionicon' (SVG fixo do conjunto curado em
-    // ionicons.js — só troca pelo popover, não é mais editável por digitação nesse modo).
+    // callout = [.callout-row: ícone+texto]. Ícone padrão = information-circle (lib completa
+    // de Ionicons, mesma de charts/timelines); troca via #calloutBar → openIconPop.
+    // Legado: iconSet==='emoji' ou glifo solto ainda renderiza como texto.
+    ensureCalloutDefaults(b);
     const wrap = document.createElement('div');
-    wrap.className = 'b callout';
+    const noIcon = !calloutHasIcon(b);
+    wrap.className = 'b callout' + (noIcon ? ' no-icon' : '');
     wrap.dataset.id = b.id;                      // mesmo esquema do check: alça/drag acham o envelope por [data-id]
     wrap.style.background = b.color || DEFAULT_CALLOUT_BG;
 
     const row = document.createElement('div');
     row.className = 'callout-row';
-    const icon = document.createElement('div');
-    icon.className = 'co-icon';
-    icon.style.color = b.iconColor || DEFAULT_ICON_COLOR;   // currentColor: pinta o stroke do Ionicon
-    const isIonicon = b.iconSet === 'ionicon' && IONICONS[b.icon];
-    if (isIonicon) {
-      icon.innerHTML = ioniconSvg(b.icon, 14);
-    } else {
-      icon.textContent = b.icon || '💡';
-      if (editing) {
-        icon.contentEditable = 'true'; icon.spellcheck = false;
-        // Enter só confirma (não cria bloco/linha) — mesmo tratamento do título/legenda de imagem
-        icon.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); icon.blur(); } });
-        // ponytail: sem picker de emoji — "trocar" é digitar por cima; fica só o ÚLTIMO caractere
-        // (spread cobre par substituto/emoji fora do BMP; sequência ZWJ composta não é tratada).
-        icon.addEventListener('input', () => {
-          const chars = [...icon.textContent];
-          if (chars.length > 1) {
-            icon.textContent = chars[chars.length - 1];
-            const r = document.createRange(); r.selectNodeContents(icon); r.collapse(false);
-            const s = getSelection(); s.removeAllRanges(); s.addRange(r);
-          }
-          if (icon.textContent) { b.icon = icon.textContent; save(); scheduleCommit(); }
-        });
-        icon.addEventListener('blur', () => { if (!icon.textContent) icon.textContent = b.icon || '💡'; });
+    if (!noIcon) {
+      const icon = document.createElement('div');
+      icon.className = 'co-icon';
+      icon.style.color = b.iconColor || DEFAULT_ICON_COLOR;
+      const key = calloutIconKey(b);
+      if (key) {
+        icon.innerHTML = calloutIconHtml(key, 14, calloutIconStyle(b));
+      } else {
+        // emoji livre legado
+        icon.textContent = b.icon || 'ℹ️';
+        if (editing) {
+          icon.contentEditable = 'true'; icon.spellcheck = false;
+          icon.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); icon.blur(); } });
+          icon.addEventListener('input', () => {
+            const chars = [...icon.textContent];
+            if (chars.length > 1) {
+              icon.textContent = chars[chars.length - 1];
+              const r = document.createRange(); r.selectNodeContents(icon); r.collapse(false);
+              const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+            }
+            if (icon.textContent) { b.icon = icon.textContent; b.iconSet = 'emoji'; save(); scheduleCommit(); }
+          });
+          icon.addEventListener('blur', () => { if (!icon.textContent) icon.textContent = b.icon || 'ℹ️'; });
+        }
       }
+      row.append(icon, el);
+    } else {
+      row.append(el); // texto ocupa o espaço do ícone
     }
-    row.append(icon, el);
     wrap.append(row);
-    // trocar ícone/cor não vive mais AQUI dentro — é a #calloutBar flutuante (like fmtbar),
-    // que ancora no bloco ATIVO via state.activeId; ver updateCalloutBar() mais abaixo.
     return wrap;
   }
   // trilha B (t7): checklist = envelope [checkbox][texto]. O checkbox é irmão NÃO-editável
@@ -461,6 +653,12 @@ function buildText(b, editing) {
   const wrap = document.createElement('div');
   wrap.className = 'b check' + (b.checked ? ' checked' : '');
   wrap.dataset.id = b.id;                        // '.col-left > [data-id]' (alça/drag) acha o envelope
+  applyListIndentStyle(wrap, b);                 // subitem (Tab) desloca checkbox + texto juntos
+  // estilo do tipo (menu ⋮): cor do check + opacidade do item marcado — CSS vars no envelope
+  // (tipografia do texto vem de p via applyTypeStyle acima).
+  const ckStyle = typeStyleOf('check');
+  wrap.style.setProperty('--ck-color', ckStyle.checkColor || '#29E899');
+  wrap.style.setProperty('--ck-done-opacity', String(ckStyle.checkedOpacity != null ? ckStyle.checkedOpacity : 0.55));
   // trilha G: <span>+SVG no lugar do <input type=checkbox> nativo — vazio, o nativo renderiza
   // borda/preenchimento PRETO do SO em vários browsers/impressão. SVG com fill/stroke puro
   // imprime igual em tela e PDF sem precisar de print-color-adjust (ver CSS .ck-box).
@@ -469,7 +667,7 @@ function buildText(b, editing) {
   box.setAttribute('role', 'checkbox'); box.setAttribute('aria-checked', String(!!b.checked));
   box.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true">'
     + '<rect class="ck-empty" x=".75" y=".75" width="10.5" height="10.5" rx="2.4" fill="none" stroke="#B0B0B0" stroke-width="1.3"/>'
-    + '<g class="ck-filled"><rect width="12" height="12" rx="2.6" fill="#29E899"/>'
+    + '<g class="ck-filled"><rect width="12" height="12" rx="2.6" fill="var(--ck-color, #29E899)"/>'
     + '<path d="M3 6.3l2.1 2.1 4-4.6" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></g>'
     + '</svg>';
   if (editing) {
@@ -483,54 +681,63 @@ function buildText(b, editing) {
   return wrap;
 }
 
-// popover de ícone do Callout — "Emoji personalizado" (volta a digitar por cima) + grade dos
-// Ionicons curados (ionicons.js). Mesmo padrão de popover ancorado do swatch/slash (fixed,
-// fecha ao clicar fora); troca de modo é grande o bastante (emoji editável ⇄ SVG fixo) pra
-// justificar um render() completo em vez de patch manual do DOM.
-let calloutIconPop = null;
-function openCalloutIconPicker(anchor, b) {
-  closeCalloutIconPicker();
-  calloutIconPop = document.createElement('div');
-  calloutIconPop.className = 'ico-pop';
-
-  const emojiBtn = document.createElement('button');
-  emojiBtn.type = 'button'; emojiBtn.className = 'ico-pop-emoji';
-  emojiBtn.textContent = 'Emoji personalizado';
-  if (b.iconSet !== 'ionicon') emojiBtn.classList.add('on');
-  emojiBtn.onclick = () => {
-    b.iconSet = 'emoji';
-    if (!b.icon || IONICONS[b.icon]) b.icon = '💡';   // vinha de um ionicon (chave, não emoji) → default
-    closeCalloutIconPicker(); save(); scheduleCommit();
-    render({ id: b.id, role: 'block', offset: 0 });
-  };
-  calloutIconPop.append(emojiBtn);
-
-  const grid = document.createElement('div'); grid.className = 'ico-pop-grid';
-  Object.entries(IONICONS).forEach(([key, def]) => {
-    const btn = document.createElement('button');
-    btn.type = 'button'; btn.title = def.label;
-    btn.innerHTML = ioniconSvg(key, 18);
-    if (b.iconSet === 'ionicon' && b.icon === key) btn.classList.add('on');
-    btn.onclick = () => {
-      b.iconSet = 'ionicon'; b.icon = key;
-      closeCalloutIconPicker(); save(); scheduleCommit();
-      render({ id: b.id, role: 'block', offset: 0 });
-    };
-    grid.append(btn);
-  });
-  calloutIconPop.append(grid);
-
-  document.body.append(calloutIconPop);
-  const r = anchor.getBoundingClientRect(), pw = calloutIconPop.offsetWidth, ph = calloutIconPop.offsetHeight;
-  calloutIconPop.style.left = Math.max(6, Math.min(r.left, innerWidth - pw - 6)) + 'px';
-  calloutIconPop.style.top = (r.bottom + 4 + ph > innerHeight ? Math.max(6, r.top - 4 - ph) : r.bottom + 4) + 'px';
-  setTimeout(() => addEventListener('pointerdown', outsideCalloutIconPicker), 0);
+// Marca o envelope de cada ocorrência do bloco ativo com .active-block (borda roxa).
+// Cobre texto simples, check/callout, tabela, frag cortado entre páginas e rimg da direita.
+// NÃO pinta no contenteditable interno (.ck-txt/.co-txt/célula) — o outline precisa na
+// altura do bloco inteiro, que é o que a alça ⠿ também ancora.
+function paintActiveBlock(id) {
+  pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
+  if (!id) return;
+  pagesEl.querySelectorAll(
+    `.col-left > [data-id="${id}"], .col-right > [data-id="${id}"]`
+  ).forEach(el => el.classList.add('active-block'));
 }
-function outsideCalloutIconPicker(e) { if (calloutIconPop && !calloutIconPop.contains(e.target)) closeCalloutIconPicker(); }
-function closeCalloutIconPicker() {
-  if (!calloutIconPop) return;
-  removeEventListener('pointerdown', outsideCalloutIconPicker);
-  calloutIconPop.remove(); calloutIconPop = null;
+
+// picker de ícone do Callout = openIconPop + toggle Solid|Outline.
+// "Sem ícone" (pick '') → iconSet 'none', texto full-width.
+function openCalloutIconPicker(anchor, b) {
+  const cur = b.iconSet === 'none' || b.icon === ''
+    ? ''
+    : (calloutIconKey(b) || (isTextIcon(b.icon) ? b.icon : DEFAULT_CALLOUT_ICON));
+  openIconPop(anchor, (key) => {
+    if (!key) {
+      b.iconSet = 'none';
+      b.icon = '';
+    } else if (isTextIcon(key)) {
+      b.iconSet = 'emoji';
+      b.icon = key;
+    } else {
+      b.iconSet = 'ionicon';
+      b.icon = key;
+    }
+    save(); scheduleCommit();
+    render({ id: b.id, role: 'block', offset: 0 });
+  }, cur, {
+    styleToggle: true,
+    style: calloutIconStyle(b),
+    onStyle: (s) => {
+      b.iconStyle = s;
+      const el = pagesEl.querySelector(`.callout[data-id="${b.id}"] .co-icon`);
+      const key = calloutIconKey(b);
+      if (el && key) el.innerHTML = calloutIconHtml(key, 14, s);
+      if (key && findIcon(key, s, true)) paintIconBtn(calloutBarIconBtn, key, s, true);
+      else if (!key) calloutBarIconBtn.innerHTML = '';
+      save(); scheduleCommit();
+    },
+  });
+}
+// pinta o chip de fundo do callout com base branca (papel) sob a cor com alpha
+function paintCalloutBgChip(el, color) {
+  const c = color || DEFAULT_CALLOUT_BG;
+  const p = parseColor(c);
+  if (p && p.alpha < 1) {
+    el.style.background = '';
+    el.style.setProperty('--sp-ov', c);
+    el.classList.add('paper');
+  } else {
+    el.classList.remove('paper');
+    el.style.background = c;
+  }
 }
 
 // #calloutBar — barra FLUTUANTE de controles do callout ativo (trocar ícone / cor), mesmo
@@ -557,7 +764,7 @@ calloutBarIconColorBtn.addEventListener('click', () => {
     calloutBarIconColorBtn.style.background = color;
   }, b.iconColor || DEFAULT_ICON_COLOR);
 });
-// cor do FUNDO do callout
+// cor do FUNDO do callout — preview com base branca (papel) sob a tinta com alpha
 calloutBarBgBtn.addEventListener('click', () => {
   const b = state.activeId && blockOf(state.activeId);
   if (!b || b.type !== 'callout') return;
@@ -565,8 +772,8 @@ calloutBarBgBtn.addEventListener('click', () => {
     b.color = color; save(); scheduleCommit();
     const el = pagesEl.querySelector(`.callout[data-id="${b.id}"]`);
     if (el) el.style.background = color;
-    calloutBarBgBtn.style.background = color;
-  }, b.color || DEFAULT_CALLOUT_BG);
+    paintCalloutBgChip(calloutBarBgBtn, color);
+  }, b.color || DEFAULT_CALLOUT_BG, { paper: true });
 });
 // mostra/esconde e reposiciona a barra sobre o bloco callout ATIVO — chamada no focusin
 // (qualquer bloco ganhando foco, callout ou não) e no scroll do palco (reflow de posição).
@@ -574,10 +781,23 @@ function updateCalloutBar() {
   const b = state.activeId && blockOf(state.activeId);
   const host = b && b.type === 'callout' && pagesEl.querySelector(`.callout[data-id="${b.id}"]`);
   if (!host) { calloutBar.hidden = true; return; }
-  const isIonicon = b.iconSet === 'ionicon' && IONICONS[b.icon];
-  calloutBarIconBtn.innerHTML = isIonicon ? ioniconSvg(b.icon, 13) : (b.icon || '💡');
+  const key = calloutIconKey(b);
+  const st = calloutIconStyle(b);
+  if (b.iconSet === 'none' || b.icon === '') {
+    calloutBarIconBtn.innerHTML = '';
+    calloutBarIconBtn.title = 'Sem ícone (clique para escolher)';
+  } else if (key && findIcon(key, st, true)) {
+    paintIconBtn(calloutBarIconBtn, key, st, true);
+    calloutBarIconBtn.title = 'Trocar ícone';
+  } else if (key && isTextIcon(key)) {
+    calloutBarIconBtn.textContent = textIconLabel(key);
+  } else if (b.iconSet === 'emoji' && b.icon) {
+    calloutBarIconBtn.textContent = b.icon;
+  } else {
+    paintIconBtn(calloutBarIconBtn, DEFAULT_CALLOUT_ICON, st, true);
+  }
   calloutBarIconColorBtn.style.background = b.iconColor || DEFAULT_ICON_COLOR;
-  calloutBarBgBtn.style.background = b.color || DEFAULT_CALLOUT_BG;
+  paintCalloutBgChip(calloutBarBgBtn, b.color || DEFAULT_CALLOUT_BG);
   calloutBar.hidden = false;
   // acima do callout, centrada; se não couber, abaixo — mesma heurística do updateFmtbar()
   const rect = host.getBoundingClientRect();
@@ -585,6 +805,131 @@ function updateCalloutBar() {
   const x = Math.max(8, Math.min(rect.left + rect.width / 2 - bw / 2, innerWidth - bw - 8));
   const y = rect.top - bh - 8 >= 8 ? rect.top - bh - 8 : rect.bottom + 8;
   calloutBar.style.left = x + 'px'; calloutBar.style.top = y + 'px';
+}
+
+// Popover da tabela (mesmo padrão do #imgPanel): ao lado do bloco, não por cima.
+// Linhas/colunas/resize ficam no chrome Notion do .tbl-wrap (bloco-tabela.js).
+let tablePanel;
+let tablePanelDismissed = false; // clique fora fecha e não reabre até re-selecionar
+function activeTableBlock() {
+  const b = state.activeId && blockOf(state.activeId);
+  if (b && b.type === 'table') return b;
+  // tabela na capa/contracapa (item livre com type=table)
+  if (state.sel) {
+    const f = findCoverItem(state.sel);
+    if (f && f.item.type === 'table') return f.item;
+  }
+  return null;
+}
+function closeTablePanel() { if (tablePanel) tablePanel.hidden = true; }
+function openTablePanel() {
+  const b = activeTableBlock();
+  if (!b || !editing) { closeTablePanel(); return; }
+  tablePanelDismissed = false;
+  closeImgPanel();
+  if (!tablePanel) {
+    tablePanel = document.createElement('div');
+    tablePanel.id = 'tablePanel';
+    document.body.appendChild(tablePanel);
+  }
+  tablePanel.dataset.tid = b.id;
+  const headerColor = b.headerColor || '#F1F1F4';
+  // TRASH_ICO pode ainda não existir se chamado cedo demais — monta na hora
+  const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
+  // "Linhas Verticais" ligado por padrão (hideVLines só quando o usuário desliga)
+  const vlinesOn = b.hideVLines !== true;
+  tablePanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">Tabela</div>
+    <div class="swrow"><span>Linhas Verticais</span>
+      <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>
+    <div class="swrow"><span>Linhas alternadas</span>
+      <button type="button" class="sw" data-a="alt" role="switch" aria-checked="${!!b.altRows}"></button></div>
+    <div class="field">Cor do cabeçalho
+      <button type="button" class="swatch" data-a="headerColor" title="Cor do cabeçalho"
+        style="background:${headerColor};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    </div>
+    <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
+  tablePanel.hidden = false;
+
+  const paintTable = () => {
+    const host = pagesEl.querySelector(`.tbl-wrap[data-id="${b.id}"]`);
+    const tbl = host && host.querySelector('table.tbl');
+    if (!tbl) return;
+    tbl.classList.toggle('no-vlines', b.hideVLines === true);
+    tbl.classList.toggle('alt-rows', !!b.altRows);
+    tbl.style.setProperty('--tbl-header-bg', b.headerColor || '#F1F1F4');
+    // reaplica fundo nas células de cabeçalho sem rebuild completo
+    tbl.querySelectorAll('th, .tbl-head-cell').forEach((cell) => {
+      cell.style.background = b.headerColor || '#F1F1F4';
+    });
+    if (b.altRows) {
+      [...tbl.rows].forEach((tr, r) => {
+        const isHead = b.headerRow !== false && r === 0;
+        tr.classList.toggle('alt', !isHead && r % 2 === 0);
+      });
+    } else {
+      tbl.querySelectorAll('tr.alt').forEach((tr) => tr.classList.remove('alt'));
+    }
+  };
+
+  tablePanel.querySelectorAll('.sw[data-a]').forEach((sw) => {
+    sw.addEventListener('mousedown', (e) => e.preventDefault());
+    sw.addEventListener('click', () => {
+      const on = sw.getAttribute('aria-checked') !== 'true';
+      sw.setAttribute('aria-checked', String(on));
+      // vlines ON = mostrar linhas → hideVLines false
+      if (sw.dataset.a === 'vlines') b.hideVLines = !on;
+      else if (sw.dataset.a === 'alt') b.altRows = on;
+      if (sw.dataset.a === 'alt' || sw.dataset.a === 'vlines') {
+        paintTable();
+        save(); scheduleCommit();
+      }
+    });
+  });
+  const swatchBtn = tablePanel.querySelector('[data-a="headerColor"]');
+  swatchBtn.addEventListener('mousedown', (e) => e.preventDefault());
+  swatchBtn.addEventListener('click', () => {
+    openSwatchPop(swatchBtn, (color) => {
+      b.headerColor = color;
+      swatchBtn.style.background = color;
+      paintTable();
+      save(); scheduleCommit();
+    }, b.headerColor || '#F1F1F4', { paper: true });
+  });
+  tablePanel.querySelector('[data-a="del"]').addEventListener('click', () => {
+    tableCtx.removeBlock(b.id);
+    closeTablePanel();
+  });
+  positionTablePanel();
+}
+function positionTablePanel() {
+  if (!tablePanel || tablePanel.hidden) return;
+  const b = activeTableBlock();
+  const el = b && pagesEl.querySelector(`.tbl-wrap[data-id="${b.id}"]`);
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const pw = tablePanel.offsetWidth || 220, ph = tablePanel.offsetHeight || 200;
+  // preferencialmente ao lado (direita); se não cabe, esquerda
+  let x = r.right + 10;
+  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  tablePanel.style.left = x + 'px'; tablePanel.style.top = y + 'px';
+}
+function updateTableBar() {
+  // nome legado: abre/fecha o popover lateral da tabela ativa
+  const b = activeTableBlock();
+  if (b && editing) {
+    // se o usuário fechou clicando fora, não reabre até re-selecionar (openTablePanel)
+    if (tablePanelDismissed && tablePanel && tablePanel.dataset.tid === b.id) {
+      if (!tablePanel.hidden) positionTablePanel();
+      return;
+    }
+    if (!tablePanel || tablePanel.hidden || tablePanel.dataset.tid !== b.id) openTablePanel();
+    else positionTablePanel();
+  } else {
+    tablePanelDismissed = false;
+    closeTablePanel();
+  }
 }
 
 function imgHeight(b, colW) { return b.nw ? colW * (b.nh / b.nw) : colW * 0.6; }
@@ -625,7 +970,14 @@ function buildFigure(b, colW, editing) {
 const tableCtx = {
   commit: () => { save(); scheduleCommit(); },
   rerender: () => render(),
-  removeBlock: (id) => { const i = idxOf(id); if (i >= 0) state.doc.blocks.splice(i, 1); state.sel = null; render(); },
+  removeBlock: (id) => {
+    if (findCoverItem(id)) { deleteCoverItem(id); return; }
+    const i = idxOf(id); if (i < 0) return;
+    state.doc.blocks.splice(i, 1);
+    if (state.activeId === id) state.activeId = state.doc.blocks[Math.min(i, state.doc.blocks.length - 1)]?.id || null;
+    state.sel = null;
+    render();
+  },
 };
 
 // bloco genérico (usado na medição e no fluxo da coluna esquerda / largura total)
@@ -634,7 +986,15 @@ function buildBlock(b, editing) {
   // largura da faixa: só o 'full' escapa da coluna (as demais herdam a largura do
   // container — .col-left 258px ou .rimg 217px). O '' zera larguras que o próprio
   // builder cravou inline (a tabela nasce com 499px), pra tabela poder ir pra uma coluna.
-  el.style.width = placementOf(b) === 'full' ? COL_FULL + 'px' : '';
+  // z-index no full: o overflow (499px) precisa ficar acima da .col-right pra clicar
+  // na metade direita da tabela/título — ver z-index de .col-left/.col-right no CSS.
+  if (placementOf(b) === 'full') {
+    el.style.width = COL_FULL + 'px';
+    if (!el.style.position || el.style.position === 'static') el.style.position = 'relative';
+    el.style.zIndex = '2';
+  } else {
+    el.style.width = '';
+  }
   return el;
 }
 function buildBlockEl(b, editing) {
@@ -661,12 +1021,36 @@ function buildBlockEl(b, editing) {
   return buildText(b, editing);
 }
 
-// numera as listas numéricas (runs consecutivos de 'ol'); imagens não quebram a run
+// numera as listas numéricas no "list tree" atual.
+// - subitens de OUTRO tipo (li/check indentados) NÃO quebram a contagem do pai:
+//   1. Item  →  (tab) • ponto  →  2. Item  continua em 2.
+// - imagem não quebra a run (igual antes).
+// - bloco não-lista (p, h1, …) reinicia.
+// - b._nums = caminho completo [1,2] pra render "1.2."; b._num = contador do nível atual.
 function numberLists() {
-  let n = 0;
+  let counters = [];
   for (const b of state.doc.blocks) {
-    if (b.type === 'ol') b._num = ++n;
-    else if (b.type !== 'image') n = 0;
+    if (b.type === 'image') continue;
+    if (!LIST_TYPES.has(b.type)) {
+      counters = [];
+      continue;
+    }
+    const d = listIndentOf(b);
+    if (b.type === 'ol') {
+      // preenche pais ausentes (item "órfão" indentado sem ol acima) com 1
+      while (counters.length < d) counters.push(1);
+      counters = counters.slice(0, d + 1);
+      if (counters.length === d) counters.push(0);
+      counters[d] = (counters[d] || 0) + 1;
+      b._num = counters[d];
+      b._nums = counters.slice(0, d + 1);
+    } else {
+      // li/check no meio da árvore: mantém contadores dos PAIS, zera deste nível em diante
+      // (próximo ol irmão do li recomeça o subcontador; ol no nível raiz continua)
+      counters = counters.slice(0, d);
+      delete b._num;
+      delete b._nums;
+    }
   }
 }
 
@@ -679,55 +1063,85 @@ const frag = (b, gap, clipTop = 0, clipH = null) => ({ b, gap, clipTop, clipH })
 function paginate() {
   numberLists();
   const pages = [{ left: [], right: [] }];
-  let used = 0;
   // qualquer bloco pode morar na coluna direita (antes só imagem); a quebra de página é
   // estrutural do fluxo e nunca sai dele.
   const isRight = (b) => b.type !== 'pagebreak' && placementOf(b) === 'right';
   const stream = state.doc.blocks.filter(b => !isRight(b));
   const rights = state.doc.blocks.filter(isRight);
 
+  // Coluna de prova: a cada bloco, empilha de verdade e mede a altura. Se estoura
+  // CONTENT_H, o bloco inteiro (ou o resto do split) vai pra próxima página — nunca
+  // fica pintado abaixo da guia da coluna. `used` é sempre a altura real do stack.
+  let used = 0;
+  trialClear();
+  const newPage = () => { pages.push({ left: [], right: [] }); trialClear(); used = 0; };
+
+  const PBREAK_H = 10, PBREAK_GAP = 8;
   for (const b of stream) {
     if (b.type === 'pagebreak') {
       // trilha E: no editor a quebra MANUAL vira uma barra arrastável no fim da página que
       // ela corta — só quando editing. No PDF (exportPagesHtml roda editing=false) a barra
       // some sozinha, mas a QUEBRA continua: empurramos a página nova nos dois modos.
-      if (editing) { pages[pages.length - 1].left.push(frag(b, 8)); }
-      pages.push({ left: [], right: [] }); used = 0; continue;
+      if (editing) {
+        const gap = Math.min(PBREAK_GAP, Math.max(0, CONTENT_H - PBREAK_H - used));
+        pages[pages.length - 1].left.push(frag(b, gap));
+      }
+      newPage(); continue;
     }
     const h = measure(b);
     // Um bloco pode render em VÁRIAS páginas: colocamos pedaço a pedaço até acabar. Um parágrafo
     // maior que a página inteira (que antes vazava por cima do rodapé) sai partido em 3, 4, N.
     let lines = null, posto = 0, primeiro = true;
     while (true) {
-      const cur = pages[pages.length - 1];
+      const pi = pages.length - 1;
+      const cur = pages[pi];
       const prev = cur.left.length ? cur.left[cur.left.length - 1].b : null;
-      const gap = primeiro && prev ? gapBefore(b, prev) : 0;
+      const gap = primeiro && prev && prev.type !== 'pagebreak' ? gapBefore(b, prev) : 0;
       const room = CONTENT_H - used - gap, resto = h - posto;
-      const marca = () => { if (primeiro) { b._page = pages.length - 1; b._top = used + gap; } };   // a âncora do cadeado lê o topo do 1º pedaço
-      if (resto <= room) {                       // o que sobrou cabe → fecha o bloco aqui
-        marca();
-        cur.left.push(frag(b, gap, posto, posto ? resto : null));
-        used += gap + resto;
-        break;
+      // tenta colocar; se o stack real estourar e a página já tem coisa, desfaz e reabre página.
+      const tryPush = (f) => {
+        const topBefore = used + (f.gap || 0);   // topo previsto do frag (âncora do cadeado)
+        const node = trialAppend(f);
+        const total = trialHeight();
+        if (total > CONTENT_H && cur.left.length > 0) {
+          trialCol.removeChild(node);
+          return false;
+        }
+        cur.left.push(f);
+        used = total;
+        if (primeiro) { b._page = pi; b._top = topBefore; }
+        return true;
+      };
+
+      if (resto <= room) {
+        if (tryPush(frag(b, gap, posto, posto ? resto : null))) break;
+        // measure() achou que cabia, stack real não → próxima página
+        newPage();
+        continue;
       }
       if (lines === null) lines = splittable(b) ? measureLines(b) : [];
       const at = splitFit(b, lines, posto, room);
-      if (at != null) {                          // parte: um pedaço aqui, o resto na próxima
-        marca();
-        cur.left.push(frag(b, gap, posto, at - posto));
-        posto = at; primeiro = false;
-        pages.push({ left: [], right: [] }); used = 0;
+      if (at != null) {
+        if (tryPush(frag(b, gap, posto, at - posto))) {
+          posto = at; primeiro = false;
+          newPage();
+          continue;
+        }
+        // split apontou um pedaço que o stack rejeitou → sobe o bloco inteiro
+        newPage();
         continue;
       }
-      if (cur.left.length) {                     // não parte, mas a página já tem conteúdo → tudo pra próxima
-        pages.push({ left: [], right: [] }); used = 0;
+      if (cur.left.length) {
+        newPage();
         continue;
       }
       // ponytail: página vazia e o bloco não parte (tabela/imagem/lista gigante) → entra inteiro
-      // e transborda, exatamente como antes de existir bloco continuado.
-      marca();
-      cur.left.push(frag(b, 0, posto, posto ? resto : null));
-      used = resto;
+      // mesmo estourando (único caso em que a coluna pode transbordar de propósito).
+      b._page = pi; b._top = 0;
+      const f = frag(b, 0, posto, posto ? resto : null);
+      cur.left.push(f);
+      trialAppend(f);
+      used = trialHeight();
       break;
     }
   }
@@ -770,7 +1184,7 @@ function assemblePages(container) {
   let n = state.doc.firstPage;
   if (cov && cov.on) { container.appendChild(renderCoverPage('cover', cov)); n++; }
   if (idxPageOn) { container.appendChild(renderIndexPage(toc, contentStart, n)); n++; }
-  content.forEach((pg, ci) => { container.appendChild(renderContentPage(pg, ci, n, ci < content.length - 1)); n++; });
+  content.forEach((pg, ci) => { container.appendChild(renderContentPage(pg, ci, n)); n++; });
   if (bk && bk.on) { container.appendChild(renderCoverPage('back', bk)); n++; }
 }
 
@@ -783,6 +1197,27 @@ function render(caret /* optional {id,offset,role} */) {
   applyZoom();
   stage.scrollTop = scrollTop;         // restaura a posição antes de mexer no caret
   if (keep) restoreCaret(keep);
+  // tabela e outros sem contenteditable de role=block não disparam focusin no restoreCaret —
+  // re-pinta a borda do ativo e reposiciona alça/menus depois do rebuild.
+  // Se o foco é Índice/Resumo, NÃO pinta o miolo (senão ficam duas bordas roxas).
+  updateCalloutBar();
+  updateTableBar();
+  syncColUI();
+  if (idxFocus === 'index') {
+    pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
+    bhandle.hidden = true; badd.hidden = true;
+    openIdxPanel();
+  } else if (idxFocus === 'resumo') {
+    pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
+    bhandle.hidden = true; badd.hidden = true;
+    openResumoPanel();
+  } else {
+    paintActiveBlock(state.activeId);
+    showHandleAtFocused();
+    closeIdxPanel();
+    closeResumoPanel();
+  }
+  updatePreviewToc();
   save();
   scheduleCommit();
 }
@@ -824,23 +1259,22 @@ function buildFrag(f) {
   return w;
 }
 
-function renderContentPage(pg, contentIdx, number, moreAfter) {
+function renderContentPage(pg, contentIdx, number) {
   const page = pageShell(number);
   page.dataset.page = contentIdx;                 // índice DENTRO do miolo (âncora de imagem da direita)
   const content = document.createElement('div'); content.className = 'content';
   const colL = document.createElement('div'); colL.className = 'col-left';
   const colR = document.createElement('div'); colR.className = 'col-right';
   for (const f of pg.left) colL.appendChild(buildFrag(f));
+  // row "+" no fim da coluna esquerda (hover) — Notion: adiciona parágrafo e abre o menu "/"
+  if (editing) {
+    const add = document.createElement('div');
+    add.className = 'col-add';
+    add.innerHTML = '<button type="button" class="col-add-btn" title="Adicionar bloco">+</button>';
+    colL.appendChild(add);
+  }
   for (const r of pg.right) colR.appendChild(buildRight(r));
   content.append(colL, colR);
-  // trilha E: no editor, marca o fim de página por TRANSBORDO (quebra AUTOMÁTICA, só informa).
-  // Se a página já termina numa quebra MANUAL (barra arrastável), não duplica a marca.
-  const endsInBreak = pg.left.length && pg.left[pg.left.length - 1].b.type === 'pagebreak';
-  if (editing && moreAfter && !endsInBreak) {
-    const mk = document.createElement('div'); mk.className = 'e-autobreak';
-    mk.dataset.label = 'fim da página ' + String(number).padStart(2, '0');
-    content.appendChild(mk);
-  }
   page.appendChild(content);
   return page;
 }
@@ -867,6 +1301,190 @@ function buildToc(content) {
   return rows;
 }
 
+// ── índice flutuante do preview (canto sup. dir. do palco) ───────────────────
+// Só H1/H2 do miolo, na ordem do documento. Abre no hover / 1º clique; fecha no
+// 2º clique do botão ou depois de um tempo com o mouse fora do botão+lista.
+// Clique no título rola o #stage; check à direita marca “revisado”.
+// Status em state.doc.reviewed (array de ids) → entra no .pdgm.zip (serializeDocZip
+// dumpa o doc inteiro) e no IDB via save(); docs antigos sem o campo → seed [].
+const PREVIEW_TOC_CLOSE_MS = 1400;   // “muito tempo” fora → fecha sozinho
+let previewTocCloseT = null;
+let previewTocForceClosed = false;  // 2º clique fechou com mouse ainda em cima → não reabre no hover
+let previewTocCheckIco = '';        // ion-icon name="checkmark-circle" (solid), cacheado no init
+
+function reviewedList() {
+  if (!Array.isArray(state.doc.reviewed)) state.doc.reviewed = [];
+  return state.doc.reviewed;
+}
+function isReviewed(id) { return reviewedList().includes(id); }
+
+function collectPreviewToc() {
+  const rows = [];
+  for (const b of state.doc.blocks) {
+    if (b.type !== 'h1' && b.type !== 'h2') continue;
+    const text = stripHtml(b.html).replace(/\s+/g, ' ').trim();
+    rows.push({
+      id: b.id,
+      level: b.type === 'h1' ? 1 : 2,
+      text: text || (b.type === 'h1' ? 'Título' : 'Subtítulo'),
+    });
+  }
+  return rows;
+}
+function scrollStageToBlock(id) {
+  const el = pagesEl.querySelector(`[data-id="${CSS.escape(id)}"]`);
+  if (!el) return;
+  const er = el.getBoundingClientRect();
+  const sr = stage.getBoundingClientRect();
+  stage.scrollBy({ top: er.top - sr.top - 28, behavior: 'smooth' });
+}
+function setPreviewTocOpen(open) {
+  const nav = document.getElementById('previewToc');
+  const btn = document.getElementById('previewTocBtn');
+  if (!nav) return;
+  nav.classList.toggle('is-open', !!open);
+  if (btn) btn.setAttribute('aria-expanded', String(!!open));
+  if (!open) clearTimeout(previewTocCloseT);
+}
+function schedulePreviewTocClose() {
+  clearTimeout(previewTocCloseT);
+  previewTocCloseT = setTimeout(() => {
+    previewTocForceClosed = false;
+    setPreviewTocOpen(false);
+  }, PREVIEW_TOC_CLOSE_MS);
+}
+function togglePreviewTocReviewed(id) {
+  if (!id) return;
+  const list = reviewedList();
+  const i = list.indexOf(id);
+  if (i >= 0) list.splice(i, 1);
+  else list.push(id);
+  // só repinta a linha (não rebuild inteiro) — o panel pode ter o foco/hover
+  const row = document.querySelector(`#previewTocPanel .preview-toc-row[data-id="${CSS.escape(id)}"]`);
+  if (!row) { updatePreviewToc(); save(); return; }
+  const on = isReviewed(id);
+  row.classList.toggle('is-reviewed', on);
+  const check = row.querySelector('.preview-toc-check');
+  if (check) {
+    check.setAttribute('aria-pressed', String(on));
+    check.setAttribute('aria-label', on ? `Desmarcar revisado` : `Marcar como revisado`);
+    check.title = on ? 'Desmarcar revisado' : 'Marcar como revisado';
+  }
+  save();   // IDB + próximo .pdgm.zip saem com o status atualizado
+}
+function updatePreviewToc() {
+  const nav = document.getElementById('previewToc');
+  const panel = document.getElementById('previewTocPanel');
+  if (!nav || !panel) return;
+  const rows = collectPreviewToc();
+  if (!rows.length) {
+    nav.hidden = true;
+    panel.replaceChildren();
+    setPreviewTocOpen(false);
+    previewTocForceClosed = false;
+    return;
+  }
+  // limpa ids de blocos que sumiram (doc continua, mas o array não vaza)
+  const live = new Set(rows.map(r => r.id));
+  const list = reviewedList();
+  for (let i = list.length - 1; i >= 0; i--) if (!live.has(list[i])) list.splice(i, 1);
+
+  nav.hidden = false;
+  panel.replaceChildren();
+  const head = document.createElement('div');
+  head.className = 'preview-toc-head';
+  head.innerHTML = '<span class="preview-toc-h-idx">Índice</span><span class="preview-toc-h-rev">Revisado</span>';
+  panel.appendChild(head);
+
+  const ico = previewTocCheckIco || uiIco('checkmark-circle', 16, 'solid');
+  for (const r of rows) {
+    const reviewed = isReviewed(r.id);
+    const row = document.createElement('div');
+    row.className = 'preview-toc-row' + (reviewed ? ' is-reviewed' : '');
+    row.dataset.id = r.id;
+    row.setAttribute('role', 'listitem');
+
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'preview-toc-item lvl' + r.level;
+    item.dataset.id = r.id;
+    item.textContent = r.text;
+    item.title = r.text;
+
+    const check = document.createElement('button');
+    check.type = 'button';
+    check.className = 'preview-toc-check';
+    check.dataset.id = r.id;
+    check.setAttribute('aria-pressed', String(reviewed));
+    check.setAttribute('aria-label', reviewed ? `Desmarcar revisado: ${r.text}` : `Marcar como revisado: ${r.text}`);
+    check.title = reviewed ? 'Desmarcar revisado' : 'Marcar como revisado';
+    check.innerHTML = ico;
+
+    row.append(item, check);
+    panel.appendChild(row);
+  }
+}
+function initPreviewToc() {
+  const nav = document.getElementById('previewToc');
+  const btn = document.getElementById('previewTocBtn');
+  const panel = document.getElementById('previewTocPanel');
+  if (!nav || !btn || !panel) return;
+  // ion-icon name="list-outline" / checkmark-circle (solid, sem -outline)
+  btn.innerHTML = uiIco('list', 18, 'outline');
+  previewTocCheckIco = uiIco('checkmark-circle', 16, 'solid');
+
+  // entra no botão/lista → abre (salvo se o usuário acabou de fechar no 2º clique)
+  nav.addEventListener('mouseenter', () => {
+    clearTimeout(previewTocCloseT);
+    if (!previewTocForceClosed) setPreviewTocOpen(true);
+  });
+  // sai do botão+lista → fecha sozinho depois de PREVIEW_TOC_CLOSE_MS
+  nav.addEventListener('mouseleave', () => {
+    previewTocForceClosed = false;
+    schedulePreviewTocClose();
+  });
+  // teclado: foco dentro mantém aberto; sair agenda o close
+  nav.addEventListener('focusin', () => {
+    clearTimeout(previewTocCloseT);
+    previewTocForceClosed = false;
+    setPreviewTocOpen(true);
+  });
+  nav.addEventListener('focusout', () => {
+    // espera o próximo foco (pode ser outro item do painel)
+    setTimeout(() => {
+      if (!nav.contains(document.activeElement)) schedulePreviewTocClose();
+    }, 0);
+  });
+  // 1º clique abre; 2º fecha (e trava reabertura por hover enquanto o mouse continuar em cima)
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const open = nav.classList.contains('is-open');
+    if (open) {
+      previewTocForceClosed = true;
+      setPreviewTocOpen(false);
+    } else {
+      previewTocForceClosed = false;
+      setPreviewTocOpen(true);
+    }
+  });
+  panel.addEventListener('click', (e) => {
+    const check = e.target.closest && e.target.closest('.preview-toc-check');
+    if (check && check.dataset.id) {
+      e.preventDefault();
+      e.stopPropagation();
+      togglePreviewTocReviewed(check.dataset.id);
+      return;
+    }
+    const item = e.target.closest && e.target.closest('.preview-toc-item');
+    if (!item || !item.dataset.id) return;
+    e.preventDefault();
+    scrollStageToBlock(item.dataset.id);
+  });
+}
+
+// foco de UI na página Índice+Resumo: 'index' | 'resumo' | null (não persiste)
+let idxFocus = null;
+
 function renderIndexPage(toc, contentStart, number) {
   const page = pageShell(number);
   const wrap = document.createElement('div'); wrap.className = 'idx-content';
@@ -875,12 +1493,17 @@ function renderIndexPage(toc, contentStart, number) {
   // apaga o título+lista mas o Resumo continuava vindo "de graça" sem checar seu próprio .on.
   const idx = state.doc.index;
   if (idx.on) {
-    const h1 = document.createElement('div'); h1.className = 'idx-title'; h1.textContent = 'Índice'; wrap.appendChild(h1);
+    // seção clicável: título + lista — borda roxa quando idxFocus==='index' + painel de opções.
+    // A largura vai na SEÇÃO (não só na .toc): o retângulo de foco acompanha Curto/Largura Total.
+    const sec = document.createElement('div');
+    sec.className = 'idx-section' + (idxFocus === 'index' ? ' idx-sel' : '');
+    sec.dataset.idx = 'index';
+    // 'curto': 345px (nº da página sobe junto do texto); 'full': as 2 colunas (499px)
+    if ((idx.width || 'curto') === 'curto') sec.style.width = TOC_SHORT_W + 'px';
+    else sec.style.width = COL_FULL + 'px';
+    const h1 = document.createElement('div'); h1.className = 'idx-title'; h1.textContent = 'Índice';
     const list = document.createElement('div');
     list.className = 'toc' + (idx.color === 'cinza' ? ' toc-cinza' : '');
-    // 'curto': a linha inteira (número + título + página) cabe em 345px — o nº da página sobe
-    // pra junto do texto em vez de morar lá na borda da segunda coluna.
-    if ((idx.width || 'curto') === 'curto') list.style.width = TOC_SHORT_W + 'px';
     if (!toc.length) {
       const empty = document.createElement('div'); empty.className = 'toc-empty';
       const ligados = Object.keys(idx.levels || {}).filter(k => idx.levels[k]).map(k => k.toUpperCase());
@@ -895,18 +1518,55 @@ function renderIndexPage(toc, contentStart, number) {
         + `<span class="toc-pg">${String(contentStart + r.pageIdx).padStart(2, '0')}</span>`;
       list.appendChild(row);
     }
-    wrap.appendChild(list);
+    sec.append(h1, list);
+    wrap.appendChild(sec);
   }
   if (idx.resumoOn) {
-    const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo'; wrap.appendChild(h2);
+    // seção com borda roxa no foco (título + texto). Largura na seção = retângulo de foco
+    // acompanha "Largura Total" vs "Coluna Esquerda" das configurações.
+    const sec = document.createElement('div');
+    sec.className = 'idx-section' + (idxFocus === 'resumo' ? ' idx-sel' : '');
+    sec.dataset.idx = 'resumo';
+    if (idx.resumoWidth === 'left') sec.style.width = COL_L + 'px';
+    else sec.style.width = COL_FULL + 'px';
+    const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo';
     const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
-    if (idx.resumoWidth === 'left') res.style.width = COL_L + 'px';   // mesma coluna esquerda do miolo
     res.dataset.ph = 'Escreva o resumo…'; res.innerHTML = state.doc.index.resumo || '';
     if (editing) { res.contentEditable = 'true'; res.spellcheck = true; res.lang = 'pt-BR'; }
-    wrap.appendChild(res);
+    sec.append(h2, res);
+    wrap.appendChild(sec);
   }
   page.appendChild(wrap);
   return page;
+}
+
+// seleciona Índice ou Resumo na página especial (borda roxa + painel do índice)
+function setIdxFocus(kind) {
+  idxFocus = kind || null;
+  pagesEl.querySelectorAll('.idx-sel').forEach(el => el.classList.remove('idx-sel'));
+  if (!idxFocus) { closeIdxPanel(); closeResumoPanel(); return; }
+  // sai da seleção de miolo/capa/imagem — o foco agora é a seção do índice
+  pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
+  if (state.sel) {
+    state.sel = null;
+    pagesEl.querySelectorAll('.imgsel, .divsel, .pbsel, .cover-sel').forEach(el => el.classList.remove('imgsel', 'divsel', 'pbsel', 'cover-sel'));
+    closeImgPanel(); closeCoverPanel();
+  }
+  updateCalloutBar();
+  updateTableBar();
+  bhandle.hidden = true; badd.hidden = true;
+  const el = pagesEl.querySelector(`.idx-section[data-idx="${idxFocus}"]`);
+  if (el) el.classList.add('idx-sel');
+  if (idxFocus === 'index') { closeResumoPanel(); openIdxPanel(); }
+  else if (idxFocus === 'resumo') { closeIdxPanel(); openResumoPanel(); }
+  else { closeIdxPanel(); closeResumoPanel(); }
+}
+function clearIdxFocus() {
+  if (!idxFocus) return;
+  idxFocus = null;
+  pagesEl.querySelectorAll('.idx-sel').forEach(el => el.classList.remove('idx-sel'));
+  closeIdxPanel();
+  closeResumoPanel();
 }
 
 // capa / contracapa: fundo full-bleed (Fill, reposicionável) + itens numa grade de 2 colunas
@@ -917,21 +1577,32 @@ function renderCoverPage(kind, cov) {
   if (cov.bg) {
     const bg = document.createElement('div'); bg.className = 'cover-bg';
     bg.style.backgroundImage = `url("${cov.bg}")`;
-    bg.style.backgroundPosition = `${cov.bgX ?? 50}% ${cov.bgY ?? 50}%`;   // reposicionável
-    // zoom além do "cover" mínimo: escala o próprio DIV (que já preenche a página inteira) em
-    // vez de recalcular um background-size em % — transform-origin default (centro) já dá o
-    // zoom certo, e o overflow:hidden do .cover-page (CSS) recorta a sobra de graça.
-    bg.style.transform = `scale(${(cov.bgScale ?? 100) / 100})`;
+    // zoom + pan: scale no DIV (overflow:hidden da .cover-page recorta) e a ORIGEM do
+    // transform acompanha bgX/bgY — senão o zoom fica preso no centro e os sliders de
+    // posição quase não movem nada (em imagem que já "cover" sem sobra, position sozinho
+    // é no-op). background-position ainda vale pro excesso residual do cover.
+    applyCoverBgStyles(bg, cov);
     page.appendChild(bg);
   }
   const area = document.createElement('div'); area.className = 'cover-area';
   cov.items.forEach(it => area.appendChild(buildCoverItem(kind, it)));   // absolutos: coluna (x) + y livre
+  // mesmo "+" do fim da coluna do miolo — adiciona bloco de texto (sem o + Texto da sidebar)
+  if (editing) {
+    const add = document.createElement('div');
+    add.className = 'col-add';
+    add.dataset.cover = kind;
+    add.innerHTML = '<button type="button" class="col-add-btn" title="Adicionar bloco">+</button>';
+    area.appendChild(add);
+  }
   page.appendChild(area);
-  if (cov.logo && cov.logo.on) page.appendChild(buildCoverLogo(cov.logo));   // faixa fixa topo/base
+  if (cov.logo && cov.logo.on) page.appendChild(buildCoverLogo(kind, cov.logo));   // faixa fixa topo/base
   return page;
 }
 
 const LOGO_BASE_H = 30;   // altura-base (px) do logo em size=1; o slider (40–260%) escala em cima
+// sel do logo na capa/contracapa: state.sel = 'logo:cover' | 'logo:back' (não colide com ids de cover-item)
+const logoSelOf = (kind) => 'logo:' + kind;
+const logoKindOfSel = (sel) => (typeof sel === 'string' && sel.startsWith('logo:') ? sel.slice(5) : null);
 // <svg> do logo tingido — mesma montagem do logoSvg() dos gráficos (currentColor→cor),
 // mas aqui vira DOM (innerHTML). preserveAspectRatio mantém a proporção w/h do logo.
 function coverLogoSvg(lg) {
@@ -944,11 +1615,17 @@ function coverLogoSvg(lg) {
 // faixa fixa (cabeçalho topo / rodapé base) com o logo alinhado esq/centro/dir. Fora
 // do cover-area e do arrasto/anti-sobreposição; render sempre (mesmo !editing) → sai
 // vetorial no PDF automaticamente via exportPagesHtml.
-function buildCoverLogo(lg) {
+// hit = só o svg (não a faixa inteira) — clique/foco roxo sem roubar texto da capa.
+function buildCoverLogo(kind, lg) {
   const el = document.createElement('div');
   el.className = 'cover-logo ' + (lg.pos === 'footer' ? 'lg-footer' : 'lg-header');
+  el.dataset.logo = kind;
   el.style.justifyContent = lg.align === 'center' ? 'center' : lg.align === 'right' ? 'flex-end' : 'flex-start';
-  el.innerHTML = coverLogoSvg(lg);
+  const hit = document.createElement('div');
+  hit.className = 'cover-logo-hit' + (state.sel === logoSelOf(kind) ? ' cover-sel' : '');
+  hit.dataset.logo = kind;
+  hit.innerHTML = coverLogoSvg(lg);
+  el.appendChild(hit);
   return el;
 }
 // larguras das colunas na capa (iguais às do miolo): esq 258 · dir 217 · gap 24 → x=282
@@ -957,20 +1634,114 @@ function coverColBox(span) {
   if (span === 'right') return { left: 282, width: 217 };
   return { left: 0, width: COL_FULL };   // full = as duas colunas
 }
+// tipos de texto “simples” na capa (contenteditable no próprio .cover-item)
+// title/subtitle = componentes da capa (padrão visual do seed); h1–h4 = mesmos do miolo
+const COVER_PLAIN = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'quote']);
+// tamanhos default por tipo da paleta → cover-item (capa não herda o motor tipográfico do miolo)
+const COVER_TYPE_SIZE = {
+  title: 40, subtitle: 15,
+  h1: 40, h2: 28, h3: 22, h4: 18, p: 15, quote: 18, callout: 15,
+  li: 15, ol: 15, check: 15,
+};
+// tipos “de título” na capa: Enter cria parágrafo abaixo (igual H1–H4 no miolo)
+const COVER_HEAD_TYPES = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4']);
+// tipos válidos de cover-item (qualquer outro / ausente → 'p', depois migração de capa)
+const COVER_TYPES = new Set([
+  'title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'quote',
+  'li', 'ol', 'check', 'callout', 'image', 'table', 'divider',
+]);
+// type por item: só normaliza valor inválido/ausente. A promoção título/subtítulo é
+// por CAPA (migrateCoverTitleSubtitle) — importação antiga sem type ou com 1–2 "p".
+function ensureCoverType(it) {
+  if (!it) return 'p';
+  if (COVER_TYPES.has(it.type)) return it.type;
+  it.type = 'p';
+  return 'p';
+}
+function coverTypeOf(it) { return ensureCoverType(it); }
+// Importação antiga da CAPA (não contracapa): sem type title/subtitle ainda, e só 1 ou 2
+// itens "texto genérico" (type ausente ou 'p') → o 1º (menor Y) é Título e o 2º Subtítulo.
+// Capa moderna (já tem title/subtitle, ou 3+ parágrafos) não mexe.
+function migrateCoverTitleSubtitle(cov) {
+  if (!cov?.items?.length) return;
+  for (const it of cov.items) ensureCoverType(it);
+  if (cov.items.some(it => it.type === 'title' || it.type === 'subtitle')) return;
+  const plain = cov.items
+    .filter(it => it.type === 'p')
+    .slice()
+    .sort((a, b) => (a.y || 0) - (b.y || 0) || String(a.id || '').localeCompare(String(b.id || '')));
+  if (plain.length !== 1 && plain.length !== 2) return;
+  plain[0].type = 'title';
+  if (plain[1]) plain[1].type = 'subtitle';
+}
+// defs extras do menu "/" só na capa (ícone tipográfico leve, sem poluir a paleta do miolo)
+const COVER_SLASH_EXTRA = [
+  { type: 'title', label: 'Título', icon: '<span style="font-size:14px;font-weight:800;line-height:1">T</span>' },
+  { type: 'subtitle', label: 'Subtítulo', icon: '<span style="font-size:12px;font-weight:700;line-height:1">S</span>' },
+];
+
 function buildCoverItem(kind, it) {
+  // type já deve ter vindo de migrateCoverTitleSubtitle no load; aqui só garante fallback
+  const type = ensureCoverType(it);
   const el = document.createElement('div');
   el.className = 'cover-item' + (state.sel === it.id ? ' cover-sel' : '');
-  el.dataset.cid = it.id; el.dataset.cover = kind;
-  el.dataset.ph = 'Texto…';
+  // só data-cid (não data-id): data-id é do miolo — se colidir, o focusin trataria a capa
+  // como bloco do fluxo. O slash.place já resolve [data-cid] também.
+  el.dataset.cid = it.id; el.dataset.cover = kind; el.dataset.ctype = type;
   const box = coverColBox(it.span || 'full');
   el.style.position = 'absolute';
   el.style.top = (it.y || 0) + 'px';
   el.style.left = box.left + 'px';
   el.style.width = box.width + 'px';
-  el.style.fontSize = (it.size || 24) + 'px';
   el.style.textAlign = it.align || 'left';
+
+  // ── imagem ──
+  if (type === 'image') {
+    if (it.src) {
+      const fig = buildFigure(it, box.width, editing);
+      // data-id no fig é do miolo; na capa a seleção vai pelo .cover-item (data-cid)
+      fig.removeAttribute('data-id');
+      el.appendChild(fig);
+    } else {
+      el.classList.add('cover-img-empty');
+      el.dataset.ph = 'Imagem…';
+    }
+    return el;
+  }
+  // ── divisor ──
+  if (type === 'divider') {
+    const d = document.createElement('div');
+    d.className = 'divider b';
+    el.appendChild(d);
+    return el;
+  }
+  // ── tabela / lista / check / callout — reusa o builder do miolo ──
+  if (type === 'table' || type === 'li' || type === 'ol' || type === 'check' || type === 'callout') {
+    if (type === 'ol' || type === 'li') {
+      // numberLists() só roda no miolo — na capa, um item isolado vira "1." / "•"
+      if (it._num == null) it._num = 1;
+      if (!it._nums) it._nums = [it._num];
+    }
+    if (type === 'callout') ensureCalloutDefaults(it);
+    // data-id fica no inner (tabela/lista precisam) — focusin da capa roda antes do miolo
+    // e blockOf(cover-id) retorna null, então não há colisão com o fluxo do miolo.
+    el.appendChild(buildBlockEl(it, editing));
+    return el;
+  }
+  // ── texto simples (title/subtitle, h1–h4, p, quote) ──
+  el.dataset.ph = PH[type] || 'Texto…';
+  const cls = type === 'quote' ? 'quote'
+    : (COVER_HEAD_TYPES.has(type) || type === 'p') ? type : 'p';
+  el.classList.add('b', cls);
+  el.style.fontSize = (it.size || COVER_TYPE_SIZE[type] || 18) + 'px';
   if (it.color) el.style.color = it.color;
+  if (COVER_HEAD_TYPES.has(type)) el.style.fontWeight = '700';
   el.innerHTML = it.html || '';
+  // h1–h4/p/quote: estilo global do miolo; title/subtitle só usam size/cor do item
+  if (HEAD_TYPES.has(type) || type === 'p' || type === 'quote') applyTypeStyle(el, type);
+  // size/cor do item de capa vencem o estilo global do tipo (slider do painel)
+  if (it.size) el.style.fontSize = it.size + 'px';
+  if (it.color) el.style.color = it.color;
   if (editing) { el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR'; }
   return el;
 }
@@ -1009,7 +1780,21 @@ function buildRight(b) {
     ? CONTENT_H - imgHeight(b, COL_R) - (b.title != null ? 18 + titleLines * PARA_LH : 0) - (b.caption != null ? 22 + capLines * PARA_LH : 0)
     : CONTENT_H;
   wrap.style.top = Math.min(Math.max(b.y | 0, 0), Math.max(0, maxY)) + 'px';
-  const badge = document.createElement('span'); badge.className = 'drag-badge'; badge.textContent = b.anchor ? '🔒 travada' : '↕ arraste';
+  // badge: solta = "↕ arraste" no hover; travada = cadeado + label + trilha só no foco
+  // (CSS .imgsel/.active-block). uiIco vive mais abaixo; buildRight só roda pós-init.
+  const badge = document.createElement('span');
+  badge.className = 'drag-badge';
+  if (b.anchor) {
+    badge.innerHTML = uiIco('lock-closed', 10, 'outline')
+      + '<span class="drag-badge-lbl">Travada a coluna esquerda</span>';
+    // trilha pontilhada no ponto de fixação (topo do wrap = y da âncora)
+    const trail = document.createElement('span');
+    trail.className = 'lock-trail';
+    trail.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(trail);
+  } else {
+    badge.textContent = '↕ arraste';
+  }
   wrap.appendChild(b.type === 'image' ? buildFigure(b, COL_R, editing) : buildBlock(b, editing));
   wrap.appendChild(badge);
   return wrap;
@@ -1017,12 +1802,63 @@ function buildRight(b) {
 
 // ─────────────────────────── zoom ───────────────────────────────────────────
 const stage = document.getElementById('stage');
+const zoomFitBtn = document.getElementById('zoomFit');
+const zoomPctBtn = document.getElementById('zoomPct');
+const zoomPctLabel = document.getElementById('zoomPctLabel');
+const zoomPop = document.getElementById('zoomPop');
+const zoomRange = document.getElementById('zoomRange');
+const zoomPopVal = document.getElementById('zoomPopVal');
+const ZOOM_MIN = 0.1, ZOOM_MAX = 2; // 10% … 200%
+/** escala "caber na largura do stage" (cap em 100%). */
+function fitZoomScale() {
+  return Math.min(1, (stage.clientWidth - 64) / PAGE_W);
+}
+function clampZoom(z) {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+}
+/** reflete state.zoom no botão fit, label % e slider do popover. */
+function syncZoomUI(scale) {
+  const isFit = state.zoom === 'fit';
+  const z = scale ?? (isFit ? fitZoomScale() : clampZoom(+state.zoom));
+  const pct = Math.round(z * 100);
+  if (zoomFitBtn) zoomFitBtn.setAttribute('aria-pressed', String(isFit));
+  if (zoomPctLabel) zoomPctLabel.textContent = pct + '%';
+  if (zoomPopVal) zoomPopVal.textContent = pct + '%';
+  if (zoomRange && document.activeElement !== zoomRange) zoomRange.value = String(pct);
+}
 function applyZoom() {
   let z = state.zoom;
-  if (z === 'fit') z = Math.min(1, (stage.clientWidth - 64) / PAGE_W);
+  if (z === 'fit') z = fitZoomScale();
+  else z = clampZoom(+z);
   pagesEl.style.transform = `scale(${z})`;
   // compensa a altura “perdida” pelo scale pra o scroll bater certo
   pagesEl.style.marginBottom = `-${(1 - z) * pagesEl.offsetHeight}px`;
+  syncZoomUI(z);
+}
+function openZoomPop() {
+  if (!zoomPop || !zoomPctBtn) return;
+  zoomPop.hidden = false;
+  zoomPctBtn.setAttribute('aria-expanded', 'true');
+  const r = zoomPctBtn.getBoundingClientRect();
+  const mw = zoomPop.offsetWidth || 200, mh = zoomPop.offsetHeight || 80;
+  let x = r.left + (r.width - mw) / 2;
+  x = Math.min(Math.max(8, x), innerWidth - mw - 8);
+  let y = r.bottom + 6;
+  if (y + mh > innerHeight - 8) y = Math.max(8, r.top - mh - 6);
+  zoomPop.style.left = x + 'px';
+  zoomPop.style.top = y + 'px';
+  // foca o slider pra setas/teclado funcionarem de imediato
+  if (zoomRange) zoomRange.focus({ preventScroll: true });
+}
+function closeZoomPop() {
+  if (!zoomPop || zoomPop.hidden) return;
+  zoomPop.hidden = true;
+  if (zoomPctBtn) zoomPctBtn.setAttribute('aria-expanded', 'false');
+}
+function setZoomFromPct(pct) {
+  // qualquer ajuste manual sai do modo fit
+  state.zoom = clampZoom((+pct || 100) / 100);
+  applyZoom();
 }
 
 // ─────────────────── caret/seleção (offsets em caracteres) ──────────────────
@@ -1093,10 +1929,44 @@ function boundaryAt(el, offset) {
 }
 function htmlOf(frag) { const d = document.createElement('div'); d.appendChild(frag); return d.innerHTML; }
 
+// offset de caractere do caret dentro de um contenteditable (capa não usa data-id)
+function caretOffsetIn(host) {
+  const sel = getSelection();
+  if (!sel || !sel.rangeCount) return (host.textContent || '').length;
+  const r = sel.getRangeAt(0);
+  if (!host.contains(r.startContainer)) return (host.textContent || '').length;
+  const pre = r.cloneRange();
+  pre.selectNodeContents(host); pre.setEnd(r.startContainer, r.startOffset);
+  return pre.toString().length;
+}
+
 // ─────────────────────────── edição: teclado ────────────────────────────────
 pagesEl.addEventListener('keydown', (e) => {
   const host = e.target.closest && e.target.closest('[contenteditable]');
-  if (!host || !host.dataset.id) return;
+  if (!host) return;
+
+  // ── capa/contracapa: Enter = novo bloco · Shift+Enter = quebra de linha ──
+  const coverEl = host.closest && host.closest('.cover-item');
+  if (coverEl) {
+    const f = findCoverItem(coverEl.dataset.cid);
+    if (!f) return;
+    const type = coverTypeOf(f.item);
+    // tabela tem o próprio Enter (próxima célula) — não intercepta
+    if (type === 'table' || type === 'image' || type === 'divider') return;
+    if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault();
+      document.execCommand('insertLineBreak');
+      return;
+    }
+    if (e.key === 'Enter' && !(e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      enterAtCoverCaret(host, f);
+      return;
+    }
+    return; // resto das teclas (Backspace etc.) segue o contenteditable nativo na capa
+  }
+
+  if (!host.dataset.id) return;
   const role = host.dataset.role || 'block';
 
   if (role !== 'block') {
@@ -1109,8 +1979,40 @@ pagesEl.addEventListener('keydown', (e) => {
   const id = host.dataset.id, b = blockOf(id);
   if (!b) return;
 
+  // Tab / Shift+Tab em lista → indenta / desindenta (subitem). Impede o foco pular pro browser.
+  if (e.key === 'Tab' && LIST_TYPES.has(b.type)) {
+    e.preventDefault();
+    const keep = captureCaret();
+    b.html = host.innerHTML;
+    const cur = listIndentOf(b);
+    if (e.shiftKey) {
+      if (cur > 0) {
+        setListIndent(b, cur - 1);
+        render(keep && keep.id === b.id ? keep : { id: b.id, role: 'block', offset: 0 });
+      }
+      return;
+    }
+    // indent: item anterior pode ser de OUTRO tipo de lista (ol → li subitem → ol continua).
+    // Nível máximo = prev.indent + 1 (padrão Docs/Word).
+    const i = idxOf(b.id);
+    const prev = i > 0 ? state.doc.blocks[i - 1] : null;
+    if (!prev || !LIST_TYPES.has(prev.type)) return;
+    if (cur >= MAX_LIST_INDENT) return;
+    if (cur > listIndentOf(prev)) return;   // já mais fundo que o pai permite
+    setListIndent(b, cur + 1);
+    render(keep && keep.id === b.id ? keep : { id: b.id, role: 'block', offset: 0 });
+    return;
+  }
+
   // ⌘⏎ / Ctrl+⏎ → quebra de página no cursor
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); breakAtCaret(host, b); return; }
+
+  // Shift+Enter → quebra de linha (explícito; evita <div> que alguns browsers metem)
+  if (e.key === 'Enter' && e.shiftKey) {
+    e.preventDefault();
+    document.execCommand('insertLineBreak');
+    return;
+  }
 
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault(); enterAtCaret(host, b); return;
@@ -1118,9 +2020,70 @@ pagesEl.addEventListener('keydown', (e) => {
 
   if (e.key === 'Backspace') {
     const c = captureCaret();
-    if (c && c.offset === 0 && getSelection().isCollapsed) { e.preventDefault(); mergeBackwards(b); }
+    if (c && c.offset === 0 && getSelection().isCollapsed) {
+      // no início de subitem: Backspace desindenta (mesmo papel do Shift+Tab) antes de mesclar
+      if (LIST_TYPES.has(b.type) && listIndentOf(b) > 0) {
+        e.preventDefault();
+        b.html = host.innerHTML;
+        setListIndent(b, listIndentOf(b) - 1);
+        render({ id: b.id, role: 'block', offset: 0 });
+        return;
+      }
+      e.preventDefault(); mergeBackwards(b);
+    }
   }
 });
+
+// Enter na capa: divide o item e cria outro abaixo (mesmo contrato do miolo).
+// title/subtitle/h*/quote/callout → o novo é parágrafo; lista/check continuam o tipo.
+function enterAtCoverCaret(host, f) {
+  const it = f.item;
+  const type = coverTypeOf(it);
+  const s0 = getSelection();
+  if (s0 && !s0.isCollapsed) s0.deleteFromDocument();
+  const off = caretOffsetIn(host);
+  const [before, after] = splitHtmlAt(host, off);
+
+  if ((type === 'li' || type === 'ol' || type === 'quote' || type === 'check' || type === 'callout')
+      && !before.trim() && !after.trim()) {
+    if (LIST_TYPES.has(type) && listIndentOf(it) > 0) {
+      setListIndent(it, listIndentOf(it) - 1);
+      it.html = '';
+      render(); selectCoverItem(it.id);
+      return;
+    }
+    it.type = 'p'; it.html = ''; it.size = COVER_TYPE_SIZE.p;
+    delete it.indent;
+    render(); selectCoverItem(it.id);
+    requestAnimationFrame(() => {
+      const el = pagesEl.querySelector(`.cover-item[data-cid="${it.id}"]`);
+      if (el?.isContentEditable) el.focus();
+    });
+    return;
+  }
+
+  it.html = before;
+  const newType = (COVER_HEAD_TYPES.has(type) || type === 'callout' || type === 'quote') ? 'p' : type;
+  // y provisório; depois do render mede a altura real do de cima e encaixa o novo
+  const nb = coverItem(after, COVER_TYPE_SIZE[newType] ?? 18, it.span || 'full', it.align || 'left', it.color || null, (it.y || 0) + 40, newType);
+  if (LIST_TYPES.has(newType) && listIndentOf(it) > 0) nb.indent = listIndentOf(it);
+  f.list.splice(f.idx + 1, 0, nb);
+  state.sel = nb.id;
+  render();
+  const n0 = pagesEl.querySelector(`.cover-item[data-cid="${it.id}"]`);
+  const h0 = n0 ? n0.offsetHeight : 28;
+  nb.y = Math.min((it.y || 0) + h0 + GAP_CV, COVER_AREA_H - 30);
+  const n1 = pagesEl.querySelector(`.cover-item[data-cid="${nb.id}"]`);
+  if (n1) n1.style.top = nb.y + 'px';
+  selectCoverItem(nb.id);
+  requestAnimationFrame(() => {
+    const root = pagesEl.querySelector(`.cover-item[data-cid="${nb.id}"]`);
+    if (!root) return;
+    const ed = root.matches('[contenteditable=true]') ? root
+      : root.querySelector('[contenteditable=true]');
+    if (ed) ed.focus();
+  });
+}
 
 function enterAtCaret(host, b) {
   const s0 = getSelection();
@@ -1128,20 +2091,29 @@ function enterAtCaret(host, b) {
   const c = captureCaret();
   const [before, after] = splitHtmlAt(host, c ? c.offset : (host.textContent.length));
 
-  // lista/citação/checklist vazia + Enter → vira parágrafo (sai da lista) — trilha B (t7) incluiu
-  // 'check'; 'callout' entrou depois — é uma caixa avulsa, não uma lista, então Enter num
-  // callout vazio deve sair dele (virar parágrafo), não deixar uma caixa vazia pra trás.
+  // lista/citação/checklist vazia + Enter → desindenta (se subitem) ou vira parágrafo.
+  // 'callout' entrou depois — é uma caixa avulsa, não uma lista, então Enter num callout
+  // vazio deve sair dele (virar parágrafo), não deixar uma caixa vazia pra trás.
   if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote' || b.type === 'check' || b.type === 'callout') && !before.trim() && !after.trim()) {
+    if (LIST_TYPES.has(b.type) && listIndentOf(b) > 0) {
+      setListIndent(b, listIndentOf(b) - 1);
+      b.html = '';
+      render({ id: b.id, role: 'block', offset: 0 });
+      return;
+    }
     b.type = 'p'; b.html = '';
+    delete b.indent;
     render({ id: b.id, role: 'block', offset: 0 });
     return;
   }
   b.html = before;
-  // título e callout não continuam (viram parágrafo); lista/citação continuam (é o ponto de
-  // ter uma lista). Callout é uma caixa de destaque avulsa — não faz sentido Enter empilhar
-  // caixas, então Enter de dentro dele sempre abre um parágrafo normal em seguida.
-  const newType = (HEAD_TYPES.has(b.type) || b.type === 'callout') ? 'p' : b.type;
+  // título, citação e callout não continuam (viram parágrafo); lista/checklist continuam
+  // (é o ponto de ter uma lista). Callout é caixa avulsa — Enter não empilha caixas.
+  // Citação: Enter sempre abre parágrafo (não encadeia blockquotes).
+  const newType = (HEAD_TYPES.has(b.type) || b.type === 'callout' || b.type === 'quote') ? 'p' : b.type;
   const nb = mkBlock(newType, after);
+  // subitem: o novo item herda o nível do atual (continua a lista aninhada)
+  if (LIST_TYPES.has(newType) && listIndentOf(b) > 0) nb.indent = listIndentOf(b);
   state.doc.blocks.splice(idxOf(b.id) + 1, 0, nb);
   render({ id: nb.id, role: 'block', offset: 0 });
 }
@@ -1180,6 +2152,7 @@ function breakAtCaret(host, b, sepType = 'pagebreak') {
   const sep = mkBlock(sepType, '');
   // fim do bloco: começa parágrafo vazio; meio: mantém o tipo com o resto
   const nb = after.trim() ? mkBlock(b.type, after) : mkBlock('p', '');
+  if (after.trim() && LIST_TYPES.has(b.type) && listIndentOf(b) > 0) nb.indent = listIndentOf(b);
   state.doc.blocks.splice(i + 1, 0, sep, nb);
   render({ id: nb.id, role: 'block', offset: 0 });
 }
@@ -1210,33 +2183,24 @@ pagesEl.addEventListener('input', (e) => {
     return;
   }
   if (slash.isOpen()) slash.close();            // deixou de ser "/…" → fecha o menu
-  // trilha B (t7): "[] " / "[ ] " / "[x] " no início de um p → checklist (segue os atalhos md abaixo)
-  if (b.type === 'p' && (m = t.match(/^\[([ xX]?)\] ([\s\S]*)$/))) {
+  // atalhos md valem em QUALQUER bloco de texto (quote, h2, li…), não só parágrafo —
+  // o marcador no início + espaço troca o tipo do bloco atual (Notion).
+  // \s (não só " ") porque contenteditable costuma inserir NBSP no espaço.
+  if (TEXT_TYPES.has(b.type) && (m = t.match(/^\[([ xX]?)\]\s([\s\S]*)$/))) {
     b.type = 'check'; b.checked = /[xX]/.test(m[1]); b.html = escapeHtml(m[2]);
-    render({ id: b.id, role: 'block', offset: 0 }); syncTypeUI('check');
+    render({ id: b.id, role: 'block', offset: m[2].length }); syncTypeUI('check');
     return;
   }
-  // (1) commit: "marcador + espaço" → vira o tipo e CONSOME o marcador
-  if ((b.type === 'p' || b._auto) && (m = t.match(/^(#{1,4}|>|[-*]|\d+\.) ([\s\S]*)$/))) {
-    b.type = mkType(m[1]); b.html = escapeHtml(m[2]); delete b._auto;
-    render({ id: b.id, role: 'block', offset: 0 }); syncTypeUI(b.type);
+  // commit: digita o marcador (#, ##, >, -, 1.) → símbolo fica no texto;
+  // espaço seguinte CONSOME marcador+espaço e aplica o tipo. Sem preview ao vivo.
+  if (TEXT_TYPES.has(b.type) && (m = t.match(/^(#{1,4}|>|[-*]|\d+\.)\s([\s\S]*)$/))) {
+    b.type = mkType(m[1]); b.html = escapeHtml(m[2]);
+    if (!LIST_TYPES.has(b.type)) delete b.indent; // indent só faz sentido em lista
+    render({ id: b.id, role: 'block', offset: m[2].length }); syncTypeUI(b.type);
     return;
   }
-  // (2) preview AO VIVO do título: só "#".."####" (sem espaço) já muda o estilo, mantendo o texto
-  if ((b.type === 'p' || b._auto) && (m = t.match(/^#{1,4}$/))) {
-    const nt = mkType(m[0]);
-    b._auto = true; b.html = host.innerHTML;
-    if (b.type !== nt) { b.type = nt; render({ id: b.id, role: 'block', offset: t.length }); syncTypeUI(nt); return; }
-    save(); scheduleCommit(); return;
-  }
-  // (3) revert: título aplicado ao vivo que deixou de ser "#…" (apagou o #) → volta a parágrafo
-  if (b._auto) {
-    b.type = 'p'; delete b._auto; b.html = host.innerHTML;
-    render({ id: b.id, role: 'block', offset: t.length }); syncTypeUI('p');
-    return;
-  }
-  // (4) divisor
-  if (b.type === 'p' && (t === '---' || t === '***' || t === '___')) {
+  // divisor (bloco de texto cujo conteúdo é só ---/***/___ → vira divisor + parágrafo novo)
+  if (TEXT_TYPES.has(b.type) && (t === '---' || t === '***' || t === '___')) {
     const nb = mkBlock('p', '');
     state.doc.blocks.splice(idxOf(b.id), 1, mkBlock('divider', ''), nb);
     render({ id: nb.id, role: 'block', offset: 0 });
@@ -1257,6 +2221,12 @@ const slash = initSlashMenu({
     icon: (btn.querySelector('.ico') || {}).innerHTML || '',
   })),
   onPick: (def, id) => {
+    // capa/contracapa: aplica o tipo no item livre (imagem/tabela/lista/texto…)
+    const covHit = id && findCoverItem(id);
+    if (covHit) {
+      applyCoverItemType(covHit.item, def.type);
+      return;
+    }
     const b = id && blockOf(id); if (!b) return;
     state.activeId = b.id;
     b.html = '';                                // tira o "/filtro" digitado do bloco
@@ -1273,22 +2243,172 @@ const slash = initSlashMenu({
   },
 });
 
+// Notion: "+" ao lado da alça / no fim da coluna → parágrafo novo + menu de tipos (mesmo do "/")
+function insertAfterWithSlash(afterId) {
+  clearIdxFocus();
+  if (state.sel) {
+    state.sel = null;
+    pagesEl.querySelectorAll('.imgsel, .divsel, .pbsel, .cover-sel').forEach(el => el.classList.remove('imgsel', 'divsel', 'pbsel', 'cover-sel'));
+    closeImgPanel(); closeCoverPanel();
+  }
+  const nb = mkBlock('p', '');
+  const i = afterId ? idxOf(afterId) : -1;
+  if (i >= 0) state.doc.blocks.splice(i + 1, 0, nb);
+  else state.doc.blocks.push(nb);
+  state.activeId = nb.id;
+  render({ id: nb.id, role: 'block', offset: 0 });
+  // espera o caret/DOM do render; abre o menu de tipos ancorado no bloco novo
+  requestAnimationFrame(() => { slash.open(nb.id, ''); });
+}
+
+// aplica um tipo da paleta a um item da capa (texto, lista, imagem, tabela, divisor…)
+// pagebreak não existe na capa — o slash já exclui; se cair aqui, vira parágrafo.
+let pendingCoverImageId = null;   // id do cover-item esperando o arquivo de imagem
+function applyCoverItemType(it, type) {
+  if (!it) return;
+  if (type === 'pagebreak') type = 'p';
+  if (type === 'image') {
+    // só troca o type depois do arquivo carregar (cancelar o picker não deixa item quebrado)
+    pendingCoverImageId = it.id;
+    replaceImageId = null;
+    pendingImgPlacement = null;
+    document.getElementById('imgfile').click();
+    return;
+  }
+  // limpa campos de outros tipos
+  delete it.src; delete it.nw; delete it.nh; delete it.radius; delete it.chart;
+  delete it.rows; delete it.colWidths; delete it.headerColor; delete it.hideVLines;
+  delete it.checked; delete it.icon; delete it.iconSet; delete it.iconStyle; delete it.iconColor;
+  it.type = type;
+  it.html = '';
+  if (type === 'table') {
+    // buildTableEl semeia rows no primeiro render se vazio
+    it.rows = null;
+  } else if (type === 'callout') {
+    ensureCalloutDefaults(it);
+  } else if (type === 'check') {
+    it.checked = false;
+  } else if (type === 'divider') {
+    // sem html
+  } else {
+    it.size = COVER_TYPE_SIZE[type] ?? it.size ?? 18;
+  }
+  state.sel = it.id;
+  state.activeId = null;
+  render();
+  selectCoverItem(it.id);
+  if (COVER_PLAIN.has(type) || type === 'li' || type === 'ol' || type === 'check' || type === 'callout') {
+    requestAnimationFrame(() => {
+      const root = pagesEl.querySelector(`.cover-item[data-cid="${it.id}"]`);
+      if (!root) return;
+      const ed = root.matches('[contenteditable=true]') ? root
+        : root.querySelector('[contenteditable=true]');
+      if (ed) ed.focus();
+    });
+  }
+}
+
+// capa/contracapa: "+" Notion (alça ou fim da área) → bloco novo + menu de tipos
+function insertCoverWithSlash(kind, afterId) {
+  const cov = kind === 'back' ? state.doc.back : state.doc.cover;
+  if (!cov) return;
+  clearIdxFocus();
+  state.activeId = null;
+  let y = 0;
+  if (afterId) {
+    const f = findCoverItem(afterId);
+    const node = pagesEl.querySelector(`.cover-item[data-cid="${afterId}"]`);
+    const h = node ? node.offsetHeight : 24;
+    y = Math.min((f?.item.y || 0) + h + GAP_CV, COVER_AREA_H - 30);
+  } else if (cov.items.length) {
+    let maxBottom = 0;
+    for (const it of cov.items) {
+      const n = pagesEl.querySelector(`.cover-item[data-cid="${it.id}"]`);
+      maxBottom = Math.max(maxBottom, (it.y || 0) + (n ? n.offsetHeight : 24));
+    }
+    y = Math.min(maxBottom + GAP_CV, COVER_AREA_H - 30);
+  }
+  const it = coverItem('', 18, 'full', 'left', null, y, 'p');
+  if (afterId) {
+    const f = findCoverItem(afterId);
+    if (f) f.list.splice(f.idx + 1, 0, it);
+    else cov.items.push(it);
+  } else {
+    cov.items.push(it);
+  }
+  state.sel = it.id;
+  render();
+  selectCoverItem(it.id);
+  requestAnimationFrame(() => {
+    const el = pagesEl.querySelector(`.cover-item[data-cid="${it.id}"]`);
+    if (el) {
+      if (el.isContentEditable) el.focus();
+      // capa: Título/Subtítulo no topo + paleta do miolo, sem quebra de página
+      slash.open(it.id, '', { exclude: ['pagebreak'], extra: COVER_SLASH_EXTRA });
+    }
+  });
+}
+function coverKindOf(cov) {
+  return cov === state.doc.back ? 'back' : 'cover';
+}
+function duplicateCoverItem(id) {
+  const f = findCoverItem(id); if (!f) return;
+  const node = pagesEl.querySelector(`.cover-item[data-cid="${id}"]`);
+  const h = node ? node.offsetHeight : 24;
+  const copy = structuredClone(f.item);
+  copy.id = uid();
+  copy.y = Math.min((f.item.y || 0) + h + GAP_CV, COVER_AREA_H - 30);
+  f.list.splice(f.idx + 1, 0, copy);
+  state.sel = copy.id;
+  render();
+  selectCoverItem(copy.id);
+}
+function deleteCoverItem(id) {
+  const f = findCoverItem(id); if (!f) return;
+  f.list.splice(f.idx, 1);
+  if (state.sel === id) state.sel = null;
+  closeCoverPanel();
+  render();
+}
+
 pagesEl.addEventListener('focusin', (e) => {
   const host = e.target.closest && e.target.closest('[contenteditable]');
-  if (!host || (host.dataset.role || 'block') !== 'block') return;
+  if (!host) return;
+  // capa/contracapa: conteúdo editável dentro do cover-item (texto, lista, célula de tabela)
+  const coverEl = host.closest && host.closest('.cover-item');
+  if (coverEl) {
+    selectCoverItem(coverEl.dataset.cid);
+    return;
+  }
+  const role = host.dataset.role || 'block';
+  // resumo do índice: borda roxa na seção + painel de largura (não é bloco do miolo)
+  if (role === 'resumo') {
+    setIdxFocus('resumo');
+    return;
+  }
+  if (role !== 'block') return;
   // a célula editável da tabela não carrega data-id (quem carrega é o envelope .tbl-wrap) →
   // sobe até o bloco, senão a sidebar (tipo + coluna) continuaria falando do bloco ANTERIOR
   // enquanto se digita dentro da tabela.
   const holder = host.dataset.id ? host : (host.closest && host.closest('[data-id]'));
   const b = holder && blockOf(holder.dataset.id);
   if (!b) return;
+  clearIdxFocus();
   state.activeId = b.id; syncTypeUI(b.type);
   setSegment('conteudo');                  // clicar num bloco → aba Conteúdo
-  // borda no bloco ativo: mostra a quem o menu lateral se refere
-  pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
-  if (holder === host) host.classList.add('active-block');   // na tabela a borda ficaria numa célula só
-  showHandleAtFocused();                   // alça fica acessível enquanto o bloco está em foco
+  // limpa seleção de imagem/divisor/quebra — o foco de texto é o estado ativo agora
+  if (state.sel) {
+    state.sel = null;
+    pagesEl.querySelectorAll('.imgsel, .divsel, .pbsel, .cover-sel').forEach(el => el.classList.remove('imgsel', 'divsel', 'pbsel', 'cover-sel'));
+    closeImgPanel(); closeCoverPanel();
+  }
+  // borda roxa no ENVELOPE do bloco (não no contenteditable interno) + alça + menus
+  paintActiveBlock(b.id);
+  showHandleAtFocused();                   // alça ⠿ à esquerda, centrada na altura do bloco
   updateCalloutBar();                      // barra flutuante do callout — só aparece se b.type==='callout'
+  if (b.type === 'table') tablePanelDismissed = false; // re-focar célula reabre o popover
+  updateTableBar();
+  syncColUI();                             // coluna do bloco ativo na aba Conteúdo
 });
 
 // seleciona/desseleciona imagem SEM re-render (um rebuild no meio do gesto de
@@ -1299,7 +2419,25 @@ function setImgSel(id) {
   pagesEl.querySelectorAll('.imgsel, .divsel, .pbsel, .cover-sel').forEach(el => el.classList.remove('imgsel', 'divsel', 'pbsel', 'cover-sel'));
   closeCoverPanel();
   const b = id && blockOf(id);
-  if (!b) { closeImgPanel(); return; }
+  if (!b) {
+    closeImgPanel();
+    // sem seleção de imagem → se ainda há bloco de texto ativo, re-pinta a borda dele
+    paintActiveBlock(state.activeId);
+    showHandleAtFocused();
+    updateCalloutBar();
+    updateTableBar();
+    return;
+  }
+  clearIdxFocus();
+  // bloco estrutural vira o "foco" do documento (borda roxa + alça + sidebar)
+  state.activeId = id;
+  paintActiveBlock(id);
+  showHandleAtFocused();
+  syncTypeUI(b.type);
+  setSegment('conteudo');
+  syncColUI();
+  updateCalloutBar();
+  updateTableBar();
   if (b.type === 'divider') {                    // divisor: borda roxa, sem painel
     const el = pagesEl.querySelector(`.divider[data-id="${id}"]`);
     if (el) el.classList.add('divsel');
@@ -1312,24 +2450,44 @@ function setImgSel(id) {
     closeImgPanel();
     return;
   }
+  // coluna direita: qualquer tipo ganha outline de seleção no .rimg; painel flutuante
+  // só existe pra imagem (texto/tabela usam a sidebar: Posição + Travar no texto).
   const el = pagesEl.querySelector(`.rimg[data-id="${id}"]`) || pagesEl.querySelector(`figure[data-id="${id}"]`);
   if (el) el.classList.add('imgsel');
-  openImgPanel();
+  if (b.type === 'image') openImgPanel();
+  else closeImgPanel();
 }
 
-// clicar numa figura/divisor/item de capa seleciona
+// clicar numa figura/divisor/item de capa / logo / seção Índice|Resumo / callout seleciona
 pagesEl.addEventListener('mousedown', (e) => {
   if (e.target.closest && e.target.closest('.rimg')) return;   // o pointerdown do drag cuida
+  const idxSec = e.target.closest && e.target.closest('.idx-section');
+  const coverLogo = e.target.closest && e.target.closest('.cover-logo-hit');
   const coverIt = e.target.closest && e.target.closest('.cover-item');
   const fig = e.target.closest && e.target.closest('figure.fig');
   const divider = e.target.closest && e.target.closest('.divider.b');
   const pbreak = e.target.closest && e.target.closest('.e-pbreak');   // bug: nunca era selecionável → Backspace não achava o quê remover
+  const callout = e.target.closest && e.target.closest('.callout.b');
+  const tbl = e.target.closest && e.target.closest('.tbl-wrap.b');
   const editable = e.target.closest && e.target.closest('[contenteditable]');
-  if (coverIt) selectCoverItem(coverIt.dataset.cid);
+  if (idxSec) {
+    // resumo editável: o focusin cuida; mousedown no título/borda da seção também foca
+    setIdxFocus(idxSec.dataset.idx);
+  } else if (callout) {
+    // qualquer parte do callout (ícone, padding, texto) seleciona e mostra a #calloutBar
+    selectBlockFromHandle(callout.dataset.id);
+  } else if (tbl) {
+    // clique na moldura/célula da tabela → ativo + popover lateral (célula ainda recebe o focusin)
+    selectBlockFromHandle(tbl.dataset.id);
+  } else if (coverLogo) selectCoverLogo(coverLogo.dataset.logo);
+  else if (coverIt) selectCoverItem(coverIt.dataset.cid);
   else if (fig && !editable) setImgSel(fig.dataset.id);
   else if (divider) setImgSel(divider.dataset.id);
   else if (pbreak) setImgSel(pbreak.dataset.id);
-  else if (state.sel && !e.target.closest('#imgPanel') && !e.target.closest('#coverPanel')) setImgSel(null);
+  else if (state.sel && !e.target.closest('#imgPanel') && !e.target.closest('#coverPanel')
+    && !e.target.closest('#logoPanel') && !e.target.closest('#idxPanel') && !e.target.closest('#resumoPanel')) setImgSel(null);
+  else if (idxFocus && !e.target.closest('#idxPanel') && !e.target.closest('#resumoPanel')
+    && !e.target.closest('.idx-section')) clearIdxFocus();
 });
 
 // clicar na área vazia da coluna direita → menu flutuante pra adicionar imagem
@@ -1493,13 +2651,117 @@ function showSnapGuide(content, y) {
 }
 
 // ── reordenar blocos (alça estilo Notion) + mover imagem entre as colunas ─────
+// geometria da gutter Notion: [+][dragger] | bloco — botões 16×16, alinhados ao meio do bloco
+// H_PAD 10 = 6+4 (dragger 4px mais à esquerda, longe das alças da tabela)
+// H_GAP 0 = sem vão entre o “+” e o dragger
+const H_BTN = 16, H_GAP = 0, H_PAD = 10;
+const H_GUTTER = H_BTN + H_GAP + H_BTN + H_PAD;
+// ícone de UI Ionicons (viewBox 512) em currentColor, centrado no botão
+const uiIco = (key, size = 12, style = 'outline') =>
+  iconSvg(key, { x: 0, y: 0, w: size, h: size }, 'currentColor', 1.8, style, true)
+    .replace(/ x="0" y="0"/, '');
+
+initPreviewToc();   // botão list-outline do índice flutuante (precisa de uiIco)
+
 const bhandle = document.createElement('div');
-bhandle.id = 'bhandle'; bhandle.textContent = '⠿'; bhandle.hidden = true; bhandle.title = 'Arraste para mover';
+bhandle.id = 'bhandle';
+// ion-icon name="reorder-three" → variante filled (sem sufixo -outline)
+bhandle.innerHTML = uiIco('reorder-three', 12, 'solid');
+bhandle.hidden = true; bhandle.title = 'Arrastar ou clicar para opções';
 document.body.appendChild(bhandle);
+// "+" Ionicons add-outline — mesma caixa do dragger
+const badd = document.createElement('button');
+badd.id = 'badd'; badd.type = 'button'; badd.hidden = true;
+badd.title = 'Adicionar bloco abaixo';
+badd.setAttribute('aria-label', 'Adicionar bloco abaixo');
+badd.innerHTML = uiIco('add', 12, 'outline');
+document.body.appendChild(badd);
+// menu do dragger: Duplicar / Remover — ícones oficiais Ionicons (outline, viewBox 512)
+// ion-icon name="trash-outline" → uiIco/menuIco('trash', …, 'outline')
+const menuIco = (key) =>
+  iconSvg(key, { x: 0, y: 0, w: 16, h: 16 }, 'currentColor', 1.8, 'outline', true)
+    .replace(/ x="0" y="0"/, '');
+const bmenu = document.createElement('div');
+bmenu.id = 'bmenu'; bmenu.hidden = true;
+bmenu.innerHTML = `<button type="button" data-a="dup"><span class="ico">${menuIco('copy')}</span>Duplicar</button>`
+  + `<button type="button" data-a="del" class="danger"><span class="ico">${menuIco('trash')}</span>Remover</button>`;
+document.body.appendChild(bmenu);
+let bmenuId = null;
+function closeBlockMenu() { bmenu.hidden = true; bmenuId = null; }
+function openBlockMenu(id, anchorEl) {
+  bmenuId = id;
+  bmenu.hidden = false;
+  const r = (anchorEl || bhandle).getBoundingClientRect();
+  const mw = bmenu.offsetWidth || 160, mh = bmenu.offsetHeight || 72;
+  let x = r.right + 6;
+  if (x + mw > innerWidth - 8) x = Math.max(8, r.left - mw - 6);
+  let y = r.top;
+  if (y + mh > innerHeight - 8) y = Math.max(8, innerHeight - mh - 8);
+  bmenu.style.left = x + 'px'; bmenu.style.top = y + 'px';
+}
+// seleciona o bloco ao interagir com a alça (hover → click no gap não “perde” o alvo)
+function selectBlockFromHandle(id) {
+  const b = blockOf(id); if (!b) return;
+  clearIdxFocus();
+  state.activeId = id;
+  if (b.type === 'image' || b.type === 'divider' || b.type === 'pagebreak') {
+    setImgSel(id);
+  } else {
+    if (state.sel) {
+      state.sel = null;
+      pagesEl.querySelectorAll('.imgsel, .divsel, .pbsel, .cover-sel').forEach(el => el.classList.remove('imgsel', 'divsel', 'pbsel', 'cover-sel'));
+      closeImgPanel(); closeCoverPanel();
+    }
+    paintActiveBlock(id);
+    syncTypeUI(b.type);
+    setSegment('conteudo');
+    syncColUI();
+    updateCalloutBar();
+    if (b.type === 'table') tablePanelDismissed = false;
+    updateTableBar();
+    showHandleAtFocused();
+  }
+}
+function duplicateBlock(id) {
+  if (findCoverItem(id)) return duplicateCoverItem(id);
+  const i = idxOf(id); if (i < 0) return;
+  const src = state.doc.blocks[i];
+  // clone profundo (tabela.rows, image.src, callout…) + id novo
+  const copy = structuredClone(src);
+  copy.id = uid();
+  state.doc.blocks.splice(i + 1, 0, copy);
+  state.activeId = copy.id;
+  state.sel = null;
+  render({ id: copy.id, role: 'block', offset: 0 });
+}
+function deleteBlockById(id) {
+  if (findCoverItem(id)) return deleteCoverItem(id);
+  const i = idxOf(id); if (i < 0) return;
+  state.doc.blocks.splice(i, 1);
+  if (!state.doc.blocks.length) state.doc.blocks.push(mkBlock('p', ''));
+  if (state.sel === id) state.sel = null;
+  state.activeId = state.doc.blocks[Math.min(i, state.doc.blocks.length - 1)].id;
+  closeImgPanel(); closeCoverPanel();
+  render({ id: state.activeId, role: 'block', offset: 0 });
+}
+bmenu.addEventListener('mousedown', (e) => e.preventDefault()); // não rouba foco do miolo
+bmenu.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-a]'); if (!btn || !bmenuId) return;
+  const id = bmenuId; closeBlockMenu();
+  if (btn.dataset.a === 'dup') duplicateBlock(id);
+  else if (btn.dataset.a === 'del') deleteBlockById(id);
+});
+document.addEventListener('pointerdown', (e) => {
+  if (bmenu.hidden) return;
+  if (e.target.closest && (e.target.closest('#bmenu') || e.target.closest('#bhandle'))) return;
+  closeBlockMenu();
+}, true);
+
 const dropLine = document.createElement('div');
 dropLine.id = 'dropline'; dropLine.hidden = true;
 document.body.appendChild(dropLine);
-let handleFor = null, bdrag = null, cdrag = null;   // handleFor: {kind:'miolo'|'cover', id}
+// handlePending: pointerdown na alça sem mover ainda — click = menu, arraste = reordenar
+let handleFor = null, handlePending = null, bdrag = null, cdrag = null;
 
 const GAP_CV = 10;   // folga mínima entre blocos da capa (anti-sobreposição)
 // blocos da capa colidem se as faixas X (colunas) se cruzam
@@ -1523,42 +2785,149 @@ function coverPushPull(cov, item, deltaH) {
 }
 // bloco que a alça ancora quando nada está sob o mouse: o que está EM FOCO
 function focusedHandleTarget() {
-  if (state.sel) { const c = pagesEl.querySelector(`.cover-item[data-cid="${state.sel}"]`); if (c) return { el: c, kind: 'cover', id: state.sel }; }
-  if (state.activeId) { const b = pagesEl.querySelector(`.col-left > [data-id="${state.activeId}"]`); if (b) return { el: b, kind: 'miolo', id: state.activeId }; }
+  if (state.sel) {
+    const c = pagesEl.querySelector(`.cover-item[data-cid="${state.sel}"]`);
+    if (c) return { el: c, kind: 'cover', id: state.sel };
+  }
+  if (state.activeId) {
+    // envelope do bloco (frag / check / callout / tabela / figure / rimg) — altura TOTAL
+    const b = pagesEl.querySelector(
+      `.col-left > [data-id="${state.activeId}"], .col-right > [data-id="${state.activeId}"]`
+    );
+    if (b) return { el: b, kind: 'miolo', id: state.activeId };
+  }
   return null;
 }
-function placeHandle(t) {
-  if (!t) { bhandle.hidden = true; handleFor = null; return; }
-  handleFor = { kind: t.kind, id: t.id };
-  const r = t.el.getBoundingClientRect();
-  bhandle.style.left = (r.left - 22) + 'px'; bhandle.style.top = (r.top + 1) + 'px';
-  bhandle.hidden = false;
+// hit-test: bloco sob o cursor OU gutter à esquerda (onde ficam +/dragger) —
+// sem isso, ao sair do bloco pro botão o mousemove “perde” o hover e os botões somem.
+function hitHandleTarget(clientX, clientY) {
+  const under = document.elementFromPoint(clientX, clientY);
+  if (under) {
+    if (under.closest('#bhandle') || under.closest('#badd') || under.closest('#bmenu')) {
+      return handleFor ? { el: handleFor._el || null, kind: handleFor.kind, id: handleFor.id, sticky: true } : null;
+    }
+    const cov = under.closest('.cover-item');
+    if (cov) return { el: cov, kind: 'cover', id: cov.dataset.cid };
+    const blk = under.closest('.col-left > [data-id], .col-right > [data-id]');
+    if (blk) return { el: blk, kind: 'miolo', id: blk.dataset.id };
+  }
+  // gutter à esquerda de cada bloco do miolo (faixa dos botões + folga)
+  for (const el of pagesEl.querySelectorAll('.col-left > [data-id], .col-right > [data-id]')) {
+    const r = el.getBoundingClientRect();
+    if (clientY >= r.top && clientY <= r.bottom
+      && clientX >= r.left - H_GUTTER - 4 && clientX < r.left + 2) {
+      return { el, kind: 'miolo', id: el.dataset.id };
+    }
+  }
+  for (const el of pagesEl.querySelectorAll('.cover-item')) {
+    const r = el.getBoundingClientRect();
+    if (clientY >= r.top && clientY <= r.bottom
+      && clientX >= r.left - H_GUTTER - 4 && clientX < r.left + 2) {
+      return { el, kind: 'cover', id: el.dataset.cid };
+    }
+  }
+  return null;
 }
-const showHandleAtFocused = () => { if (!bdrag && !cdrag && !drag) placeHandle(focusedHandleTarget()); };
+// Coluna direita = modelo da imagem: item absoluto com Y livre + cadeado no texto da
+// esquerda. Sem alça Notion nem "+" — reordenar o fluxo não se aplica; pra voltar pro
+// fluxo, arrasta o item de volta pra coluna esquerda (pointerup do .rimg).
+function isRightPlacement(id) {
+  const b = id && blockOf(id);
+  return !!(b && placementOf(b) === 'right');
+}
+function placeHandle(t) {
+  if (!t || !t.el) {
+    // sticky: se veio de cima dos botões sem _el fresco, re-resolve o envelope
+    if (t && t.sticky && t.id) {
+      const el = t.kind === 'cover'
+        ? pagesEl.querySelector(`.cover-item[data-cid="${t.id}"]`)
+        : pagesEl.querySelector(`.col-left > [data-id="${t.id}"], .col-right > [data-id="${t.id}"]`);
+      if (el) t = { el, kind: t.kind, id: t.id };
+      else { bhandle.hidden = true; badd.hidden = true; handleFor = null; return; }
+    } else {
+      bhandle.hidden = true; badd.hidden = true; handleFor = null; return;
+    }
+  }
+  // miolo na coluna direita: sem ⠿ / + (igual imagem)
+  if (t.kind === 'miolo' && isRightPlacement(t.id)) {
+    bhandle.hidden = true; badd.hidden = true; handleFor = null; return;
+  }
+  handleFor = { kind: t.kind, id: t.id, _el: t.el };
+  const r = t.el.getBoundingClientRect();
+  // eixo vertical = centro do bloco; botões 20px alinhados entre si
+  // [+] [gap] [⠿] [pad] | bloco
+  const midY = r.top + r.height / 2;
+  const dragLeft = r.left - H_PAD - H_BTN;
+  const addLeft = dragLeft - H_GAP - H_BTN;
+  bhandle.style.left = dragLeft + 'px';
+  bhandle.style.top = midY + 'px';
+  bhandle.hidden = false;
+  // + Notion: miolo E capa/contracapa (mesma alça; o click decide insertCover vs insert miolo)
+  badd.style.left = addLeft + 'px';
+  badd.style.top = midY + 'px';
+  badd.hidden = false;
+}
+const showHandleAtFocused = () => {
+  if (idxFocus) { bhandle.hidden = true; badd.hidden = true; handleFor = null; return; }
+  if (!bdrag && !cdrag && !drag && !handlePending) placeHandle(focusedHandleTarget());
+};
 
-// a alça ⠿ serve o miolo (reordenar) E a capa (reposicionar no Y). Fica visível no
-// hover E enquanto o bloco está em foco (pra dar pra alcançá-la sem ela sumir).
-pagesEl.addEventListener('mousemove', (e) => {
-  if (bdrag || drag || cdrag) return;
-  if (e.target.closest && e.target.closest('#bhandle')) return;   // sobre a alça: mantém
-  const cov = e.target.closest && e.target.closest('.cover-item');
-  const blk = e.target.closest && e.target.closest('.col-left > [data-id]');
-  const hov = cov ? { el: cov, kind: 'cover', id: cov.dataset.cid } : blk ? { el: blk, kind: 'miolo', id: blk.dataset.id } : null;
-  placeHandle(hov || focusedHandleTarget());     // fora de bloco → volta pro bloco em foco
+// document (não só #pages): +/dragger moram no body — saindo do bloco pro botão
+// o mouseleave do pages sumia com os controles. Gutter hit-test cobre o caminho.
+document.addEventListener('mousemove', (e) => {
+  if (bdrag || drag || cdrag || handlePending) return;
+  if (idxFocus) return;
+  const hov = hitHandleTarget(e.clientX, e.clientY);
+  placeHandle(hov || focusedHandleTarget());
 });
-pagesEl.addEventListener('mouseleave', () => showHandleAtFocused());
 
+// alça: click = seleciona + menu Duplicar/Remover; arrastar = reordenar / capa Y
 bhandle.addEventListener('pointerdown', (e) => {
   if (!handleFor) return;
   e.preventDefault();
+  e.stopPropagation();
+  closeBlockMenu();
+  if (handleFor.kind === 'miolo') selectBlockFromHandle(handleFor.id);
+  handlePending = {
+    kind: handleFor.kind, id: handleFor.id,
+    x: e.clientX, y: e.clientY, pointerId: e.pointerId,
+  };
+});
+function beginHandleDrag(p) {
   bhandle.style.pointerEvents = 'none'; document.body.classList.add('grabbing');
-  if (handleFor.kind === 'cover') {              // capa/contracapa: arrasta no eixo Y (como as imagens)
-    const f = findCoverItem(handleFor.id); if (!f) return;
-    cdrag = { id: handleFor.id, item: f.item, startY: e.clientY, startTop: f.item.y || 0, z: currentZoom() };
-    selectCoverItem(handleFor.id);
+  if (p.kind === 'cover') {
+    const f = findCoverItem(p.id); if (!f) return;
+    cdrag = { id: p.id, item: f.item, startY: p.y, startTop: f.item.y || 0, z: currentZoom() };
+    selectCoverItem(p.id);
   } else {
-    bdrag = { id: handleFor.id, target: null };
+    bdrag = { id: p.id, target: null };
   }
+}
+// "+" Notion: mousedown não rouba seleção; click insere parágrafo depois e abre o slash
+badd.addEventListener('mousedown', (e) => e.preventDefault());
+badd.addEventListener('click', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  if (!handleFor) return;
+  if (handleFor.kind === 'miolo') insertAfterWithSlash(handleFor.id);
+  else if (handleFor.kind === 'cover') {
+    const f = findCoverItem(handleFor.id);
+    if (f) insertCoverWithSlash(coverKindOf(f.cov), handleFor.id);
+  }
+});
+// row "+" no fim da coluna esquerda (miolo) OU da área da capa/contracapa
+pagesEl.addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('.col-add-btn');
+  if (!btn) return;
+  e.preventDefault(); e.stopPropagation();
+  const coverAdd = btn.closest('.col-add[data-cover]');
+  if (coverAdd) {
+    insertCoverWithSlash(coverAdd.dataset.cover, null);
+    return;
+  }
+  const col = btn.closest('.col-left');
+  const blocks = col ? [...col.querySelectorAll(':scope > [data-id]')] : [];
+  const last = blocks[blocks.length - 1];
+  insertAfterWithSlash(last ? last.dataset.id : null);
 });
 // trilha E: a própria barra de quebra inicia o MESMO bdrag do #bhandle — mirar a alça ⠿
 // fininha numa barra larga é ruim. O pointermove/pointerup globais já cuidam do resto.
@@ -1577,7 +2946,16 @@ pagesEl.addEventListener('pointerdown', (e) => {
   bdrag = { id: bar.dataset.id, target: null };
 });
 const COVER_AREA_H = PAGE_H - 40 - 40;            // capa: área com padding vertical 40px
+const HANDLE_DRAG_PX = 5;                         // abaixo disso = click (menu); acima = arraste
 document.addEventListener('pointermove', (e) => {
+  // alça: se moveu o suficiente, promove o pending a drag real
+  if (handlePending && !bdrag && !cdrag) {
+    const dx = e.clientX - handlePending.x, dy = e.clientY - handlePending.y;
+    if (Math.hypot(dx, dy) >= HANDLE_DRAG_PX) {
+      const p = handlePending; handlePending = null;
+      beginHandleDrag(p);
+    }
+  }
   if (cdrag) {
     const node = pagesEl.querySelector(`.cover-item[data-cid="${cdrag.id}"]`);
     const h = node ? node.offsetHeight : 0;
@@ -1605,12 +2983,19 @@ document.addEventListener('pointermove', (e) => {
   showDrop(bdrag.target);
 });
 document.addEventListener('pointerup', () => {
-  if (cdrag) { cdrag = null; bhandle.style.pointerEvents = ''; bhandle.hidden = true; document.body.classList.remove('grabbing'); save(); scheduleCommit(); return; }
+  // click na alça (sem arrastar): já selecionou no pointerdown; abre menu no miolo
+  if (handlePending) {
+    const p = handlePending; handlePending = null;
+    // miolo e capa: click na alça = menu Duplicar/Remover (arraste já foi promovido acima)
+    if (p.kind === 'miolo' || p.kind === 'cover') openBlockMenu(p.id, bhandle);
+    return;
+  }
+  if (cdrag) { cdrag = null; bhandle.style.pointerEvents = ''; bhandle.hidden = true; badd.hidden = true; document.body.classList.remove('grabbing'); save(); scheduleCommit(); return; }
 });
 document.addEventListener('pointerup', () => {
   if (!bdrag) return;
   const { id, target } = bdrag; bdrag = null;
-  bhandle.style.pointerEvents = ''; bhandle.hidden = true; dropLine.hidden = true;
+  bhandle.style.pointerEvents = ''; bhandle.hidden = true; badd.hidden = true; dropLine.hidden = true;
   document.body.classList.remove('grabbing');
   if (target) applyDrop(id, target);
 });
@@ -1679,19 +3064,23 @@ const MINUS_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" st
 // bloco da coluna esquerda (ver nearestByTop/leftBlocksOnPage acima de buildRight).
 const LOCK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>';
 const UNLOCK_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5-1.2"/></svg>';
-// mesmo desenho do ícone de lixeira já usado em "Remover imagem de fundo" (data-rmbg) — reaproveitado
-// aqui nos botões "Remover texto"/"Remover imagem" dos popovers.
-const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+// ion-icon name="trash-outline" — botões "Remover" (painel imagem/texto, link, rmbg)
+const TRASH_ICO = uiIco('trash', 16, 'outline');
+// ion-icon name="repeat-outline" — botão "Substituir" (troca a arte, mantém título/legenda)
+const REPLACE_ICO = uiIco('repeat', 16, 'outline');
 let imgPanel;
 function openImgPanel() {
   const b = blockOf(state.sel);
   if (!b || b.type !== 'image') return;
+  closeTablePanel();
   if (!imgPanel) {
     imgPanel = document.createElement('div');
     imgPanel.id = 'imgPanel';
     document.body.appendChild(imgPanel);
   }
   const radius = b.radius ?? 4;
+  // slider fica no range “fino” (0–24); valor > 24 vem digitar no número ao lado de px
+  const RADIUS_SLIDER_MAX = 24;
   // travar exige um bloco do FLUXO que comece nesta página. Uma página que só mostra a
   // continuação de um parágrafo (bloco cortado) não tem âncora possível: o _top do bloco vive
   // na página onde ele começou, e ancorar ali jogaria a imagem de volta pra lá. Sem candidato,
@@ -1706,11 +3095,11 @@ function openImgPanel() {
     </div>
     <div class="field">Posição<div data-slot="col"></div></div>
     ${placementOf(b) === 'right' ? `<button type="button" class="fieldbtn" data-a="lock"${travavel ? '' : ' disabled title="Esta página não tem bloco de texto próprio para prender a imagem (só a continuação de um parágrafo que começa numa página anterior)."'}>${b.anchor ? UNLOCK_SVG : LOCK_SVG}<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span></button>` : ''}
-    <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv">${radius}px</span><button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
-      <input type="range" data-a="radius" min="0" max="24" step="1" value="${radius}">
+    <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
+      <input type="range" data-a="radius" min="0" max="${RADIUS_SLIDER_MAX}" step="1" value="${Math.min(radius, RADIUS_SLIDER_MAX)}" data-snaps="0,4,8,12,16,24">
     </label>
-    <label class="checkrow"><input type="checkbox" data-a="autocrop" ${state.autocrop !== false ? 'checked' : ''}>Cortar margem branca <span style="color:var(--muted)">(próxima imagem)</span></label>
-    <button type="button" class="fieldbtn" data-a="del" style="color:#CE5249">${TRASH_SVG}<span>Remover imagem</span></button>`;
+    <button type="button" class="fieldbtn" data-a="replace">${REPLACE_ICO}<span>Substituir</span></button>
+    <button type="button" class="fieldbtn danger" data-a="del">${TRASH_ICO}<span>Remover</span></button>`;
   imgPanel.hidden = false;
   // seletor de coluna (MESMO segment de ícone do popover de Texto da capa): imagem usa 'inline'/'full'/'right'
   imgPanel.querySelector('[data-slot="col"]').append(
@@ -1726,6 +3115,51 @@ function openImgPanel() {
     }));
   // reset (t4) não pode roubar foco/seleção no mousedown — mesmo padrão do resto do app (ex. fmtbar)
   imgPanel.querySelector('[data-a="radiusreset"]').addEventListener('mousedown', (e) => e.preventDefault());
+  // valor em px: editável no lugar (sem <input> extra). Teto = metade da página (círculo perfeito).
+  const radv = imgPanel.querySelector('[data-role="radv"]');
+  const parseRadius = (raw) => {
+    const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+    if (!Number.isFinite(n)) return null;
+    return Math.max(0, Math.min(Math.floor(PAGE_W / 2), n));
+  };
+  const paintRadius = (n, { syncText = true } = {}) => {
+    b.radius = n;
+    const img = pagesEl.querySelector(`figure[data-id="${b.id}"] img`);
+    if (img) img.style.borderRadius = n + 'px';
+    if (syncText && document.activeElement !== radv) radv.textContent = String(n);
+    const range = imgPanel.querySelector('input[data-a="radius"]');
+    if (range) range.value = Math.min(n, RADIUS_SLIDER_MAX);
+    save(); scheduleCommit();
+  };
+  // label envolve o range: sem preventDefault o clique no número roubaria o foco pro slider
+  radv.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    radv.focus();
+    const r = document.createRange();
+    r.selectNodeContents(radv);
+    const s = getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  });
+  radv.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); radv.blur(); }
+    else if (e.key === 'Escape') {
+      e.preventDefault();
+      radv.textContent = String(b.radius ?? 4);
+      radv.blur();
+    }
+  });
+  radv.addEventListener('input', () => {
+    const n = parseRadius(radv.textContent);
+    if (n == null) return;
+    paintRadius(n, { syncText: false });
+  });
+  radv.addEventListener('blur', () => {
+    const n = parseRadius(radv.textContent);
+    paintRadius(n == null ? (b.radius ?? 4) : n, { syncText: true });
+    radv.textContent = String(b.radius ?? 4);
+  });
+  enhanceAll(imgPanel);
   positionImgPanel();
 
   imgPanel.querySelectorAll('button[data-a],select[data-a],input[data-a]').forEach(el => {
@@ -1733,27 +3167,16 @@ function openImgPanel() {
     el.addEventListener(ev, () => {
       const a = el.dataset.a;
       if (a === 'radius' || a === 'radiusreset') {   // sem re-render: mantém o arraste do slider fluido
-        b.radius = a === 'radiusreset' ? 4 : +el.value;   // 4 = mesmo default de `b.radius ?? 4` (t4)
-        if (a === 'radiusreset') imgPanel.querySelector('input[data-a="radius"]').value = b.radius;
-        const img = pagesEl.querySelector(`figure[data-id="${b.id}"] img`);
-        if (img) img.style.borderRadius = b.radius + 'px';
-        imgPanel.querySelector('[data-role="radv"]').textContent = b.radius + 'px';
-        save(); scheduleCommit();
+        paintRadius(a === 'radiusreset' ? 4 : +el.value);   // 4 = mesmo default de `b.radius ?? 4` (t4)
         return;
       }
-      if (a === 'autocrop') { state.autocrop = el.checked; return; }   // só o padrão da próxima imagem; sem re-render
       // reabre o editor com o spec guardado; o import de volta troca a arte deste mesmo bloco
       if (a === 'chart') { chartEditId = b.id; chartTargetPage = b.page | 0; closeImgPanel(); openChartModal(b.chart.kind, b.chart.spec); return; }
+      // troca só o arquivo (src/dimensões); título, legenda, posição, raio e âncora ficam
+      if (a === 'replace') { replaceImageId = b.id; document.getElementById('imgfile').click(); return; }
       if (a === 'title') b.title = b.title != null ? null : '';
       else if (a === 'caption') b.caption = b.caption != null ? null : '';
-      else if (a === 'lock') {
-        if (b.anchor) delete b.anchor;                    // destrava: mantém o b.y atual, a imagem não pula
-        else {
-          const alvo = nearestByTop(leftBlocksOnPage(b.page | 0), b.y || 0);
-          if (alvo) b.anchor = { id: alvo.id, dy: (b.y || 0) - alvo._top };
-          // página sem bloco na esquerda → no-op silencioso (não trava)
-        }
-      }
+      else if (a === 'lock') { toggleBlockLock(b.id); return; }  // sidebar e painel compartilham a mesma âncora
       else if (a === 'del') { state.doc.blocks.splice(idxOf(b.id), 1); state.sel = null; closeImgPanel(); }
       render(); if (state.sel) openImgPanel();
     });
@@ -1770,6 +3193,7 @@ function positionImgPanel() {
   imgPanel.style.left = x + 'px'; imgPanel.style.top = y + 'px';
 }
 function closeImgPanel() { if (imgPanel) imgPanel.hidden = true; }
+// closeTablePanel já definido junto do popover da tabela
 
 // ─────────────────────────── menu flutuante: Imagem | Gráfico ────────────────
 const addImgMenu = document.getElementById('addImgMenu');
@@ -1777,6 +3201,7 @@ const amChoices = addImgMenu.querySelector('.am-choices');
 const amImage = addImgMenu.querySelector('.am-image');
 function openAddImgMenu(e, colR) {
   state.addPage = +colR.closest('.page').dataset.page || 0;   // imagem/gráfico nasce nessa página
+  replaceImageId = null;                                      // menu de inserir ≠ fluxo de substituir do painel
   amChoices.hidden = false; amImage.hidden = true;            // sempre abre na tela de escolha
   addImgMenu.hidden = false;
   const mw = addImgMenu.offsetWidth || 240, mh = addImgMenu.offsetHeight || 160;
@@ -1787,6 +3212,7 @@ function openAddImgMenu(e, colR) {
 }
 function closeAddImgMenu() { if (addImgMenu) addImgMenu.hidden = true; }
 addImgMenu.querySelector('[data-opt="image"]').addEventListener('click', () => {
+  replaceImageId = null;                                      // garante insert, não replace residual
   amChoices.hidden = true; amImage.hidden = false;            // experiência atual (arquivo + posição)
 });
 ['chart', 'timeline'].forEach((kind) =>
@@ -1797,6 +3223,35 @@ document.addEventListener('mousedown', (e) => {                // fecha ao clica
   if (addImgMenu.hidden) return;
   if (e.target.closest('#addImgMenu') || e.target.closest('.col-right')) return;
   closeAddImgMenu();
+}, true);
+
+// Fecha TODOS os popovers flutuantes ao clicar fora (img, tabela, capa, logo, índice,
+// estilo de bloco, download, menu da alça). Swatch/ico-pop e o próprio painel ficam de fora.
+document.addEventListener('mousedown', (e) => {
+  const t = e.target;
+  if (!(t && t.closest)) return;
+  // âncoras e popovers que devem permanecer abertos
+  if (t.closest('#imgPanel, #tablePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit')) return;
+  if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu')) return;
+  if (t.closest('#btnPrint, #zoomPct, #zoomFit, #bhandle, #badd')) return;
+  // imagem: clicar fora limpa a seleção (fecha o painel)
+  if (state.sel && !t.closest('.rimg, figure.fig, .divider.b, .e-pbreak, .cover-item, .cover-logo-hit')) {
+    setImgSel(null);
+  }
+  // tabela: fecha o painel sem matar o activeId (continua editável); reabre ao re-focar
+  if (tablePanel && !tablePanel.hidden && !t.closest('.tbl-wrap')) {
+    tablePanelDismissed = true;
+    closeTablePanel();
+  }
+  if (typeof closeCoverPanel === 'function') closeCoverPanel();
+  if (typeof closeLogoPanel === 'function') closeLogoPanel();
+  if (typeof closeIdxPanel === 'function') closeIdxPanel();
+  if (typeof closeResumoPanel === 'function') closeResumoPanel();
+  if (typeof closeBlockStylePanel === 'function') closeBlockStylePanel();
+  if (typeof closeDownloadMenu === 'function') closeDownloadMenu();
+  if (typeof closeZoomPop === 'function') closeZoomPop();
+  if (typeof closeBlockMenu === 'function') closeBlockMenu();
+  if (typeof closeAddImgMenu === 'function') closeAddImgMenu();
 }, true);
 
 // ─────────────────────────── modal do gráfico (iframe embed) ─────────────────
@@ -1882,39 +3337,97 @@ addEventListener('message', (e) => {
 });
 
 // ─────────────────────────── capa/contracapa + resumo: edição ────────────────
-// sync do texto (contenteditable simples — sem o motor de blocos do miolo)
+// sync do texto da capa (cover-item root ou filhos contenteditable de lista/check/callout)
 pagesEl.addEventListener('input', (e) => {
   const host = e.target.closest && e.target.closest('[contenteditable]');
   if (!host) return;
-  if (host.dataset.cid) { const f = findCoverItem(host.dataset.cid); if (f) { f.item.html = host.innerHTML; save(); scheduleCommit(); } return; }
+  const coverEl = host.closest && host.closest('.cover-item');
+  if (coverEl) {
+    const f = findCoverItem(coverEl.dataset.cid);
+    if (f && f.item.type !== 'table' && f.item.type !== 'image' && f.item.type !== 'divider') {
+      // tabela sincroniza rows no próprio buildTableEl; imagem/divisor não têm html
+      const txt = host.classList?.contains('ck-txt') || host.classList?.contains('co-txt')
+        ? host
+        : (coverEl.matches('[contenteditable=true]') ? coverEl : host);
+      f.item.html = txt.innerHTML;
+      save(); scheduleCommit();
+    }
+    return;
+  }
   if (host.dataset.role === 'resumo') { state.doc.index.resumo = host.innerHTML; save(); scheduleCommit(); }
 });
 
 function selectCoverItem(cid) {
+  clearIdxFocus();
   state.sel = cid;
-  pagesEl.querySelectorAll('.imgsel,.divsel,.cover-sel').forEach(el => el.classList.remove('imgsel', 'divsel', 'cover-sel'));
-  closeImgPanel();
+  state.activeId = null;   // não misturar com foco do miolo
+  pagesEl.querySelectorAll('.imgsel,.divsel,.cover-sel,.active-block').forEach(el => {
+    el.classList.remove('imgsel', 'divsel', 'cover-sel', 'active-block');
+  });
+  closeImgPanel(); closeLogoPanel(); closeTablePanel();
   const el = pagesEl.querySelector(`.cover-item[data-cid="${cid}"]`);
   if (el) el.classList.add('cover-sel');
   openCoverPanel();
+  // tabela na capa: reusa o painel de tabela do miolo
+  if (findCoverItem(cid)?.item?.type === 'table') {
+    tablePanelDismissed = false;
+    updateTableBar();
+  }
   showHandleAtFocused();                   // alça de arraste fica visível no bloco selecionado
 }
 
+// logo da Paradigma na capa/contracapa: foco roxo + painel com as mesmas opções da tab Documento
+function selectCoverLogo(kind) {
+  if (!kind || !(kind === 'cover' || kind === 'back')) return;
+  const lg = specialObj(kind).logo;
+  if (!lg || !lg.on) return;
+  clearIdxFocus();
+  state.sel = logoSelOf(kind);
+  state.activeId = null;
+  pagesEl.querySelectorAll('.imgsel,.divsel,.pbsel,.cover-sel,.active-block').forEach(el => {
+    el.classList.remove('imgsel', 'divsel', 'pbsel', 'cover-sel', 'active-block');
+  });
+  closeImgPanel();
+  if (coverPanel) coverPanel.hidden = true;   // não chama closeCoverPanel (fecha o logo também)
+  const el = pagesEl.querySelector(`.page[data-cover="${kind}"] .cover-logo-hit`);
+  if (el) el.classList.add('cover-sel');
+  openLogoPanel(kind);
+  bhandle.hidden = true; badd.hidden = true;   // logo fixo: sem alça Notion
+}
+
 let coverPanel;
+const COVER_TYPE_LABEL = {
+  title: 'Título', subtitle: 'Subtítulo',
+  h1: 'H1', h2: 'H2', h3: 'H3', h4: 'H4',
+  // "Texto" (não "Parágrafo"): na capa o termo do miolo confunde — era o eyebrow do painel
+  // antigo e o fallback quando type vinha errado/ausente.
+  p: 'Texto', quote: 'Citação',
+  li: 'Lista de Pontos', ol: 'Lista Numérica', check: 'Checklist', callout: 'Callout',
+  image: 'Imagem', table: 'Tabela', divider: 'Divisor',
+};
 function openCoverPanel() {
   const f = findCoverItem(state.sel); if (!f) return;
   const it = f.item;
+  const type = coverTypeOf(it);
   if (!coverPanel) { coverPanel = document.createElement('div'); coverPanel.id = 'coverPanel'; document.body.appendChild(coverPanel); }
+  const isPlain = COVER_PLAIN.has(type);
+  const isImage = type === 'image';
+  const showAlign = isPlain || type === 'li' || type === 'ol' || type === 'check' || type === 'callout';
+  const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
+  const replace = typeof REPLACE_ICO !== 'undefined' ? REPLACE_ICO : uiIco('repeat', 16, 'outline');
+  const sizeVal = it.size || COVER_TYPE_SIZE[type] || 18;
   coverPanel.innerHTML = `
-    <div class="eyebrow" style="margin:0">Texto</div>
-    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${it.size}px</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir para 18px">↺</button></span></span>
-      <input type="range" data-a="size" min="8" max="120" step="1" value="${it.size}"></label>
-    <label class="field">Cor <button type="button" class="colorfield" data-cf style="background:${it.color || '#000000'}"></button></label>
+    <div class="eyebrow" style="margin:0">${COVER_TYPE_LABEL[type] || 'Bloco'}</div>
+    ${isPlain ? `
+    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${sizeVal}px</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir">↺</button></span></span>
+      <input type="range" data-a="size" min="8" max="120" step="1" value="${sizeVal}" data-snaps="8,14,18,32,64,120"></label>
+    <label class="field">Cor <button type="button" class="colorfield" data-cf style="background:${it.color || '#000000'}"></button></label>` : ''}
     <div class="field">Coluna<div data-slot="col"></div></div>
-    <div class="field">Alinhamento<div data-slot="align"></div></div>
-    <button type="button" class="fieldbtn" data-a="del" style="color:#CE5249">${TRASH_SVG}<span>Remover texto</span></button>`;
+    ${showAlign ? `<div class="field">Alinhamento<div data-slot="align"></div></div>` : ''}
+    ${isImage ? `
+    <button type="button" class="fieldbtn" data-a="replace">${replace}<span>Substituir</span></button>` : ''}
+    <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
   coverPanel.hidden = false;
-  // seletor de coluna (mesmo segment de ícone do popover de Imagem)
   coverPanel.querySelector('[data-slot="col"]').append(
     widthSeg(it.span || 'full', [
       { val: 'left', label: 'Coluna Esquerda', icon: COL_ICON.left },
@@ -1924,9 +3437,9 @@ function openCoverPanel() {
       const cur = findCoverItem(state.sel); if (!cur) return;
       cur.item.span = v; render(); openCoverPanel();
     }));
-  // alinhamento — mesmo componente/ícones da Coluna acima, só que ALIGN_ICON (texto, não coluna)
-  coverPanel.querySelector('[data-slot="align"]').append(
-    widthSeg(it.align || 'left', [
+  const alignSlot = coverPanel.querySelector('[data-slot="align"]');
+  if (alignSlot) {
+    alignSlot.append(widthSeg(it.align || 'left', [
       { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
       { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
       { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
@@ -1934,33 +3447,47 @@ function openCoverPanel() {
       const cur = findCoverItem(state.sel); if (!cur) return;
       cur.item.align = v; render(); openCoverPanel();
     }));
-  // cor (mesmo swatch dos gráficos)
+  }
   const cf = coverPanel.querySelector('[data-cf]');
-  cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
-    const cur = findCoverItem(state.sel); if (!cur) return;
-    cur.item.color = hex; cf.style.background = hex;
-    const node = pagesEl.querySelector(`.cover-item[data-cid="${cur.item.id}"]`);
-    if (node) node.style.color = hex;
-    save(); scheduleCommit();
-  }, it.color || '#000000'));
-  // reset (t4) não pode roubar foco/seleção no mousedown — mesmo padrão do resto do app (ex. fmtbar)
-  coverPanel.querySelector('[data-a="sizereset"]').addEventListener('mousedown', (e) => e.preventDefault());
+  if (cf) {
+    cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
+      const cur = findCoverItem(state.sel); if (!cur) return;
+      cur.item.color = hex; cf.style.background = hex;
+      const node = pagesEl.querySelector(`.cover-item[data-cid="${cur.item.id}"]`);
+      if (node) node.style.color = hex;
+      save(); scheduleCommit();
+    }, it.color || '#000000'));
+  }
+  const szReset = coverPanel.querySelector('[data-a="sizereset"]');
+  if (szReset) szReset.addEventListener('mousedown', (e) => e.preventDefault());
+  enhanceAll(coverPanel);
   positionCoverPanel();
   coverPanel.querySelectorAll('[data-a]').forEach(el => {
-    const ev = el.tagName === 'SELECT' ? 'change' : el.type === 'range' ? 'input' : 'click';
+    const ev = el.type === 'range' ? 'input' : 'click';
     el.addEventListener(ev, () => {
       const cur = findCoverItem(state.sel); if (!cur) return;
       const a = el.dataset.a, node = pagesEl.querySelector(`.cover-item[data-cid="${cur.item.id}"]`);
-      if (a === 'size' || a === 'sizereset') {      // sem re-render: slider fluido + push/pull
+      if (a === 'size' || a === 'sizereset') {
         const oldH = node ? node.offsetHeight : 0;
-        cur.item.size = a === 'sizereset' ? 18 : +el.value;   // 18 = mesmo default de addCoverText() (t4)
-        if (a === 'sizereset') coverPanel.querySelector('input[data-a="size"]').value = cur.item.size;
+        const defSz = COVER_TYPE_SIZE[coverTypeOf(cur.item)] || 18;
+        cur.item.size = a === 'sizereset' ? defSz : +el.value;
+        if (a === 'sizereset') {
+          const range = coverPanel.querySelector('input[data-a="size"]');
+          if (range) range.value = cur.item.size;
+        }
         if (node) node.style.fontSize = cur.item.size + 'px';
-        coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);   // empurra/puxa os de baixo
-        coverPanel.querySelector('[data-role="szv"]').textContent = cur.item.size + 'px';
+        coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);
+        const szv = coverPanel.querySelector('[data-role="szv"]');
+        if (szv) szv.textContent = cur.item.size + 'px';
         save(); scheduleCommit(); return;
       }
-      if (a === 'del') { cur.list.splice(cur.idx, 1); state.sel = null; closeCoverPanel(); render(); return; }
+      if (a === 'replace') {
+        pendingCoverImageId = cur.item.id;
+        replaceImageId = null;
+        document.getElementById('imgfile').click();
+        return;
+      }
+      if (a === 'del') { deleteCoverItem(cur.item.id); return; }
     });
   });
 }
@@ -1974,21 +3501,208 @@ function positionCoverPanel() {
   const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
   coverPanel.style.left = x + 'px'; coverPanel.style.top = y + 'px';
 }
-function closeCoverPanel() { if (coverPanel) coverPanel.hidden = true; }
-
-// adiciona um texto novo à capa/contracapa e o seleciona
-function addCoverText(kind) {
-  const cov = kind === 'back' ? state.doc.back : state.doc.cover;
-  const y = Math.min(cov.items.reduce((m, i) => Math.max(m, i.y || 0), 0) + 46, 700);  // empilha abaixo
-  const it = coverItem('Novo texto', 18, 'full', 'left', null, y);
-  cov.items.push(it);
-  state.sel = it.id;
-  render(); selectCoverItem(it.id);
+function closeCoverPanel() {
+  if (coverPanel) coverPanel.hidden = true;
+  closeLogoPanel();   // logo e texto de capa não coexistem em foco — um fecha o outro
 }
+
+// ── painel flutuante do LOGO (espelho da tab Documento: tipo / pos / align / cor / tamanho) ──
+let logoPanel;
+const LOGO_NONE_ICO = '<svg viewBox="0 0 16 16" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="5.6"/><line x1="4" y1="12" x2="12" y2="4"/></svg>';
+function openLogoPanel(kind) {
+  const lg = specialObj(kind)?.logo; if (!lg || !lg.on) { closeLogoPanel(); return; }
+  if (!logoPanel) {
+    logoPanel = document.createElement('div');
+    logoPanel.id = 'logoPanel';
+    document.body.appendChild(logoPanel);
+  }
+  const sizePct = Math.round((lg.size || 1) * 100);
+  logoPanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">Logo da Paradigma</div>
+    <div class="field"><span class="fieldtitle">Tipo</span>
+      <div class="logopick" data-lpick>
+        <button type="button" data-logokind="none" title="Nenhum">${LOGO_NONE_ICO}</button>
+        <button type="button" data-logokind="icone" title="Ícone"></button>
+        <button type="button" data-logokind="full" title="Completo"></button>
+        <button type="button" data-logokind="nome" title="Nome"></button>
+      </div>
+    </div>
+    <div class="field">Posição<div data-slot="pos"></div></div>
+    <div class="field">Alinhamento<div data-slot="align"></div></div>
+    <label class="field">Cor do logo
+      <button type="button" class="colorfield" data-a="color" title="Escolher cor do logo" style="background:${lg.color || '#FFFFFF'}"></button>
+    </label>
+    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${+(lg.size || 1).toFixed(2)}×</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir para 1×">↺</button></span></span>
+      <input type="range" data-a="size" min="40" max="260" value="${sizePct}" data-snaps="40,70,100,150,200,260">
+    </label>`;
+  // previews SVG do picker (mesmo do sidebar) + estado pressed
+  const pick = logoPanel.querySelector('[data-lpick]');
+  pick.querySelectorAll('button[data-logokind]').forEach(b => {
+    const k = b.dataset.logokind;
+    if (k !== 'none') b.innerHTML = logoPickSvg(k, 36, 90);
+    b.setAttribute('aria-pressed', String(k === lg.kind));
+  });
+  pick.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-logokind]'); if (!b) return;
+    const cur = specialObj(kind).logo;
+    if (b.dataset.logokind === 'none') {
+      cur.on = false;
+      state.sel = null; closeLogoPanel(); syncLogoUI(); render();
+      return;
+    }
+    cur.on = true; cur.kind = b.dataset.logokind;
+    syncLogoUI(); render(); openLogoPanel(kind);
+  });
+  logoPanel.querySelector('[data-slot="pos"]').append(
+    widthSeg(lg.pos === 'footer' ? 'footer' : 'header', [
+      { val: 'header', label: 'Cabeçalho (topo)', icon: POS_ICON.header },
+      { val: 'footer', label: 'Rodapé (base)', icon: POS_ICON.footer },
+    ], (v) => {
+      specialObj(kind).logo.pos = v;
+      syncLogoUI(); render(); openLogoPanel(kind);
+    }));
+  logoPanel.querySelector('[data-slot="align"]').append(
+    widthSeg(lg.align || 'left', [
+      { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+      { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+      { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+    ], (v) => {
+      specialObj(kind).logo.align = v;
+      syncLogoUI(); render(); openLogoPanel(kind);
+    }));
+  const cf = logoPanel.querySelector('[data-a="color"]');
+  cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
+    specialObj(kind).logo.color = hex;
+    cf.style.background = hex;
+    syncLogoUI(); render(); openLogoPanel(kind);
+  }, lg.color || '#FFFFFF'));
+  logoPanel.querySelector('[data-a="sizereset"]').addEventListener('mousedown', (e) => e.preventDefault());
+  enhanceAll(logoPanel);
+  logoPanel.hidden = false;
+  positionLogoPanel();
+  logoPanel.querySelectorAll('[data-a]').forEach(el => {
+    if (el.dataset.a === 'color') return;   // handler próprio acima
+    const ev = el.type === 'range' ? 'input' : 'click';
+    el.addEventListener(ev, () => {
+      const cur = specialObj(kind).logo;
+      const a = el.dataset.a;
+      if (a === 'size' || a === 'sizereset') {
+        cur.size = a === 'sizereset' ? 1 : +el.value / 100;
+        if (a === 'sizereset') logoPanel.querySelector('input[data-a="size"]').value = 100;
+        const sp = logoPanel.querySelector('[data-role="szv"]');
+        if (sp) sp.textContent = (+cur.size.toFixed(2)) + '×';
+        applyCoverLogoLive(kind);
+        // espelha na tab Documento sem remontar a página
+        const s = document.querySelector(`[data-logosize="${kind}"]`); if (s) s.value = Math.round(cur.size * 100);
+        const sv = document.querySelector(`[data-logosizev="${kind}"]`); if (sv) sv.textContent = (+cur.size.toFixed(2)) + '×';
+        save(); scheduleCommit();
+      }
+    });
+  });
+}
+function positionLogoPanel() {
+  if (!logoPanel || logoPanel.hidden) return;
+  const kind = logoKindOfSel(state.sel);
+  const el = kind && pagesEl.querySelector(`.page[data-cover="${kind}"] .cover-logo-hit`);
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const pw = logoPanel.offsetWidth || 232, ph = logoPanel.offsetHeight || 320;
+  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  logoPanel.style.left = x + 'px'; logoPanel.style.top = y + 'px';
+}
+function closeLogoPanel() { if (logoPanel) logoPanel.hidden = true; }
+
+// ── painel flutuante do ÍNDICE (níveis / cores / largura — espelho da tab Documento) ──
+let idxPanel;
+function openIdxPanel() {
+  if (!idxPanel) {
+    idxPanel = document.createElement('div');
+    idxPanel.id = 'idxPanel';
+    document.body.appendChild(idxPanel);
+  }
+  const idx = state.doc.index;
+  const lv = idx.levels || {};
+  idxPanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">Índice</div>
+    <div class="titlelvls" style="padding-left:0;margin:0;border:0">
+      <div class="swrow"><span>Título H1</span><button type="button" class="sw" data-i="h1" role="switch" aria-checked="${!!lv.h1}"></button></div>
+      <div class="swrow"><span>Título H2</span><button type="button" class="sw" data-i="h2" role="switch" aria-checked="${!!lv.h2}"></button></div>
+      <div class="swrow"><span>Título H3</span><button type="button" class="sw" data-i="h3" role="switch" aria-checked="${!!lv.h3}"></button></div>
+      <div class="swrow"><span>Título H4</span><button type="button" class="sw" data-i="h4" role="switch" aria-checked="${!!lv.h4}"></button></div>
+    </div>
+    <label class="field">Cores
+      <select data-a="color">
+        <option value="padrao"${idx.color !== 'cinza' ? ' selected' : ''}>Padrão</option>
+        <option value="cinza"${idx.color === 'cinza' ? ' selected' : ''}>Cinza</option>
+      </select>
+    </label>
+    <div class="field">Largura<div data-slot="w"></div></div>`;
+  idxPanel.querySelectorAll('.sw[data-i]').forEach(sw => sw.addEventListener('click', () => {
+    const levels = (state.doc.index.levels ||= { h1: true, h2: true });
+    const k = sw.dataset.i;
+    levels[k] = !levels[k];
+    syncSpecialUI();   // espelha na tab Documento
+    render();
+  }));
+  idxPanel.querySelector('[data-a="color"]').addEventListener('change', (e) => {
+    state.doc.index.color = e.target.value;
+    syncSpecialUI();
+    render();
+  });
+  idxPanel.querySelector('[data-slot="w"]').replaceChildren(widthSeg(idx.width || 'curto', [
+    { val: 'curto', label: 'Curto', icon: COL_ICON.left },
+    { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+  ], (v) => { state.doc.index.width = v; syncSpecialUI(); render(); }));
+  idxPanel.hidden = false;
+  positionIdxPanel();
+}
+function positionIdxPanel() {
+  if (!idxPanel || idxPanel.hidden) return;
+  const el = pagesEl.querySelector('.idx-section[data-idx="index"]');
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const pw = idxPanel.offsetWidth || 232, ph = idxPanel.offsetHeight || 200;
+  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  idxPanel.style.left = x + 'px'; idxPanel.style.top = y + 'px';
+}
+function closeIdxPanel() { if (idxPanel) idxPanel.hidden = true; }
+
+// ── painel flutuante do RESUMO (só largura — mesma opção da tab Documento) ──
+let resumoPanel;
+function openResumoPanel() {
+  if (!resumoPanel) {
+    resumoPanel = document.createElement('div');
+    resumoPanel.id = 'resumoPanel';
+    document.body.appendChild(resumoPanel);
+  }
+  resumoPanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">Resumo</div>
+    <div class="field">Largura do resumo<div data-slot="w"></div></div>`;
+  resumoPanel.querySelector('[data-slot="w"]').replaceChildren(widthSeg(state.doc.index.resumoWidth || 'full', [
+    { val: 'left', label: 'Coluna Esquerda', icon: COL_ICON.left },
+    { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+  ], (v) => { state.doc.index.resumoWidth = v; syncSpecialUI(); render(); }));
+  resumoPanel.hidden = false;
+  positionResumoPanel();
+}
+function positionResumoPanel() {
+  if (!resumoPanel || resumoPanel.hidden) return;
+  const el = pagesEl.querySelector('.idx-section[data-idx="resumo"]');
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const pw = resumoPanel.offsetWidth || 232, ph = resumoPanel.offsetHeight || 80;
+  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  resumoPanel.style.left = x + 'px'; resumoPanel.style.top = y + 'px';
+}
+function closeResumoPanel() { if (resumoPanel) resumoPanel.hidden = true; }
+
 // imagem de fundo (data URL) — respeita o padding via CSS
 function setCoverBg(kind, file) {
   const r = new FileReader();
-  // t2.9: syncSpecialUI() revela o botão-ícone de lixeira (data-rmbg) agora que bg != null
+  // syncSpecialUI() revela Substituir/Remover (data-bgactions) agora que bg != null
   // (a leitura do arquivo é assíncrona — não dá pra sincronizar isso no handler de 'change').
   r.onload = () => { (kind === 'back' ? state.doc.back : state.doc.cover).bg = r.result; syncSpecialUI(); render(); };
   r.readAsDataURL(file);
@@ -2022,8 +3736,31 @@ function parseMarkdown(text) {
     else if ((m = line.match(/^##\s+(.*)/))) { flush(); out.push(mkBlock('h2', inlineMd(m[1]))); }
     else if ((m = line.match(/^###\s+(.*)/))) { flush(); out.push(mkBlock('h3', inlineMd(m[1]))); }
     else if ((m = line.match(/^#{4,6}\s+(.*)/))) { flush(); out.push(mkBlock('h4', inlineMd(m[1]))); }
-    else if ((m = line.match(/^\s*\d+\.\s+(.*)/))) { flush(); out.push(mkBlock('ol', inlineMd(m[1]))); }
-    else if ((m = line.match(/^\s*[-*]\s+(.*)/))) { flush(); out.push(mkBlock('li', inlineMd(m[1]))); }
+    else if ((m = line.match(/^(\s*)(\d+(?:\.\d+)*)\.\s+(.*)/))) {
+      // aceita "1. foo" e "1.1. foo" (export hierárquico); o número em si é recalculado no render
+      flush();
+      const blk = mkBlock('ol', inlineMd(m[3]));
+      const indFromSpaces = Math.min(MAX_LIST_INDENT, Math.floor(m[1].replace(/\t/g, '  ').length / 2));
+      const indFromPath = Math.min(MAX_LIST_INDENT, (m[2].match(/\./g) || []).length);
+      const ind = Math.max(indFromSpaces, indFromPath);
+      if (ind) blk.indent = ind;
+      out.push(blk);
+    }
+    else if ((m = line.match(/^(\s*)[-*]\s+\[([ xX])\]\s+(.*)/))) {
+      flush();
+      const blk = mkBlock('check', inlineMd(m[3]));
+      blk.checked = /[xX]/.test(m[2]);
+      const ind = Math.min(MAX_LIST_INDENT, Math.floor(m[1].replace(/\t/g, '  ').length / 2));
+      if (ind) blk.indent = ind;
+      out.push(blk);
+    }
+    else if ((m = line.match(/^(\s*)[-*]\s+(.*)/))) {
+      flush();
+      const blk = mkBlock('li', inlineMd(m[2]));
+      const ind = Math.min(MAX_LIST_INDENT, Math.floor(m[1].replace(/\t/g, '  ').length / 2));
+      if (ind) blk.indent = ind;
+      out.push(blk);
+    }
     else if ((m = line.match(/^>\s?(.*)/))) { flush(); out.push(mkBlock('quote', inlineMd(m[1]))); }
     else if (/^(-{3,}|_{3,}|\*{3,})\s*$/.test(line)) { flush(); out.push(mkBlock('divider', '')); }
     else para.push(line.trim());
@@ -2104,29 +3841,50 @@ function blocksFromHtml(html) {
 
 // dispara o seletor de arquivo pra inserir uma imagem na COLUNA ESQUERDA (inline)
 let pendingImgPlacement = null;
+// id do bloco que o painel pediu pra SUBSTITUIR (null = fluxo normal de inserir)
+let replaceImageId = null;
 function addImageViaPalette() {
   pendingImgPlacement = 'inline';
+  replaceImageId = null;
+  pendingCoverImageId = null;   // não roubar o picker da capa
   document.getElementById('imgfile').click();
 }
 
 // arquivo -> imagem (captura dimensões naturais). placementOverride vem da paleta de blocos.
 function addImageFile(file, placementOverride) {
+  // capa/contracapa: o slash pediu imagem num cover-item (pendingCoverImageId)
+  if (pendingCoverImageId) {
+    const cid = pendingCoverImageId; pendingCoverImageId = null;
+    const hit = findCoverItem(cid);
+    if (!hit) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const it = hit.item;
+        it.type = 'image';
+        it.src = reader.result;
+        it.nw = img.naturalWidth;
+        it.nh = img.naturalHeight;
+        it.radius = it.radius ?? 4;
+        it.html = '';
+        delete it.rows;
+        state.sel = it.id;
+        state.activeId = null;
+        render();
+        selectCoverItem(it.id);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
     const img = new Image();
     img.onload = () => {
       const placement = placementOverride || document.getElementById('imgPlacement').value;
-      // trilha C (t3): recorta a margem branca ANTES de montar o bloco. nw/nh têm
-      // que virar o tamanho recortado, senão imgHeight() erra a proporção. O crop
-      // roda no ADD (antes do painel existir p/ esta imagem); o checkbox do painel
-      // controla o PADRÃO da PRÓXIMA imagem — comportamento aceito pelo plano.
-      let src = reader.result, nw = img.naturalWidth, nh = img.naturalHeight;
-      // SVG é vetor: rasterizar em canvas pra recortar a margem branca destruiria a
-      // qualidade (vira PNG de baixa resolução, feio no PDF). Mantém o dado original.
-      if (state.autocrop !== false && file.type !== 'image/svg+xml') {
-        const cropped = autocropWhite(img);
-        if (cropped) { src = cropped.dataUrl; nw = cropped.w; nh = cropped.h; }
-      }
+      const src = reader.result, nw = img.naturalWidth, nh = img.naturalHeight;
       const b = { id: uid(), type: 'image', src, placement, radius: 4, nw, nh };
       if (placement === 'right') { b.y = 0; b.page = state.addPage ?? lastEditedPage(); }
       state.addPage = null;
@@ -2134,6 +3892,46 @@ function addImageFile(file, placementOverride) {
       // insere logo após o bloco em foco (ou no fim)
       const at = state.activeId ? idxOf(state.activeId) + 1 : state.doc.blocks.length;
       state.doc.blocks.splice(at, 0, b);
+      state.sel = b.id;
+      render(); openImgPanel();
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// troca a arte do bloco no lugar: preserva id, título, legenda, posição, raio, âncora…
+// se era gráfico/timeline editável, vira imagem estática (some b.chart — o arquivo novo não tem spec).
+function replaceImageFile(file, id) {
+  // capa: substituir arte de cover-item type=image
+  const covHit = findCoverItem(id);
+  if (covHit && covHit.item.type === 'image') {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        covHit.item.src = reader.result;
+        covHit.item.nw = img.naturalWidth;
+        covHit.item.nh = img.naturalHeight;
+        state.sel = id;
+        render();
+        selectCoverItem(id);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+  const b = blockOf(id);
+  if (!b || b.type !== 'image') return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      b.src = reader.result;
+      b.nw = img.naturalWidth;
+      b.nh = img.naturalHeight;
+      if (b.chart) delete b.chart;
       state.sel = b.id;
       render(); openImgPanel();
     };
@@ -2163,15 +3961,26 @@ function toMarkdown() {
       case 'h2': return '## ' + strip(b.html);
       case 'h3': return '### ' + strip(b.html);
       case 'h4': return '#### ' + strip(b.html);
-      case 'li': return '- ' + strip(b.html);
-      case 'ol': return (b._num || 1) + '. ' + strip(b.html);
-      case 'check': return (b.checked ? '- [x] ' : '- [ ] ') + strip(b.html);   // trilha B (t7)
+      case 'li': return '  '.repeat(listIndentOf(b)) + '- ' + strip(b.html);
+      case 'ol': {
+        const pad = '  '.repeat(listIndentOf(b));
+        const ind = listIndentOf(b);
+        const sub = typeStyleOf('ol').subStyle || 'number';
+        if (ind > 0 && sub === 'bullet') return pad + '- ' + strip(b.html);
+        if (ind > 0 && sub === 'letter') return pad + toAlphaMarker(b._num || 1) + '. ' + strip(b.html);
+        const path = (b._nums && b._nums.length) ? b._nums : [b._num || 1];
+        return pad + path.join('.') + '. ' + strip(b.html);
+      }
+      case 'check': return '  '.repeat(listIndentOf(b)) + (b.checked ? '- [x] ' : '- [ ] ') + strip(b.html);
       case 'table': return tableMd(b.rows, strip);                              // trilha B (t6)
       case 'quote': return '> ' + strip(b.html);
-      // trilha G: sem sintaxe md própria pra callout — reusa blockquote (">") com o emoji na
-      // frente; ao reimportar via parseMarkdown volta como 'quote' simples (perda aceitável em v1).
-      // ícone em modo 'ionicon' não tem glifo de texto → usa o emoji equivalente do registro.
-      case 'callout': return `> ${(b.iconSet === 'ionicon' ? IONICONS[b.icon]?.emoji : b.icon) || '💡'} ` + strip(b.html);
+      // trilha G: sem sintaxe md própria pra callout — reusa blockquote (">"); ao reimportar
+      // via parseMarkdown volta como 'quote' simples (perda aceitável em v1). Ionicon → ℹ️.
+      case 'callout': {
+        const k = calloutIconKey(b);
+        const mark = k && isTextIcon(k) ? textIconLabel(k) : (k ? 'ℹ️' : (b.icon || 'ℹ️'));
+        return `> ${mark} ` + strip(b.html);
+      }
       case 'divider': return '\n---\n';
       case 'pagebreak': return '\n<!-- quebra de página -->\n';
       case 'image': return `![${strip(b.title) || ''}](imagem)` + (b.caption ? `\n*${strip(b.caption)}*` : '');
@@ -2204,29 +4013,58 @@ function setBlocks(blocks) {
 
 // nome termina em .json (cobre ".pdgm.json" e um ".json" solto, caso alguém
 // renomeie o arquivo) → caminho de documento completo; senão → .md/.txt de sempre.
+// .pdgm.zip / "diagramacao.pdgm (9).zip" (download duplicado do Chrome) → .zip.
 const isDocJson = (name) => String(name).toLowerCase().endsWith('.json');
 const isDocZip = (name) => String(name).toLowerCase().endsWith('.zip');
+// PK\x03\x04 (local) | PK\x05\x06 (vazio) | PK\x07\x08 (spanned) — sniff se a
+// extensão mentir (arquivo sem .zip, MIME octet-stream, etc.)
+function looksLikeZip(buf) {
+  const u = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  return u.length >= 4 && u[0] === 0x50 && u[1] === 0x4b
+    && (u[2] === 0x03 || u[2] === 0x05 || u[2] === 0x07 || u[2] === 0x08);
+}
 
-// MESMA migração que load() aplica em cfg.cover/cfg.back (capas salvas antes do
-// Y livre não têm item.y → empilha; antes do logo não têm cov.logo → default).
-// Duplicada aqui (não em load()) de propósito: seedDoc/load são da Trilha A —
-// abrir um .pdgm.json é região da Trilha C. Mesma REGRA, sem inventar nova; se
-// load() mudar a migração, replicar aqui.
+// Migração de capa/contracapa (load + abrir .pdgm): Y livre, logo default, type de item.
+// Capa antiga sem type title/subtitle e com 1–2 "p" → 1º título, 2º subtítulo
+// (migrateCoverTitleSubtitle). Contracapa só normaliza type ausente → p.
 function migrateSpecialPages(doc) {
   [doc.cover, doc.back].forEach(cov => {
     if (!cov) return;
     if (!cov.logo) cov.logo = defaultLogo();
     if (!cov.items) return;
     let yy = 40;
-    cov.items.forEach(it => { if (typeof it.y !== 'number') { it.y = yy; yy += 60; } });
+    cov.items.forEach(it => {
+      if (typeof it.y !== 'number') { it.y = yy; yy += 60; }
+      ensureCoverType(it);
+    });
   });
+  // só a CAPA (não a contracapa): par Título/Subtítulo do seed antigo
+  migrateCoverTitleSubtitle(doc.cover);
+}
+
+// Preenche defaults de campos NOVOS em docs antigos (zip/json salvos antes de
+// reviewed[], levels, resumoOn, blockStyles…). Object.assign(seed, doc) é shallow:
+// doc.index inteiro substitui o seed — campos que o seed tinha e o arquivo não
+// somem sem esta normalização.
+function normalizeOpenedDoc(doc) {
+  if (!Array.isArray(doc.reviewed)) doc.reviewed = [];
+  if (!doc.blockStyles || typeof doc.blockStyles !== 'object') doc.blockStyles = {};
+  if (doc.index) {
+    if (doc.index.resumoOn === undefined) doc.index.resumoOn = true;
+    if (!doc.index.levels) doc.index.levels = { h1: true, h2: true, h3: false, h4: false };
+    doc.index.color ||= 'padrao';
+    doc.index.width ||= 'curto';
+    doc.index.resumoWidth ||= 'full';
+  }
+  migrateSpecialPages(doc);
+  return doc;
 }
 
 // aplica um doc COMPLETO (vindo de deserializeDoc) como o novo state.doc — igual
 // ao #btnNew (troca o documento inteiro + resincroniza a UI), mas preservando
 // tudo que veio no arquivo em vez de abrir em branco. Object.assign sobre um
-// seedDoc() novo cobre campo ausente (arquivo de versão futura ou editado à mão)
-// sem precisar listar cada campo — mesmo espírito genérico do doc-format.js.
+// seedDoc() novo cobre campo ausente no TOPO (arquivo de versão futura ou editado
+// à mão); nested (index.*) precisa de normalizeOpenedDoc — ver comentário lá.
 function applyDocFile(doc) {
   fileHandle = null; idb.del('fh');   // .pdgm.json não é origem sincronizável (sem "Salvar no arquivo" de volta)
   applyDoc(doc);
@@ -2235,28 +4073,200 @@ function applyDocFile(doc) {
 // sessão no boot, que não pode derrubar o fileHandle de um .md linkado.
 function applyDoc(doc) {
   state.doc = Object.assign(seedDoc(), doc);
-  migrateSpecialPages(state.doc);
+  normalizeOpenedDoc(state.doc);
   document.getElementById('footText').value = state.doc.footText;
   document.getElementById('headText').value = state.doc.headText || '';
   document.getElementById('firstPage').value = state.doc.firstPage;
+  // troca de documento: aplica estado da sidebar sem animar cada switch
+  const wasReady = sidebarRevealReady;
+  sidebarRevealReady = false;
   syncSpecialUI();
+  sidebarRevealReady = wasReady;
   setBlocks(state.doc.blocks);   // → render() → save()+scheduleCommit() (mesmo padrão do #btnNew)
 }
 
-// texto bruto de um .pdgm.json → parse + valida envelope + aplica. Compartilhado
-// entre pickProjectFile() (File System Access API) e o listener de #fileProject (fallback).
-function openDocFile(text) {
-  let doc;
-  try { doc = deserializeDoc(JSON.parse(text)); } catch { doc = null; }
-  if (!doc) { alert('Arquivo .pdgm.json inválido ou corrompido.'); return; }
-  applyDocFile(doc);
+// ── toasts ──────────────────────────────────────────────────────────────────
+// ok  → auto-dismiss; err → fica até fechar (motivo específico do loadDocZip);
+// Reportar abre o modal de bug com detalhe + banner p/ anexar o arquivo no GH.
+const TOAST_OK_MS = 3200;
+function toastHost() {
+  let el = document.getElementById('toastHost');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toastHost';
+    el.setAttribute('aria-live', 'polite');
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function dismissToast(node) {
+  if (!node || node._gone) return;
+  node._gone = true;
+  clearTimeout(node._t);
+  node.classList.add('is-out');
+  setTimeout(() => node.remove(), 180);
+}
+/**
+ * @param {'ok'|'err'} kind
+ * @param {string} title
+ * @param {string} [detail]
+ * @param {{ fileName?: string, fileSize?: number, steps?: string, code?: string }} [opts]
+ */
+function showToast(kind, title, detail, opts = {}) {
+  const host = toastHost();
+  const t = document.createElement('div');
+  t.className = 'toast ' + (kind === 'err' ? 'err' : 'ok');
+  t.setAttribute('role', kind === 'err' ? 'alert' : 'status');
+
+  const body = document.createElement('div');
+  body.className = 'toast-body';
+  const h = document.createElement('div');
+  h.className = 'toast-title';
+  h.textContent = title;
+  body.appendChild(h);
+  if (detail) {
+    const d = document.createElement('div');
+    d.className = 'toast-detail';
+    d.textContent = detail;
+    body.appendChild(d);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'toast-actions';
+
+  if (kind === 'err') {
+    const report = document.createElement('button');
+    report.type = 'button';
+    report.className = 'toast-report';
+    report.textContent = 'Reportar';
+    report.addEventListener('click', () => {
+      const fileLabel = opts.fileName || '';
+      const steps = opts.steps || [
+        '1. Diagramação → Abrir .zip (ou .json)',
+        fileLabel ? `2. Selecionei o arquivo \`${fileLabel}\`` : '2. Selecionei o arquivo do projeto',
+        '3. O erro acima apareceu no toast',
+      ].join('\n');
+      openFeedbackReport({
+        type: 'bug',
+        title: title.slice(0, 100),
+        desc: [
+          detail || title,
+          '',
+          '### Contexto',
+          '- Fluxo: abrir projeto (.pdgm.zip / .json)',
+          fileLabel ? `- Arquivo: \`${fileLabel}\`` : null,
+          opts.fileSize != null ? `- Tamanho: ${(opts.fileSize / 1024).toFixed(1)} KB` : null,
+          opts.code ? `- Código: \`${opts.code}\`` : null,
+        ].filter(Boolean).join('\n'),
+        steps,
+        // só metadados — o GitHub não recebe binário pela URL; banner pede anexo manual
+        fileName: fileLabel || undefined,
+        askAttachFile: true,
+      });
+      dismissToast(t);
+    });
+    actions.appendChild(report);
+  }
+
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'toast-x';
+  x.setAttribute('aria-label', 'Fechar');
+  x.textContent = kind === 'err' ? 'Fechar' : '✕';
+  x.addEventListener('click', () => dismissToast(t));
+  actions.appendChild(x);
+
+  t.append(body, actions);
+  host.appendChild(t);
+  if (kind !== 'err') t._t = setTimeout(() => dismissToast(t), TOAST_OK_MS);
+  return t;
 }
 
-// ArrayBuffer de um .pdgm.zip (doc.json + media/*, ver doc-format.js) → parse + aplica.
-async function openDocZipFile(buf) {
-  const doc = await deserializeDocZip(buf);
-  if (!doc) { alert('Arquivo .pdgm.zip inválido ou corrompido.'); return; }
+// texto bruto de um .pdgm.json → parse + valida envelope + aplica.
+function openDocFile(text, label, fileMeta) {
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch (e) {
+    showToast('err', 'JSON inválido',
+      (e && e.message) || 'O arquivo não é um JSON válido.',
+      { fileName: label, fileSize: fileMeta && fileMeta.size });
+    return false;
+  }
+  const doc = deserializeDoc(parsed);
+  if (!doc) {
+    const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed).join(', ') : '';
+    showToast('err', 'Formato .pdgm.json desconhecido',
+      'Esperava o envelope `{ "v": 1, "doc": { … } }`.\n'
+      + (keys ? `Chaves no arquivo: ${keys}.\n` : '')
+      + 'Use o JSON exportado por este diagramador (ou o .pdgm.zip de Baixar → ZIP).',
+      { fileName: label, fileSize: fileMeta && fileMeta.size, code: 'DOC_ENVELOPE' });
+    return false;
+  }
   applyDocFile(doc);
+  const n = (doc.blocks && doc.blocks.length) || 0;
+  showToast('ok', 'Projeto aberto',
+    (label ? label + ' · ' : '') + n + ' bloco' + (n === 1 ? '' : 's'));
+  return true;
+}
+
+// ArrayBuffer de um .pdgm.zip → loadDocZip com motivo específico se falhar.
+// `pending` = toast "Abrindo…" a substituir pelo resultado (sucesso ou erro).
+async function openDocZipFile(buf, label, fileMeta, pending) {
+  const r = await loadDocZip(buf, label);
+  if (pending) dismissToast(pending);
+  if (!r.ok) {
+    showToast('err', r.title, r.detail, {
+      fileName: label,
+      fileSize: fileMeta && fileMeta.size,
+      code: r.code,
+    });
+    return false;
+  }
+  // Toast de sucesso ANTES do apply: se o render de um doc enorme travar o main
+  // thread, o usuário já viu que o arquivo foi lido (antes o toast vinha depois
+  // do apply e o botão parecia morto).
+  const n = (r.doc.blocks && r.doc.blocks.length) || 0;
+  showToast('ok', 'Projeto aberto',
+    (label ? label + ' · ' : '') + n + ' bloco' + (n === 1 ? '' : 's'));
+  try {
+    applyDocFile(r.doc);
+  } catch (e) {
+    console.error('[abrir projeto] applyDocFile', e);
+    showToast('err', 'Arquivo lido, mas falhou ao aplicar no editor',
+      (e && e.message) || String(e),
+      { fileName: label, fileSize: fileMeta && fileMeta.size, code: 'APPLY_DOC' });
+    return false;
+  }
+  return true;
+}
+
+// Lê File e decide zip vs json por extensão OU magic bytes (PK..).
+async function openProjectBlob(f) {
+  if (!f) {
+    showToast('err', 'Nenhum arquivo selecionado',
+      'O seletor fechou sem um arquivo. Tente de novo em Abrir .zip.');
+    return;
+  }
+  const meta = { size: f.size, name: f.name };
+  // Feedback imediato: arrayBuffer/load/render podem demorar (iCloud, zip grande)
+  // e sem isso o clique parece ter falhado em silêncio.
+  const pending = showToast('ok', 'Abrindo projeto…', f.name || '');
+  try {
+    const buf = await f.arrayBuffer();
+    if (isDocZip(f.name) || looksLikeZip(buf)) {
+      await openDocZipFile(buf, f.name, meta, pending);
+      return;
+    }
+    // extensão .json ou conteúdo texto — tenta JSON do projeto
+    dismissToast(pending);
+    openDocFile(new TextDecoder().decode(buf), f.name, meta);
+  } catch (e) {
+    console.error('[abrir projeto]', e);
+    dismissToast(pending);
+    showToast('err', 'Não foi possível abrir o arquivo',
+      (e && e.message) || String(e),
+      { fileName: f && f.name, fileSize: f && f.size });
+  }
 }
 
 async function pickFile() {
@@ -2276,17 +4286,22 @@ async function pickFile() {
 
 // "Abrir" (peer de "Novo Documento"): reabre um projeto salvo — .pdgm.zip (formato
 // atual, com mídia separada) ou .pdgm.json (formato antigo, ainda lido por compat).
-async function pickProjectFile() {
-  if (!window.showOpenFilePicker) { document.getElementById('fileProject').click(); return; }
-  let h;
-  try {
-    [h] = await showOpenFilePicker({ types: [
-      { description: 'Documento Paradigma', accept: { 'application/zip': ['.pdgm.zip', '.zip'], 'application/json': ['.pdgm.json', '.json'] } },
-    ] });
-  } catch { return; }                        // usuário cancelou
-  const f = await h.getFile();
-  if (isDocZip(h.name)) { await openDocZipFile(await f.arrayBuffer()); return; }
-  openDocFile(await f.text());
+//
+// Usa SEMPRE o <input type=file> (#fileProject), não showOpenFilePicker:
+// applyDocFile descarta o FileSystemFileHandle (projeto não é re-gravável in-place),
+// então a FSA API não traz ganho — só caminhos de falha silenciosa (getFile/TypeError
+// engolidos sem toast; fallback input.click() após await perde user-gesture em
+// alguns hosts). accept=".zip,.json" cobre "foo.pdgm.zip" e "foo.pdgm (9).zip".
+function pickProjectFile() {
+  const input = document.getElementById('fileProject');
+  if (!input) {
+    showToast('err', 'Seletor de arquivo indisponível',
+      'Recarregue a página e tente Abrir .zip de novo.');
+    return;
+  }
+  // limpa valor pra change disparar mesmo se o usuário reescolher o mesmo arquivo
+  input.value = '';
+  input.click();
 }
 
 // t2.1: Google Docs saiu (import + sincronização agora só por arquivo local). O ramo
@@ -2347,11 +4362,22 @@ function renderSourceChip() {
   });
 }
 
-// ─────────────────────────── UI: segment control (Documento / Conteúdo) ─────
+// ─────────────────────────── UI: segment control (Configurações / Conteúdo) ─
+// ion-icon name="options-outline" (Configurações) / "layers-outline" (Conteúdo)
+const SEG_ICO = { documento: 'options', conteudo: 'layers' };
 const segBtns = [...document.querySelectorAll('#segment button')];
+segBtns.forEach(b => {
+  const key = SEG_ICO[b.dataset.seg];
+  if (!key) return;
+  const label = b.textContent.trim();
+  b.innerHTML = `${uiIco(key, 14, 'outline')}<span>${label}</span>`;
+});
 function setSegment(name) {
   segBtns.forEach(b => b.setAttribute('aria-selected', String(b.dataset.seg === name)));
-  document.querySelectorAll('.pane').forEach(p => { p.hidden = p.dataset.pane !== name; });
+  // troca de aba: só fade (sem slide de altura). Panes empilhados em .pane-stack.
+  document.querySelectorAll('.pane').forEach(p => {
+    setSidebarFade(p, p.dataset.pane === name);
+  });
 }
 segBtns.forEach(b => b.addEventListener('click', () => setSegment(b.dataset.seg)));
 
@@ -2381,35 +4407,106 @@ function syncTypeUI(type) {
 // de uma vez, porque não existe override por bloco — todo bloco do tipo lê o MESMO
 // state.doc.blockStyles[type] (ver applyTypeStyle/gapBefore). Mesmo padrão de popover fixo do
 // #imgPanel/#coverPanel: criado uma vez, reaberto com innerHTML novo a cada tipo clicado.
+//
+// Campos por tipo:
+//   h1–h4  → tipografia + margem acima
+//   p / callout → tipografia + espaço entre blocos + cor do texto
+//   li     → espaço + símbolo do item + símbolo do subitem
+//   ol     → espaço + estilo do subitem (número 1.1. / letra a. / pontos •)
+//   check  → espaço + cor do check + opacidade do item marcado
+//   quote  → tipografia (default = p) + espaço + cor do texto + cor da borda
 let blockStylePanel, blockStyleType = null;
 function openBlockStylePanel(type, anchorEl) {
   if (!blockStylePanel) { blockStylePanel = document.createElement('div'); blockStylePanel.id = 'blockStylePanel'; document.body.appendChild(blockStylePanel); }
   blockStyleType = type;
-  const def = TYPE_STYLE_DEFAULTS[type];
+  const def = TYPE_STYLE_DEFAULTS[type] || {};
   const cur = state.doc.blockStyles[type] || {};
   const v = (k) => cur[k] != null ? cur[k] : def[k];
   const isHead = HEAD_TYPES.has(type);
+  const inheritsText = TEXT_FROM_P.has(type);          // li/ol/check: sem controles de tipografia
+  const isListGap = type === 'li' || type === 'ol' || type === 'check';
   const label = (btByType[type]?.querySelector('.lbl') || {}).textContent || type;
+  const fmtPct = (n) => Math.round((+n) * 100) + '%';
+  const fmtLS = (n) => (+n).toFixed(2) + 'em';
+  const fmtPx = (n) => n + 'px';
+  const markerPickHtml = (field, active) =>
+    `<div class="markerpick" data-a="${field}" role="listbox" aria-label="${field === 'marker' ? 'Símbolo do item' : 'Símbolo do subitem'}">`
+    + LI_MARKER_OPTS.map(m =>
+      `<button type="button" data-v="${escapeHtml(m)}" aria-selected="${String(m === active)}" title="${escapeHtml(m)}">${escapeHtml(m)}</button>`
+    ).join('')
+    + `</div>`;
+
+  let fields = '';
+  if (!inheritsText) {
+    fields += `
+    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fmtPx(v('fontSize'))}</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para ${def.fontSize}px">↺</button></span></span>
+      <input type="range" data-a="fontSize" min="8" max="48" step="1" value="${v('fontSize')}" data-snaps="8,12,16,20,24,48">
+    </label>
+    <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lineHeightv">${fmtPx(v('lineHeight'))}</span><button type="button" class="resetbtn" data-r="lineHeight" title="Redefinir para ${def.lineHeight}px">↺</button></span></span>
+      <input type="range" data-a="lineHeight" min="8" max="56" step="1" value="${v('lineHeight')}" data-snaps="12,17,21,26,31,56">
+    </label>
+    <label class="field"><span class="field-row">Espaço entre letras <span class="field-val"><span data-role="letterSpacingv">${fmtLS(v('letterSpacing'))}</span><button type="button" class="resetbtn" data-r="letterSpacing" title="Redefinir para ${def.letterSpacing}em">↺</button></span></span>
+      <input type="range" data-a="letterSpacing" min="-0.05" max="0.15" step="0.01" value="${v('letterSpacing')}" data-snaps="-0.05,-0.01,0,0.05,0.1,0.15">
+    </label>`;
+  }
+  if (isHead) {
+    fields += `
+    <label class="field"><span class="field-row">Margem acima (título) <span class="field-val"><span data-role="marginTopv">${fmtPx(v('marginTop'))}</span><button type="button" class="resetbtn" data-r="marginTop" title="Redefinir para ${def.marginTop}px">↺</button></span></span>
+      <input type="range" data-a="marginTop" min="0" max="80" step="1" value="${v('marginTop')}" data-snaps="0,14,24,32,48,80">
+    </label>`;
+  } else {
+    const gapLbl = isListGap ? 'Espaço entre itens' : 'Espaço entre parágrafos';
+    fields += `
+    <label class="field"><span class="field-row">${gapLbl} <span class="field-val"><span data-role="gapv">${fmtPx(v('gap'))}</span><button type="button" class="resetbtn" data-r="gap" title="Redefinir para ${def.gap}px">↺</button></span></span>
+      <input type="range" data-a="gap" min="0" max="48" step="1" value="${v('gap')}" data-snaps="0,6,14,16,24,48">
+    </label>`;
+  }
+  if (!inheritsText) {
+    fields += `<label class="field">Cor do texto <button type="button" class="colorfield" data-a="color" style="background:${v('color')}"></button></label>`;
+  }
+  // lista de pontos: símbolo do item (nível 0), do subitem (Tab) e cor do marcador
+  if (type === 'li') {
+    fields += `
+    <div class="field">Símbolo do item
+      ${markerPickHtml('marker', v('marker'))}
+    </div>
+    <div class="field">Símbolo do subitem
+      ${markerPickHtml('subMarker', v('subMarker'))}
+    </div>
+    <label class="field">Cor do ponto <button type="button" class="colorfield" data-a="markerColor" style="background:${v('markerColor')}"></button></label>`;
+  }
+  // lista numérica: estilo dos subitens + cor do número/marcador
+  if (type === 'ol') {
+    const curSub = v('subStyle') || 'number';
+    fields += `
+    <div class="field">Subitem
+      <div class="segment cols-3" data-a="subStyle" role="tablist">
+        ${OL_SUBSTYLE_OPTS.map(o =>
+          `<button type="button" data-v="${o.val}" aria-selected="${String(o.val === curSub)}" title="${o.hint}">${o.label}</button>`
+        ).join('')}
+      </div>
+    </div>
+    <label class="field">Cor do número <button type="button" class="colorfield" data-a="markerColor" style="background:${v('markerColor')}"></button></label>`;
+  }
+  if (type === 'check') {
+    fields += `
+    <label class="field">Cor do check <button type="button" class="colorfield" data-a="checkColor" style="background:${v('checkColor')}"></button></label>
+    <label class="field"><span class="field-row">Opacidade do item marcado <span class="field-val"><span data-role="checkedOpacityv">${fmtPct(v('checkedOpacity'))}</span><button type="button" class="resetbtn" data-r="checkedOpacity" title="Redefinir para ${fmtPct(def.checkedOpacity)}">↺</button></span></span>
+      <input type="range" data-a="checkedOpacity" min="0" max="1" step="0.05" value="${v('checkedOpacity')}" data-snaps="0,0.25,0.5,0.55,0.75,1">
+    </label>`;
+  }
+  if (type === 'quote') {
+    fields += `<label class="field">Cor da borda <button type="button" class="colorfield" data-a="borderColor" style="background:${v('borderColor')}"></button></label>`;
+  }
+  if (inheritsText) {
+    fields += `<p class="hint" style="margin:0;font-size:.7rem;color:var(--muted);line-height:1.35">Cor e tamanho do texto seguem o <strong>Parágrafo</strong>.</p>`;
+  }
+
   blockStylePanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Estilo · ${escapeHtml(label)}</div>
-    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${v('fontSize')}px</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para ${def.fontSize}px">↺</button></span></span>
-      <input type="range" data-a="fontSize" min="8" max="48" step="1" value="${v('fontSize')}">
-    </label>
-    <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lineHeightv">${v('lineHeight')}px</span><button type="button" class="resetbtn" data-r="lineHeight" title="Redefinir para ${def.lineHeight}px">↺</button></span></span>
-      <input type="range" data-a="lineHeight" min="8" max="56" step="1" value="${v('lineHeight')}">
-    </label>
-    <label class="field"><span class="field-row">Espaço entre letras <span class="field-val"><span data-role="letterSpacingv">${v('letterSpacing').toFixed(2)}em</span><button type="button" class="resetbtn" data-r="letterSpacing" title="Redefinir para ${def.letterSpacing}em">↺</button></span></span>
-      <input type="range" data-a="letterSpacing" min="-0.05" max="0.15" step="0.01" value="${v('letterSpacing')}">
-    </label>
-    ${isHead ? `
-    <label class="field"><span class="field-row">Margem acima (título) <span class="field-val"><span data-role="marginTopv">${v('marginTop')}px</span><button type="button" class="resetbtn" data-r="marginTop" title="Redefinir para ${def.marginTop}px">↺</button></span></span>
-      <input type="range" data-a="marginTop" min="0" max="80" step="1" value="${v('marginTop')}">
-    </label>` : `
-    <label class="field"><span class="field-row">Espaço entre parágrafos <span class="field-val"><span data-role="gapv">${v('gap')}px</span><button type="button" class="resetbtn" data-r="gap" title="Redefinir para ${def.gap}px">↺</button></span></span>
-      <input type="range" data-a="gap" min="0" max="48" step="1" value="${v('gap')}">
-    </label>`}
-    <label class="field">Cor do texto <button type="button" class="colorfield" data-a="color" style="background:${v('color')}"></button></label>`;
+    ${fields}`;
   blockStylePanel.hidden = false;
+  enhanceAll(blockStylePanel);
   positionBlockStylePanel(anchorEl);
   blockStylePanel.querySelectorAll('.resetbtn').forEach(b => b.addEventListener('mousedown', (e) => e.preventDefault()));
 
@@ -2423,16 +4520,23 @@ function openBlockStylePanel(type, anchorEl) {
     if (o) { delete o[field]; if (!Object.keys(o).length) delete state.doc.blockStyles[type]; }
     scheduleStyleRender();
   };
+  const displayFor = (field, val) => {
+    if (field === 'letterSpacing') return fmtLS(val);
+    if (field === 'checkedOpacity') return fmtPct(val);
+    return fmtPx(val);
+  };
+  const parseRange = (field, raw) => {
+    if (field === 'letterSpacing' || field === 'checkedOpacity') return +raw;
+    return Math.round(+raw);
+  };
 
   blockStylePanel.querySelectorAll('input[type=range][data-a]').forEach(inp => {
     inp.addEventListener('input', () => {
       const field = inp.dataset.a;
-      const val = field === 'letterSpacing' ? +inp.value : Math.round(+inp.value);
+      const val = parseRange(field, inp.value);
       setField(field, val);
-      const unit = field === 'letterSpacing' ? 'em' : 'px';
-      const shown = field === 'letterSpacing' ? val.toFixed(2) : val;
       const disp = blockStylePanel.querySelector(`[data-role="${field}v"]`);
-      if (disp) disp.textContent = shown + unit;
+      if (disp) disp.textContent = displayFor(field, val);
     });
   });
   blockStylePanel.querySelectorAll('.resetbtn[data-r]').forEach(btn => {
@@ -2443,13 +4547,36 @@ function openBlockStylePanel(type, anchorEl) {
       const inp = blockStylePanel.querySelector(`input[data-a="${field}"]`);
       if (inp) inp.value = d;
       const disp = blockStylePanel.querySelector(`[data-role="${field}v"]`);
-      if (disp) disp.textContent = (field === 'letterSpacing' ? d.toFixed(2) : d) + (field === 'letterSpacing' ? 'em' : 'px');
+      if (disp) disp.textContent = displayFor(field, d);
     });
   });
-  const cf = blockStylePanel.querySelector('[data-a="color"]');
-  cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
-    setField('color', hex); cf.style.background = hex;
-  }, v('color')));
+  blockStylePanel.querySelectorAll('.colorfield[data-a]').forEach(cf => {
+    const field = cf.dataset.a;
+    cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
+      setField(field, hex); cf.style.background = hex;
+    }, v(field)));
+  });
+  // picks de símbolo (lista de pontos) e segment de subitem (lista numérica)
+  blockStylePanel.querySelectorAll('.markerpick').forEach(pick => {
+    const field = pick.dataset.a;
+    pick.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => {
+        setField(field, btn.dataset.v);
+        pick.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', String(b === btn)));
+      });
+    });
+  });
+  const subSeg = blockStylePanel.querySelector('[data-a="subStyle"]');
+  if (subSeg) {
+    subSeg.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => {
+        setField('subStyle', btn.dataset.v);
+        subSeg.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', String(b === btn)));
+      });
+    });
+  }
 }
 function positionBlockStylePanel(anchorEl) {
   if (!blockStylePanel || blockStylePanel.hidden || !anchorEl) return;
@@ -2467,6 +4594,8 @@ let styleRenderT;
 // sobrevive ao rebuild do miolo sozinho; reabri-lo aqui destruiria o <input> no meio do arraste.
 function scheduleStyleRender() { clearTimeout(styleRenderT); styleRenderT = setTimeout(() => { render(); }, 150); }
 document.querySelectorAll('.blockmenu[data-styletype]').forEach(btn => {
+  // ion-icon name="ellipsis-vertical" → filled/solid (sem -outline)
+  btn.innerHTML = uiIco('ellipsis-vertical', 14, 'solid');
   btn.addEventListener('mousedown', (e) => e.preventDefault());   // não rouba o caret/seleção do bloco em edição
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2481,20 +4610,64 @@ document.addEventListener('mousedown', (e) => {                // fecha ao clica
   closeBlockStylePanel();
 }, true);
 
-// "Coluna" do bloco EM FOCO — a sidebar é o único lugar de onde texto/tabela alcançam o
+// "Posição" do bloco EM FOCO — a sidebar é o único lugar de onde texto/tabela alcançam o
 // placement (imagem tem o #imgPanel, item de capa tem o #coverPanel, ambos com o MESMO
-// componente). Reconstrói a cada troca de bloco porque columnField marca o botão ativo no
-// build (não tem setter) — é um <div> de 3 botões, rebuild é mais barato que um patch.
+// segment widthSeg). Reconstrói a cada troca de bloco porque widthSeg marca o botão ativo no
+// build (não tem setter) — 3 botões, rebuild é mais barato que um patch.
+// Na coluna direita, o cadeado ("Travar no texto") também mora aqui — o #imgPanel só serve
+// imagem; texto/tabela na direita usam a mesma âncora (b.anchor) via este botão.
 const blockColEl = document.getElementById('blockcol');
 const blockColSlot = blockColEl.querySelector('[data-slot="col"]');
+const blockLockEl = document.getElementById('blocklock');
+if (blockLockEl) {
+  blockLockEl.addEventListener('mousedown', (e) => e.preventDefault()); // não rouba caret
+  blockLockEl.addEventListener('click', () => {
+    if (state.activeId) toggleBlockLock(state.activeId);
+  });
+}
 function syncColUI() {
   const b = state.activeId && blockOf(state.activeId);
   // quebra de página e divisor não têm coluna (o divisor é selecionado, não focado — nunca
   // chega aqui; a guarda é só pra não depender disso).
-  if (!b || b.type === 'pagebreak' || b.type === 'divider') { blockColEl.hidden = true; blockColSlot.replaceChildren(); return; }
-  blockColEl.hidden = false;
-  blockColSlot.replaceChildren(
-    columnField(placementOf(b), { left: 'inline', full: 'full', right: 'right' }, (v) => setBlockPlacement(b.id, v)));
+  if (!b || b.type === 'pagebreak' || b.type === 'divider') {
+    setSidebarReveal(blockColEl, false); blockColSlot.replaceChildren();
+    if (blockLockEl) setSidebarReveal(blockLockEl, false);
+    return;
+  }
+  setSidebarReveal(blockColEl, true);
+  blockColSlot.replaceChildren(widthSeg(placementOf(b), [
+    { val: 'inline', label: 'Coluna Esquerda', icon: COL_ICON.left },
+    { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+    { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
+  ], (v) => setBlockPlacement(b.id, v)));
+  // cadeado: só na coluna direita (modelo da imagem). Mesma regra do #imgPanel.
+  if (blockLockEl) {
+    if (placementOf(b) !== 'right') { setSidebarReveal(blockLockEl, false); }
+    else {
+      const travavel = !!b.anchor || leftBlocksOnPage(b.page | 0).length > 0;
+      setSidebarReveal(blockLockEl, true);
+      blockLockEl.disabled = !travavel;
+      blockLockEl.title = travavel ? ''
+        : 'Esta página não tem bloco de texto próprio para prender o item (só a continuação de um parágrafo que começa numa página anterior).';
+      blockLockEl.innerHTML = (b.anchor ? UNLOCK_SVG : LOCK_SVG)
+        + `<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span>`;
+    }
+  }
+}
+function toggleBlockLock(id) {
+  const b = blockOf(id); if (!b || placementOf(b) !== 'right') return;
+  if (b.anchor) delete b.anchor;                    // destrava: mantém o b.y atual
+  else {
+    const alvo = nearestByTop(leftBlocksOnPage(b.page | 0), b.y || 0);
+    if (alvo) b.anchor = { id: alvo.id, dy: (b.y || 0) - alvo._top };
+  }
+  const keep = captureCaret();
+  state.activeId = id;
+  if (b.type === 'image') state.sel = id;
+  // caret no próprio bloco → preserva; imagem → render seco + reabre painel; resto foca o bloco
+  render(keep && keep.id === id ? keep
+    : (b.type === 'image' ? undefined : { id, role: 'block', offset: 0 }));
+  if (b.type === 'image' && state.sel) openImgPanel();
 }
 function setBlockPlacement(id, v) {
   const b = blockOf(id); if (!b) return;
@@ -2511,6 +4684,8 @@ function setActiveType(t) {
   if (b && TEXT_TYPES.has(b.type)) {
     const keep = captureCaret();             // preserva a SELEÇÃO (não só o caret)
     b.type = t;
+    if (t === 'callout') ensureCalloutDefaults(b);
+    if (!LIST_TYPES.has(t)) delete b.indent; // indent só faz sentido em lista
     render(keep && keep.id === b.id ? keep : { id: b.id, role: 'block', offset: 0 });
     syncTypeUI(t);
   }
@@ -2538,28 +4713,47 @@ function insertBlockAfter(t) {
   // visível/selecionado, que é o requisito; focar a célula fica de próximo passo se pedirem.
 }
 
-document.getElementById('btnFile').addEventListener('click', pickFile);
-// fallback sem File System Access API (Safari/Firefox): importa, mas o
-// Sincronizar reabre o seletor em vez de reler o mesmo arquivo sozinho
+// #file: fallback sem File System Access API (Safari/Firefox) — pickFile() ainda usa
+// quando o handle some (Salvar no arquivo / reimportar). Sem botão "Importar Texto".
 document.getElementById('file').addEventListener('change', (e) => {
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
   r.onload = () => { fileHandle = null; state.doc.source = { kind: 'file', label: f.name }; setBlocks(parseMarkdown(r.result)); };
   r.readAsText(f); e.target.value = '';
 });
-document.getElementById('btnOpen').addEventListener('click', pickProjectFile);
-// fallback sem File System Access API: .pdgm.zip precisa de bytes crus (arrayBuffer),
-// .pdgm.json continua texto — mesma checagem de extensão do pickProjectFile acima
+document.getElementById('btnOpen').addEventListener('click', (e) => {
+  e.preventDefault();
+  pickProjectFile();
+});
+// #fileProject: único caminho de Abrir .zip — lê bytes e decide por extensão +
+// magic (PK..). Cobre "diagramacao.pdgm (9).zip" e .pdgm.json.
 document.getElementById('fileProject').addEventListener('change', (e) => {
-  const f = e.target.files[0]; if (!f) return;
-  const r = new FileReader();
-  r.onload = () => { isDocZip(f.name) ? openDocZipFile(r.result) : openDocFile(r.result); };
-  isDocZip(f.name) ? r.readAsArrayBuffer(f) : r.readAsText(f);
+  const f = e.target.files && e.target.files[0];
+  // zera antes do async pra o próximo clique no mesmo arquivo disparar change
   e.target.value = '';
+  if (!f) {
+    showToast('err', 'Nenhum arquivo selecionado',
+      'O seletor fechou sem um arquivo. Tente de novo em Abrir .zip.');
+    return;
+  }
+  openProjectBlob(f).catch((err) => {
+    console.error('[abrir projeto] change handler', err);
+    showToast('err', 'Não foi possível abrir o arquivo',
+      (err && err.message) || String(err),
+      { fileName: f.name, fileSize: f.size });
+  });
 });
 document.getElementById('imgfile').addEventListener('change', (e) => {
-  const f = e.target.files[0]; if (f) addImageFile(f, pendingImgPlacement);
-  pendingImgPlacement = null; e.target.value = '';
+  const f = e.target.files[0];
+  if (f) {
+    if (replaceImageId) replaceImageFile(f, replaceImageId);
+    else addImageFile(f, pendingImgPlacement);
+  } else {
+    pendingCoverImageId = null;   // cancelou o picker da capa
+  }
+  pendingImgPlacement = null;
+  replaceImageId = null;
+  e.target.value = '';
 });
 document.getElementById('btnNew').addEventListener('click', () => {
   if (!confirm('Limpar o documento atual e desvincular a origem?')) return;
@@ -2576,11 +4770,219 @@ document.getElementById('firstPage').addEventListener('input', (e) => { state.do
 
 // ── páginas especiais: switches + controles de capa/contracapa ──
 const specialObj = (key) => key === 'cover' ? state.doc.cover : key === 'back' ? state.doc.back : state.doc.index;
+
+// Reveal animado na sidebar (switchers, logo, fundo).
+// height + opacity: `hidden`/display:none não anima; medimos scrollHeight e deslizamos.
+// Antes de sidebarRevealReady (1º paint), aplica estado sem transição pra não “piscar” a UI.
+// Abas Documento/Conteúdo usam setSidebarFade (só opacity) — ver setSegment.
+let sidebarRevealReady = false;
+const SB_REVEAL_MS = 260;
+const SB_REVEAL_EASE = 'cubic-bezier(.4, 0, .2, 1)';
+const SB_FADE_MS = 200;
+
+/** Fade in/out sem mexer na altura (troca Documento ↔ Conteúdo). */
+function setSidebarFade(el, open) {
+  if (!el) return;
+  const want = !!open;
+  const key = want ? '1' : '0';
+  const reduced = typeof matchMedia === 'function'
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const instant = !sidebarRevealReady || reduced;
+
+  if (el.dataset.sbOpen === undefined) {
+    el.dataset.sbOpen = key;
+    el.hidden = !want;
+    return;
+  }
+  if (el.dataset.sbOpen === key && !el.classList.contains('sb-fading')) {
+    el.hidden = !want;
+    return;
+  }
+  if (typeof el._sbFadeCleanup === 'function') el._sbFadeCleanup();
+
+  el.dataset.sbOpen = key;
+
+  if (instant) {
+    el.hidden = !want;
+    el.style.opacity = el.style.transition = el.style.zIndex = '';
+    el.classList.remove('sb-fading');
+    return;
+  }
+
+  const clearInline = () => {
+    el.style.opacity = '';
+    el.style.transition = '';
+    el.style.zIndex = '';
+    el.classList.remove('sb-fading');
+    el._sbFadeCleanup = null;
+  };
+
+  if (want) {
+    el.hidden = false;
+    el.classList.add('sb-fading');
+    el.style.zIndex = '1'; // entra por cima do que está saindo
+    el.style.opacity = '0';
+    void el.offsetHeight;
+    el.style.transition = `opacity ${SB_FADE_MS}ms ease`;
+    el.style.opacity = '1';
+    let tid = 0;
+    const finish = () => {
+      if (el.dataset.sbOpen !== '1') return;
+      el.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      clearInline();
+    };
+    const onEnd = (e) => {
+      if (e.target !== el || e.propertyName !== 'opacity') return;
+      finish();
+    };
+    el.addEventListener('transitionend', onEnd);
+    tid = setTimeout(finish, SB_FADE_MS + 40);
+    el._sbFadeCleanup = () => {
+      el.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      clearInline();
+    };
+  } else {
+    el.hidden = false;
+    el.classList.add('sb-fading');
+    el.style.zIndex = '0';
+    el.style.opacity = '1';
+    void el.offsetHeight;
+    el.style.transition = `opacity ${SB_FADE_MS}ms ease`;
+    el.style.opacity = '0';
+    let tid = 0;
+    const finish = () => {
+      if (el.dataset.sbOpen !== '0') return;
+      el.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      el.hidden = true;
+      clearInline();
+    };
+    const onEnd = (e) => {
+      if (e.target !== el || e.propertyName !== 'opacity') return;
+      finish();
+    };
+    el.addEventListener('transitionend', onEnd);
+    tid = setTimeout(finish, SB_FADE_MS + 40);
+    el._sbFadeCleanup = () => {
+      el.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      clearInline();
+    };
+  }
+}
+
+function setSidebarReveal(el, open) {
+  if (!el) return;
+  const want = !!open;
+  const key = want ? '1' : '0';
+  const reduced = typeof matchMedia === 'function'
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const instant = !sidebarRevealReady || reduced;
+
+  // 1ª atribuição: só grava o estado (sem animar — cobre o 1º paint e nós novos)
+  if (el.dataset.sbOpen === undefined) {
+    el.dataset.sbOpen = key;
+    el.hidden = !want;
+    return;
+  }
+  // já no estado desejado e parado → só garante hidden
+  if (el.dataset.sbOpen === key && !el.classList.contains('sb-revealing')) {
+    el.hidden = !want;
+    return;
+  }
+
+  // cancela animação em voo (toggle rápido / reverse)
+  if (typeof el._sbRevealCleanup === 'function') el._sbRevealCleanup();
+
+  el.dataset.sbOpen = key;
+
+  if (instant) {
+    el.hidden = !want;
+    el.style.height = el.style.opacity = el.style.overflow = el.style.transition = '';
+    el.classList.remove('sb-revealing');
+    return;
+  }
+
+  const clearInline = () => {
+    el.style.height = '';
+    el.style.opacity = '';
+    el.style.overflow = '';
+    el.style.transition = '';
+    el.classList.remove('sb-revealing');
+    el._sbRevealCleanup = null;
+  };
+
+  if (want) {
+    el.hidden = false;
+    el.classList.add('sb-revealing');
+    el.style.overflow = 'hidden';
+    el.style.opacity = '0';
+    el.style.height = 'auto';
+    const h = el.scrollHeight;
+    el.style.height = '0px';
+    void el.offsetHeight;
+    el.style.transition = `height ${SB_REVEAL_MS}ms ${SB_REVEAL_EASE}, opacity ${Math.round(SB_REVEAL_MS * 0.85)}ms ease`;
+    el.style.height = h + 'px';
+    el.style.opacity = '1';
+    let tid = 0;
+    const finish = () => {
+      if (el.dataset.sbOpen !== '1') return;
+      el.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      clearInline();
+    };
+    const onEnd = (e) => {
+      if (e.target !== el) return;
+      if (e.propertyName !== 'height' && e.propertyName !== 'opacity') return;
+      finish();
+    };
+    el.addEventListener('transitionend', onEnd);
+    tid = setTimeout(finish, SB_REVEAL_MS + 40);
+    el._sbRevealCleanup = () => {
+      el.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      clearInline();
+    };
+  } else {
+    el.hidden = false;
+    el.classList.add('sb-revealing');
+    el.style.overflow = 'hidden';
+    el.style.opacity = '1';
+    el.style.height = el.scrollHeight + 'px';
+    void el.offsetHeight;
+    el.style.transition = `height ${SB_REVEAL_MS}ms ${SB_REVEAL_EASE}, opacity ${Math.round(SB_REVEAL_MS * 0.85)}ms ease`;
+    el.style.height = '0px';
+    el.style.opacity = '0';
+    let tid = 0;
+    const finish = () => {
+      if (el.dataset.sbOpen !== '0') return;
+      el.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      el.hidden = true;
+      clearInline();
+    };
+    const onEnd = (e) => {
+      if (e.target !== el) return;
+      if (e.propertyName !== 'height' && e.propertyName !== 'opacity') return;
+      finish();
+    };
+    el.addEventListener('transitionend', onEnd);
+    tid = setTimeout(finish, SB_REVEAL_MS + 40);
+    el._sbRevealCleanup = () => {
+      el.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      clearInline();
+    };
+  }
+}
+
 function syncSubCtrl() {
   // 'resumo' não tem specialObj/.on próprio — mora em index.resumoOn (mesmo caso especial de syncSpecialUI)
   document.querySelectorAll('.subctrl[data-sub]').forEach(el => {
     const k = el.dataset.sub;
-    el.hidden = !(k === 'resumo' ? state.doc.index.resumoOn : specialObj(k).on);
+    setSidebarReveal(el, k === 'resumo' ? state.doc.index.resumoOn : specialObj(k).on);
   });
 }
 function syncSpecialUI() {
@@ -2596,7 +4998,7 @@ function syncSpecialUI() {
   });
   document.querySelectorAll('select[data-idxopt]').forEach(s => { s.value = state.doc.index[s.dataset.idxopt]; });
   // largura do índice e do resumo: segment de ícone, não <select> — rebuild é mais barato que
-  // um setter (mesmo idioma do #blockcol/columnField: o componente não guarda estado próprio).
+  // um setter (mesmo idioma do #blockcol/widthSeg: o componente não guarda estado próprio).
   const iwSlot = document.querySelector('[data-slot="idxwidth"]');
   if (iwSlot) iwSlot.replaceChildren(widthSeg(state.doc.index.width, [
     { val: 'curto', label: 'Curto', icon: COL_ICON.left },
@@ -2604,22 +5006,25 @@ function syncSpecialUI() {
   ], (v) => { state.doc.index.width = v; syncSpecialUI(); render(); }));
   const rwSlot = document.querySelector('[data-slot="resumowidth"]');
   if (rwSlot) rwSlot.replaceChildren(widthSeg(state.doc.index.resumoWidth, [
-    { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
     { val: 'left', label: 'Coluna Esquerda', icon: COL_ICON.left },
+    { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
   ], (v) => { state.doc.index.resumoWidth = v; syncSpecialUI(); render(); }));
   document.querySelectorAll('[data-bgx]').forEach(s => { s.value = specialObj(s.dataset.bgx).bgX ?? 50; });
   document.querySelectorAll('[data-bgy]').forEach(s => { s.value = specialObj(s.dataset.bgy).bgY ?? 50; });
   document.querySelectorAll('[data-bgscale]').forEach(s => { s.value = specialObj(s.dataset.bgscale).bgScale ?? 100; });
   document.querySelectorAll('[data-bgscalev]').forEach(sp => { sp.textContent = ((specialObj(sp.dataset.bgscalev).bgScale ?? 100) / 100).toFixed(2) + '×'; });
-  // t2.9: "Sem fundo" (lixeira) só aparece quando há imagem de fundo selecionada.
-  document.querySelectorAll('[data-rmbg]').forEach(b => { b.hidden = specialObj(b.dataset.rmbg).bg == null; });
-  // botão "Imagem de fundo" e card de prévia são mutuamente exclusivos — o card (com a
-  // lixeira dentro) substitui o botão assim que existe uma imagem selecionada.
-  document.querySelectorAll('[data-bgbtn]').forEach(b => { b.hidden = specialObj(b.dataset.bgbtn).bg != null; });
-  document.querySelectorAll('[data-bgcard]').forEach(el => { el.hidden = specialObj(el.dataset.bgcard).bg == null; });
-  document.querySelectorAll('[data-bgpreview]').forEach(img => { const v = specialObj(img.dataset.bgpreview).bg; if (v) img.src = v; });
-  // fundo↔/fundo↕/escala só fazem sentido com uma imagem selecionada (mesmo gate do card)
-  document.querySelectorAll('[data-bgxform]').forEach(el => { el.hidden = specialObj(el.dataset.bgxform).bg == null; });
+  // "Selecionar" vs "Substituir + Remover" são mutuamente exclusivos — com imagem, os
+  // fieldbtns (mesmo do popover de imagem) tomam o lugar do botão de arquivo.
+  document.querySelectorAll('[data-bgbtn]').forEach(b => {
+    setSidebarReveal(b, specialObj(b.dataset.bgbtn).bg == null);
+  });
+  document.querySelectorAll('[data-bgactions]').forEach(el => {
+    setSidebarReveal(el, specialObj(el.dataset.bgactions).bg != null);
+  });
+  // fundo↔/fundo↕/escala só fazem sentido com uma imagem selecionada
+  document.querySelectorAll('[data-bgxform]').forEach(el => {
+    setSidebarReveal(el, specialObj(el.dataset.bgxform).bg != null);
+  });
   syncSubCtrl();
   syncLogoUI();
 }
@@ -2631,9 +5036,34 @@ function syncLogoUI() {
     const active = lg.on ? lg.kind : 'none';
     pick.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.logokind === active)));
   });
-  document.querySelectorAll('[data-logoopts]').forEach(o => { o.hidden = !specialObj(o.dataset.logoopts).logo.on; });
-  document.querySelectorAll('[data-logopos]').forEach(s => { s.value = specialObj(s.dataset.logopos).logo.pos; });
-  document.querySelectorAll('[data-logoalign]').forEach(s => { s.value = specialObj(s.dataset.logoalign).logo.align; });
+  document.querySelectorAll('[data-logoopts]').forEach(o => {
+    setSidebarReveal(o, !!specialObj(o.dataset.logoopts).logo.on);
+  });
+  // posição vertical + alinhamento: segments de ícone (widthSeg) — rebuild a cada sync,
+  // como idxwidth/resumowidth. Posição: header (topo) / footer (base).
+  document.querySelectorAll('[data-slot="logopos"]').forEach(slot => {
+    const kind = slot.dataset.kind;
+    const lg = specialObj(kind).logo;
+    slot.replaceChildren(widthSeg(lg.pos === 'footer' ? 'footer' : 'header', [
+      { val: 'header', label: 'Cabeçalho (topo)', icon: POS_ICON.header },
+      { val: 'footer', label: 'Rodapé (base)', icon: POS_ICON.footer },
+    ], (v) => {
+      lg.pos = v; syncLogoUI(); render();
+      if (state.sel === logoSelOf(kind)) openLogoPanel(kind);
+    }));
+  });
+  document.querySelectorAll('[data-slot="logoalign"]').forEach(slot => {
+    const kind = slot.dataset.kind;
+    const lg = specialObj(kind).logo;
+    slot.replaceChildren(widthSeg(lg.align || 'left', [
+      { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+      { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+      { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+    ], (v) => {
+      lg.align = v; syncLogoUI(); render();
+      if (state.sel === logoSelOf(kind)) openLogoPanel(kind);
+    }));
+  });
   document.querySelectorAll('[data-logocolor]').forEach(b => { b.style.background = specialObj(b.dataset.logocolor).logo.color; });
   document.querySelectorAll('[data-logosize]').forEach(s => { s.value = Math.round((specialObj(s.dataset.logosize).logo.size || 1) * 100); });
   document.querySelectorAll('[data-logosizev]').forEach(sp => { sp.textContent = (+(specialObj(sp.dataset.logosizev).logo.size || 1).toFixed(2)) + '×'; });
@@ -2647,17 +5077,25 @@ function applyCoverLogoLive(kind) {
   const h = LOGO_BASE_H * (lg.size || 1);
   svg.setAttribute('height', +h.toFixed(1)); svg.setAttribute('width', +(h * (L.w / L.h)).toFixed(1));
 }
-// reposiciona o fundo ao vivo (sem re-render) — Fill com controle X/Y
+// aplica posição + escala no .cover-bg (render e sliders ao vivo). Ver renderCoverPage.
+function applyCoverBgStyles(bg, cov) {
+  const x = cov.bgX ?? 50, y = cov.bgY ?? 50;
+  const s = (cov.bgScale ?? 100) / 100;
+  bg.style.backgroundPosition = `${x}% ${y}%`;
+  bg.style.transformOrigin = `${x}% ${y}%`;
+  bg.style.transform = `scale(${s})`;
+}
+// reposiciona o fundo ao vivo (sem re-render) — Fill com controle X/Y (+ origem do zoom)
 function applyCoverBgPos(kind) {
   const cov = specialObj(kind);
   const bg = pagesEl.querySelector(`.page[data-cover="${kind}"] .cover-bg`);
-  if (bg) bg.style.backgroundPosition = `${cov.bgX ?? 50}% ${cov.bgY ?? 50}%`;
+  if (bg) applyCoverBgStyles(bg, cov);
 }
 // idem, pro zoom (mesmo padrão do applyCoverBgPos — arrastar o slider não deve remontar a página)
 function applyCoverBgScale(kind) {
   const cov = specialObj(kind);
   const bg = pagesEl.querySelector(`.page[data-cover="${kind}"] .cover-bg`);
-  if (bg) bg.style.transform = `scale(${(cov.bgScale ?? 100) / 100})`;
+  if (bg) applyCoverBgStyles(bg, cov);
 }
 document.querySelectorAll('.sw[data-sw]').forEach(sw => sw.addEventListener('click', () => {
   // t2.11: 'resumo' mora em state.doc.index.resumoOn (não tem specialObj/.on próprio) —
@@ -2684,11 +5122,166 @@ document.querySelectorAll('select[data-idxopt]').forEach(s => s.addEventListener
 // t2.10: tooltip nativo (title=) no ícone "ⓘ" ao lado de "Índice + Resumo" — preventDefault
 // no click evita que a ativação do botão borbulhe pro <summary> e togglar o <details> junto.
 document.querySelector('.infoicon')?.addEventListener('click', (e) => e.preventDefault());
+
+// ── expand/collapse animado dos <details> da sidebar + restore do estado ──
+// Intercepta o click no <summary> (preventDefault do toggle nativo) e anima a
+// altura do .body — mesmo idioma do setSidebarReveal (height + opacity).
+const DET_MS = 260;
+const DET_EASE = 'cubic-bezier(.4, 0, .2, 1)';
+function setDetailsOpen(det, open) {
+  const body = det.querySelector(':scope > .body');
+  const want = !!open;
+  const reduced = typeof matchMedia === 'function'
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // chevron segue .is-open desde o INÍCIO (não espera [open] mudar no fim do close)
+  const setOpenClass = (on) => det.classList.toggle('is-open', on);
+
+  if (!body || reduced) {
+    det.open = want;
+    setOpenClass(want);
+    delete det.dataset.detDir;
+    persistSidebarSecsNow();
+    return;
+  }
+  // cancela animação em voo; commita o estado visual do meio do caminho
+  if (typeof det._detCleanup === 'function') det._detCleanup();
+
+  if (!!det.open === want) {
+    setOpenClass(want);
+    persistSidebarSecsNow();
+    return;
+  }
+
+  const clearInline = () => {
+    body.style.height = '';
+    body.style.opacity = '';
+    body.style.overflow = '';
+    body.style.transition = '';
+    det.classList.remove('sb-det-animating');
+    det._detCleanup = null;
+  };
+
+  // gira o chevron no mesmo instante em que o body começa a animar
+  setOpenClass(want);
+
+  if (want) {
+    det.dataset.detDir = 'open';
+    det.open = true;
+    det.classList.add('sb-det-animating');
+    body.style.overflow = 'hidden';
+    body.style.opacity = '0';
+    body.style.height = '0px';
+    const h = body.scrollHeight;
+    void body.offsetHeight;
+    body.style.transition = `height ${DET_MS}ms ${DET_EASE}, opacity ${Math.round(DET_MS * 0.85)}ms ease`;
+    body.style.height = h + 'px';
+    body.style.opacity = '1';
+    let tid = 0;
+    const finish = () => {
+      body.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      delete det.dataset.detDir;
+      clearInline();
+      persistSidebarSecsNow();
+    };
+    const onEnd = (e) => {
+      if (e.target !== body) return;
+      if (e.propertyName !== 'height' && e.propertyName !== 'opacity') return;
+      finish();
+    };
+    body.addEventListener('transitionend', onEnd);
+    tid = setTimeout(finish, DET_MS + 40);
+    det._detCleanup = () => {
+      body.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      // mid-open cancelado → mantém aberto (estado já é open=true)
+      delete det.dataset.detDir;
+      clearInline();
+    };
+  } else {
+    det.dataset.detDir = 'close';
+    det.classList.add('sb-det-animating');
+    body.style.overflow = 'hidden';
+    body.style.opacity = '1';
+    body.style.height = body.scrollHeight + 'px';
+    void body.offsetHeight;
+    body.style.transition = `height ${DET_MS}ms ${DET_EASE}, opacity ${Math.round(DET_MS * 0.85)}ms ease`;
+    body.style.height = '0px';
+    body.style.opacity = '0';
+    let tid = 0;
+    const finish = () => {
+      body.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      det.open = false;
+      delete det.dataset.detDir;
+      clearInline();
+      persistSidebarSecsNow();
+    };
+    const onEnd = (e) => {
+      if (e.target !== body) return;
+      if (e.propertyName !== 'height' && e.propertyName !== 'opacity') return;
+      finish();
+    };
+    body.addEventListener('transitionend', onEnd);
+    tid = setTimeout(finish, DET_MS + 40);
+    det._detCleanup = () => {
+      body.removeEventListener('transitionend', onEnd);
+      clearTimeout(tid);
+      // mid-close cancelado → trata como fechado pro reverse poder reabrir
+      det.open = false;
+      delete det.dataset.detDir;
+      clearInline();
+    };
+  }
+}
+function initSidebarDetails() {
+  let saved = null;
+  try {
+    const cfg = JSON.parse(localStorage.getItem(LS_KEY)) || {};
+    if (cfg.sidebarSecs && typeof cfg.sidebarSecs === 'object') saved = cfg.sidebarSecs;
+  } catch {}
+
+  document.querySelectorAll('aside details[data-sec]').forEach(det => {
+    const id = det.dataset.sec;
+    // migração: chave antiga "texto" → "documento"
+    let open;
+    if (saved && Object.prototype.hasOwnProperty.call(saved, id)) open = !!saved[id];
+    else if (id === 'documento' && saved && Object.prototype.hasOwnProperty.call(saved, 'texto')) open = !!saved.texto;
+    else open = !!SIDEBAR_SEC_DEFAULTS[id];
+    det.open = open;
+    det.classList.toggle('is-open', open);
+
+    const sum = det.querySelector(':scope > summary');
+    if (!sum) return;
+    // ion-icon name="chevron-forward-outline" — gira 90° com .is-open
+    if (!sum.querySelector('.det-chev')) {
+      const chev = document.createElement('span');
+      chev.className = 'det-chev';
+      chev.setAttribute('aria-hidden', 'true');
+      chev.innerHTML = uiIco('chevron-forward', 12, 'outline');
+      sum.prepend(chev);
+    }
+    sum.addEventListener('click', (e) => {
+      // ⓘ do Índice: não toggle (já tem preventDefault próprio; reforço aqui)
+      if (e.target.closest('.infoicon')) return;
+      e.preventDefault();
+      // durante animação, inverte a direção (open ainda reflete o estado "antes" no close)
+      const dir = det.dataset.detDir;
+      const next = dir === 'open' ? false : dir === 'close' ? true : !det.open;
+      setDetailsOpen(det, next);
+    });
+  });
+}
 document.querySelectorAll('[data-bg]').forEach(inp => inp.addEventListener('change', (e) => {
   const f = e.target.files[0]; if (f) setCoverBg(inp.dataset.bg, f); e.target.value = '';
 }));
-document.querySelectorAll('[data-rmbg]').forEach(btn => btn.addEventListener('click', () => { specialObj(btn.dataset.rmbg).bg = null; syncSpecialUI(); render(); }));
-document.querySelectorAll('[data-addtxt]').forEach(btn => btn.addEventListener('click', () => addCoverText(btn.dataset.addtxt)));
+// Substituir / Remover do fundo — mesmos ícones do popover de imagem (repeat / trash outline)
+document.querySelectorAll('[data-bgreplace]').forEach(el => { el.insertAdjacentHTML('afterbegin', REPLACE_ICO); });
+document.querySelectorAll('[data-rmbg]').forEach(btn => {
+  btn.insertAdjacentHTML('afterbegin', TRASH_ICO);
+  btn.addEventListener('click', () => { specialObj(btn.dataset.rmbg).bg = null; syncSpecialUI(); render(); });
+});
 document.querySelectorAll('[data-bgx]').forEach(s => s.addEventListener('input', (e) => { specialObj(s.dataset.bgx).bgX = +e.target.value; applyCoverBgPos(s.dataset.bgx); save(); scheduleCommit(); }));
 document.querySelectorAll('[data-bgy]').forEach(s => s.addEventListener('input', (e) => { specialObj(s.dataset.bgy).bgY = +e.target.value; applyCoverBgPos(s.dataset.bgy); save(); scheduleCommit(); }));
 document.querySelectorAll('[data-bgscale]').forEach(s => s.addEventListener('input', (e) => {
@@ -2697,6 +5290,25 @@ document.querySelectorAll('[data-bgscale]').forEach(s => s.addEventListener('inp
   if (sp) sp.textContent = (+e.target.value / 100).toFixed(2) + '×';
   save(); scheduleCommit();
 }));
+// reset de posição do fundo — default 50 (centro), igual seed de cover/back
+document.querySelectorAll('[data-bgxreset]').forEach(btn => {
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('click', () => {
+    const kind = btn.dataset.bgxreset;
+    specialObj(kind).bgX = 50;
+    const s = document.querySelector(`[data-bgx="${kind}"]`); if (s) s.value = 50;
+    applyCoverBgPos(kind); save(); scheduleCommit();
+  });
+});
+document.querySelectorAll('[data-bgyreset]').forEach(btn => {
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('click', () => {
+    const kind = btn.dataset.bgyreset;
+    specialObj(kind).bgY = 50;
+    const s = document.querySelector(`[data-bgy="${kind}"]`); if (s) s.value = 50;
+    applyCoverBgPos(kind); save(); scheduleCommit();
+  });
+});
 // t3.1: ícone real do logo (Ícone/Completo/Nome) no picker, no lugar do rótulo de texto —
 // estático (não depende de estado), então injeta uma vez só; "Nenhum" já nasce com o próprio
 // ícone (traço cruzado) direto no HTML, sem entrada em LOGOS — não tem o que buscar aqui.
@@ -2711,24 +5323,128 @@ document.querySelectorAll('[data-logopick] button[data-logokind]').forEach(b => 
 // ── logo da Paradigma na capa/contracapa (trilha D) — picker + posição/alinhamento/cor/tamanho ──
 document.querySelectorAll('[data-logopick]').forEach(pick => pick.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-logokind]'); if (!b) return;
-  const lg = specialObj(pick.dataset.logopick).logo;
+  const kind = pick.dataset.logopick;
+  const lg = specialObj(kind).logo;
   if (b.dataset.logokind === 'none') lg.on = false;          // "none" desliga; demais ligam e trocam o kind
   else { lg.on = true; lg.kind = b.dataset.logokind; }
+  // se o logo desta capa estava em foco e desligou, limpa sel/painel; se ainda está ligado e em foco, reabre
+  if (state.sel === logoSelOf(kind)) {
+    if (!lg.on) { state.sel = null; closeLogoPanel(); }
+    else { syncLogoUI(); render(); openLogoPanel(kind); return; }
+  }
   syncLogoUI(); render();
 }));
-document.querySelectorAll('[data-logopos]').forEach(s => s.addEventListener('change', (e) => { specialObj(s.dataset.logopos).logo.pos = e.target.value; render(); }));
-document.querySelectorAll('[data-logoalign]').forEach(s => s.addEventListener('change', (e) => { specialObj(s.dataset.logoalign).logo.align = e.target.value; render(); }));
+// posição + alinhamento do logo: segments montados em syncLogoUI() (onclick no widthSeg) — sem <select>
 document.querySelectorAll('[data-logocolor]').forEach(b => b.addEventListener('click', () => {
-  const lg = specialObj(b.dataset.logocolor).logo;
-  openSwatchPop(b, (hex) => { lg.color = hex; b.style.background = hex; render(); }, lg.color);
+  const kind = b.dataset.logocolor, lg = specialObj(kind).logo;
+  openSwatchPop(b, (hex) => {
+    lg.color = hex; b.style.background = hex; render();
+    if (state.sel === logoSelOf(kind)) openLogoPanel(kind);
+  }, lg.color);
 }));
 document.querySelectorAll('[data-logosize]').forEach(s => s.addEventListener('input', (e) => {
   const kind = s.dataset.logosize, lg = specialObj(kind).logo;
   lg.size = +e.target.value / 100;
   const sp = document.querySelector(`[data-logosizev="${kind}"]`); if (sp) sp.textContent = (+lg.size.toFixed(2)) + '×';
-  applyCoverLogoLive(kind); save(); scheduleCommit();
+  applyCoverLogoLive(kind);
+  // espelha no painel flutuante se aberto
+  if (logoPanel && !logoPanel.hidden && logoKindOfSel(state.sel) === kind) {
+    const ps = logoPanel.querySelector('input[data-a="size"]'); if (ps) ps.value = Math.round(lg.size * 100);
+    const pv = logoPanel.querySelector('[data-role="szv"]'); if (pv) pv.textContent = (+lg.size.toFixed(2)) + '×';
+  }
+  save(); scheduleCommit();
 }));
-document.getElementById('zoom').addEventListener('change', (e) => { state.zoom = e.target.value === 'fit' ? 'fit' : +e.target.value; applyZoom(); });
+// reset do tamanho do logo (t4) — mesmo padrão de radius/size nos painéis flutuantes:
+// mousedown preventDefault pra não roubar foco; default 1 (= 100 no slider), igual defaultLogo()
+document.querySelectorAll('[data-logosizereset]').forEach(btn => {
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('click', () => {
+    const kind = btn.dataset.logosizereset, lg = specialObj(kind).logo;
+    lg.size = 1;
+    const s = document.querySelector(`[data-logosize="${kind}"]`); if (s) s.value = 100;
+    const sp = document.querySelector(`[data-logosizev="${kind}"]`); if (sp) sp.textContent = '1×';
+    applyCoverLogoLive(kind);
+    if (logoPanel && !logoPanel.hidden && logoKindOfSel(state.sel) === kind) {
+      const ps = logoPanel.querySelector('input[data-a="size"]'); if (ps) ps.value = 100;
+      const pv = logoPanel.querySelector('[data-role="szv"]'); if (pv) pv.textContent = '1×';
+    }
+    save(); scheduleCommit();
+  });
+});
+// reset da escala do fundo — default 100 (= 1×), igual seed de cover/back em state
+document.querySelectorAll('[data-bgscalereset]').forEach(btn => {
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('click', () => {
+    const kind = btn.dataset.bgscalereset;
+    specialObj(kind).bgScale = 100;
+    const s = document.querySelector(`[data-bgscale="${kind}"]`); if (s) s.value = 100;
+    const sp = document.querySelector(`[data-bgscalev="${kind}"]`); if (sp) sp.textContent = '1.00×';
+    applyCoverBgScale(kind); save(); scheduleCommit();
+  });
+});
+// sidebar: ion-icon name="menu-outline" — slide in/out do menu lateral esquerdo
+const btnSidebar = document.getElementById('btnSidebar');
+const mainEl = document.querySelector('main');
+const sidebarEl = document.getElementById('sidebar');
+if (btnSidebar && mainEl && sidebarEl) {
+  btnSidebar.innerHTML = uiIco('menu', 18, 'outline');
+  let sidebarFitRaf = 0, sidebarFitTimer = 0, sidebarFitOnEnd = null;
+  const stopSidebarFit = () => {
+    if (sidebarFitRaf) { cancelAnimationFrame(sidebarFitRaf); sidebarFitRaf = 0; }
+    if (sidebarFitTimer) { clearTimeout(sidebarFitTimer); sidebarFitTimer = 0; }
+    if (sidebarFitOnEnd) {
+      sidebarEl.removeEventListener('transitionend', sidebarFitOnEnd);
+      sidebarFitOnEnd = null;
+    }
+  };
+  const refitDuringSlide = () => {
+    stopSidebarFit();
+    if (state.zoom !== 'fit') return;
+    const tick = () => {
+      applyZoom();
+      sidebarFitRaf = requestAnimationFrame(tick);
+    };
+    sidebarFitRaf = requestAnimationFrame(tick);
+    sidebarFitOnEnd = (e) => {
+      if (e.target !== sidebarEl || e.propertyName !== 'width') return;
+      stopSidebarFit();
+      applyZoom();
+    };
+    sidebarEl.addEventListener('transitionend', sidebarFitOnEnd);
+    // fallback se transitionend não vier (reduced-motion / sem mudança real)
+    sidebarFitTimer = setTimeout(() => {
+      stopSidebarFit();
+      if (state.zoom === 'fit') applyZoom();
+    }, 320);
+  };
+  btnSidebar.addEventListener('click', () => {
+    const open = btnSidebar.getAttribute('aria-pressed') !== 'true';
+    btnSidebar.setAttribute('aria-pressed', String(open));
+    mainEl.classList.toggle('sidebar-collapsed', !open);
+    btnSidebar.title = open ? 'Esconder o menu' : 'Mostrar o menu';
+    // inert quando fechado: não entra no tab order nem recebe clique sob o clip
+    if (open) sidebarEl.removeAttribute('inert');
+    else sidebarEl.setAttribute('inert', '');
+    refitDuringSlide();
+  });
+}
+// zoom header: expand (fit) + popover com slider 10–200%. ion-icon name="expand"
+zoomFitBtn.innerHTML = uiIco('expand', 16, 'outline');
+zoomFitBtn.addEventListener('click', () => {
+  state.zoom = 'fit';
+  applyZoom();
+});
+zoomPctBtn.addEventListener('click', () => {
+  if (zoomPop.hidden) openZoomPop(); else closeZoomPop();
+});
+zoomRange.addEventListener('input', () => {
+  setZoomFromPct(zoomRange.value);
+  // enquanto arrasta, o syncZoomUI pula o range se ele tem foco — atualiza o label do pop
+  if (zoomPopVal) zoomPopVal.textContent = Math.round(+zoomRange.value) + '%';
+  if (zoomPctLabel) zoomPctLabel.textContent = Math.round(+zoomRange.value) + '%';
+});
+// ticks + ímã nos snaps do zoom (mesma infra dos sliders da sidebar)
+if (zoomPop) enhanceAll(zoomPop);
 
 // ── exportar PDF (WYSIWYG, vetorial, com links) — via window.print() nativo ──
 let _fontUri;
@@ -2816,9 +5532,9 @@ function downloadMd() {
   URL.revokeObjectURL(a.href);
 }
 // "Salvar" (trilha C t3.2): baixa o DOCUMENTO INTEIRO (blocos + capa/contracapa +
-// logo + índice/resumo + cabeçalho/rodapé + nº 1ª página + origem) como .pdgm.zip
-// (doc.json + imagens como arquivo separado em media/, ver doc-format.js) — sem
-// perda, ao contrário do .md acima (só o texto). Reabre pelo botão "Abrir".
+// logo + índice/resumo + reviewed[] do preview + cabeçalho/rodapé + nº 1ª página
+// + origem) como .pdgm.zip (doc.json + imagens em media/, ver doc-format.js) —
+// sem perda, ao contrário do .md acima (só o texto). Reabre pelo botão "Abrir".
 async function saveDocFile() {
   // cinto de segurança: salvar com o miolo em branco gera um arquivo que PARECE cheio
   // (megabytes de capa em base64) e abre vazio. Bloco conta como conteúdo se tem texto
@@ -2994,7 +5710,10 @@ function removeLink() {
 }
 linkedit.addEventListener('mousedown', (e) => { if (e.target === linkedit) e.preventDefault(); });
 document.getElementById('linkApply').addEventListener('click', applyLink);
-document.getElementById('linkRemove').addEventListener('click', removeLink);
+// ion-icon name="trash-outline" + rótulo "Remover" (vermelho)
+const linkRemoveBtn = document.getElementById('linkRemove');
+linkRemoveBtn.innerHTML = `${uiIco('trash', 14, 'outline')}<span>Remover</span>`;
+linkRemoveBtn.addEventListener('click', removeLink);
 linkUrl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); applyLink(); }
   else if (e.key === 'Escape') { e.preventDefault(); closeLinkEdit(); }
@@ -3007,12 +5726,24 @@ document.addEventListener('selectionchange', () => {
 stage.addEventListener('scroll', () => {
   if (!fmtbar.hidden) updateFmtbar();
   if (!calloutBar.hidden) updateCalloutBar();   // reposiciona (não esconde) — mesmo tratamento do fmtbar
+  if (tablePanel && !tablePanel.hidden) positionTablePanel();
   if (imgPanel && !imgPanel.hidden) positionImgPanel();
   if (coverPanel && !coverPanel.hidden) positionCoverPanel();
-  bhandle.hidden = true;                        // alça é fixed → esconde ao rolar
+  if (logoPanel && !logoPanel.hidden) positionLogoPanel();
+  if (idxPanel && !idxPanel.hidden) positionIdxPanel();
+  if (resumoPanel && !resumoPanel.hidden) positionResumoPanel();
+  bhandle.hidden = true; badd.hidden = true;    // alças fixed → escondem ao rolar
+  closeBlockMenu();
   closeAddImgMenu();
 }, { passive: true });
-addEventListener('resize', () => { if (imgPanel && !imgPanel.hidden) positionImgPanel(); if (coverPanel && !coverPanel.hidden) positionCoverPanel(); });
+addEventListener('resize', () => {
+  if (tablePanel && !tablePanel.hidden) positionTablePanel();
+  if (imgPanel && !imgPanel.hidden) positionImgPanel();
+  if (coverPanel && !coverPanel.hidden) positionCoverPanel();
+  if (logoPanel && !logoPanel.hidden) positionLogoPanel();
+  if (idxPanel && !idxPanel.hidden) positionIdxPanel();
+  if (resumoPanel && !resumoPanel.hidden) positionResumoPanel();
+});
 
 // ─────────────────────────── undo / redo ────────────────────────────────────
 // captura no document (fase de captura) pra vencer o undo nativo do contenteditable.
@@ -3061,7 +5792,10 @@ document.getElementById('btnUndo').addEventListener('mousedown', (e) => e.preven
 document.getElementById('btnRedo').addEventListener('mousedown', (e) => e.preventDefault());
 
 // ─────────────────────────── init ───────────────────────────────────────────
+initFeedback(); // botão Reportar → issue no GitHub (prefill)
+enhanceAll();   // ticks + ímã nos range da sidebar (capa/contracapa)
 load();
+initSidebarDetails(); // restore open/closed das seções (antes do 1º paint útil)
 state.zoom = 'fit';
 state.activeId = state.doc.blocks[0]?.id;
 document.getElementById('footText').value = state.doc.footText;
@@ -3073,6 +5807,8 @@ syncSpecialUI();
 setSegment('documento');
 render();
 updateHistBtns();
+// libera animações da sidebar só depois do 1º paint (evita “abrir tudo” no load)
+requestAnimationFrame(() => { sidebarRevealReady = true; });
 
 // restauração de sessão: o miolo volta do IndexedDB (ver save()). É async, então cai
 // DEPOIS do primeiro paint — e por isso só aplica se o documento ainda estiver intocado

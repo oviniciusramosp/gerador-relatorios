@@ -1,0 +1,45 @@
+name: Bug
+description: Algo quebrou ou se comporta de forma inesperada
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: O que acontece
+      description: Descreva o comportamento atual e o esperado.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+      description: Lista numerada, se possível.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: false
+  - type: input
+    id: element
+    attributes:
+      label: Elemento (id ou seletor)
+      description: Se você usou "Selecionar elemento" no app, cole o id/seletor aqui.
+      placeholder: "#btnPrint"
+    validations:
+      required: false
+  - type: input
+    id: page
+    attributes:
+      label: Página / ferramenta
+      placeholder: diagramacao.html · Gráficos · Linhas do tempo
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Ambiente
+      description: Browser, viewport, etc. (o botão Reportar do app preenche isso sozinho).
+    validations:
+      required: false

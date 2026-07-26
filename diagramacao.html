@@ -17,44 +17,179 @@
     display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1rem;
     padding: .8rem 1.1rem; border-bottom: 1px solid var(--hair);
   }
-  header .hleft { display: flex; align-items: baseline; gap: 1rem; min-width: 0; }
+  header .hleft { display: flex; align-items: center; gap: .65rem; min-width: 0; }
+  /* ion-icon name="menu-outline" — mostra/esconde a sidebar esquerda */
+  header .hleft #btnSidebar {
+    flex: none; width: var(--ctrl-h, 2rem); height: var(--ctrl-h, 2rem); padding: 0;
+    display: grid; place-items: center; border-radius: var(--ctrl-r, 9px); color: var(--muted);
+  }
+  header .hleft #btnSidebar svg { width: 18px; height: 18px; display: block; }
+  header .hleft #btnSidebar:hover { color: var(--ink); }
+  header .hleft #btnSidebar[aria-pressed="true"] {
+    color: #fff; border-color: var(--violet); background: var(--violet);
+  }
+  header .hleft #btnSidebar[aria-pressed="true"]:hover { color: #fff; }
   header h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
   header .crumb { color: var(--muted); font-size: .74rem; font-stretch: 85%;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  header .zoomwrap { justify-self: center; position: relative; display: flex; align-items: center; }
-  header .zoomwrap .zoomico { position: absolute; left: 10px; width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
-  header .zoomwrap select#zoom { padding-left: 30px; }
+  /* zoom: [fit/expand] + botão % que abre popover com slider 10–200% */
+  header .zoomwrap { justify-self: center; display: flex; align-items: center; gap: .35rem; }
+  header .zoomwrap #zoomFit {
+    flex: none; width: var(--ctrl-h, 2rem); height: var(--ctrl-h, 2rem); padding: 0;
+    display: grid; place-items: center; border-radius: var(--ctrl-r, 9px); color: var(--muted);
+  }
+  header .zoomwrap #zoomFit svg { width: 16px; height: 16px; display: block; }
+  header .zoomwrap #zoomFit:hover { color: var(--ink); }
+  /* selecionado = fundo violeta sólido (não só borda) — mesmo peso do segment ativo */
+  header .zoomwrap #zoomFit[aria-pressed="true"],
+  header .zoomwrap #zoomFit[aria-pressed="true"]:hover {
+    color: #fff; border-color: var(--violet); background: var(--violet);
+  }
+  header .zoomwrap #zoomPct {
+    min-width: 5.5rem; height: var(--ctrl-h, 2rem); box-sizing: border-box;
+    padding: 0 var(--ctrl-pad-x, .6rem); border-radius: var(--ctrl-r, 9px);
+    display: inline-flex; align-items: center; justify-content: space-between; gap: .45rem;
+    font-size: .82rem; font-variant-numeric: tabular-nums; font-stretch: 85%;
+  }
+  header .zoomwrap #zoomPct .zoom-chev {
+    width: 12px; height: 12px; flex: none; color: var(--muted); opacity: .9;
+  }
+  header .zoomwrap #zoomPct[aria-expanded="true"] {
+    border-color: var(--violet);
+    background: color-mix(in srgb, var(--violet) 14%, transparent);
+  }
+  /* popover do zoom — mesma moldura dos outros painéis flutuantes, um pouco mais estreito */
+  #zoomPop {
+    position: fixed; z-index: 40; display: grid; gap: .45rem; width: 200px;
+    padding: .7rem; border: 1px solid var(--hair-strong); border-radius: 10px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+    box-shadow: 0 16px 50px -16px #000;
+  }
+  #zoomPop[hidden] { display: none; }
+  #zoomPop .field { display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); }
+  #zoomPop .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #zoomPop .field-val { color: var(--ink); font-variant-numeric: tabular-nums; }
   header nav { justify-self: end; display: flex; gap: .4rem; align-items: center; }
   header nav button:disabled { opacity: .38; cursor: default; }
   header nav button:disabled:hover { background: color-mix(in srgb, var(--lilac) 7%, transparent); }
 
-  main { display: grid; grid-template-columns: 320px 1fr; min-height: 0; }
-
-  aside {
+  /* flex: anima a largura do aside (slide) sem display:none — o painel interno
+     fica com 320px fixo e o overflow:hidden recorta = slide in/out limpo. */
+  main { display: flex; min-height: 0; }
+  aside#sidebar {
+    flex: 0 0 auto;
+    width: 320px;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     border-right: 1px solid var(--hair);
-    overflow-y: auto; padding: 1rem; display: grid; gap: .9rem; align-content: start;
+    box-sizing: border-box;
+    transition:
+      width .28s cubic-bezier(.4, 0, .2, 1),
+      border-color .28s ease;
   }
-  aside::-webkit-scrollbar { width: 8px; }
-  aside::-webkit-scrollbar-thumb { background: var(--hair-strong); border-radius: 4px; }
+  main.sidebar-collapsed > aside#sidebar {
+    width: 0;
+    border-right-color: transparent;
+  }
+  /* conteúdo em largura fixa: ao colapsar, desliza/recorta em vez de refluir.
+     scrollbar-gutter:stable reserva a faixa da barra sempre — evita o “empurrão”
+     do conteúdo pra esquerda quando overflow aparece/some.
+     --sb-pad / --sb-rail: padding e largura da barra (pra divisors full-bleed). */
+  aside#sidebar > .sidebar-panel {
+    --sb-pad: 1rem;
+    --sb-rail: 8px;
+    width: 320px;
+    height: 100%;
+    box-sizing: border-box;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding: var(--sb-pad);
+    display: grid;
+    gap: .9rem;
+    align-content: start;
+  }
+  aside#sidebar > .sidebar-panel::-webkit-scrollbar { width: var(--sb-rail); }
+  aside#sidebar > .sidebar-panel::-webkit-scrollbar-thumb { background: var(--hair-strong); border-radius: 4px; }
+  @media (prefers-reduced-motion: reduce) {
+    aside#sidebar { transition: none; }
+  }
 
   details > summary {
     cursor: pointer; list-style: none; font-size: .68rem; font-weight: 600;
     letter-spacing: .16em; text-transform: uppercase; color: var(--lilac);
-    font-stretch: 85%; padding: .3rem 0; user-select: none;
+    font-stretch: 85%; padding: 0; user-select: none;
+    display: flex; align-items: center; gap: .35rem;
   }
-  details > summary::before { content: "▸ "; display: inline-block; transition: transform .12s; }
-  details[open] > summary::before { transform: rotate(90deg); }
-  details > .body { display: grid; gap: .55rem; padding: .5rem 0 .9rem; }
+  /* chevron real (Ionicons chevron-forward) — gira em sync com a animação do body
+     via .is-open (não via [open], que só muda no fim do close). */
+  details > summary .det-chev {
+    flex: none; width: 12px; height: 12px;
+    display: grid; place-items: center;
+    transition: transform .26s cubic-bezier(.4, 0, .2, 1);
+    transform: rotate(0deg);
+  }
+  details > summary .det-chev svg { width: 12px; height: 12px; display: block; }
+  details.is-open > summary .det-chev { transform: rotate(90deg); }
+  /* corpo: só respiro abaixo do título; o padding inferior do <details> cuida da borda */
+  details > .body { display: grid; gap: .7rem; padding: .65rem 0 0; }
+  /* divisor full-width de verdade: ::after estoura padding + rail da scrollbar
+     (border no box do details não cobre gutter — margin negativo também não). */
+  aside#sidebar .pane { gap: 0; }
+  aside#sidebar .pane > details {
+    --det-pad-y: .9rem;
+    position: relative;
+    padding-block: var(--det-pad-y);
+    border-bottom: 0;
+  }
+  aside#sidebar .pane > details::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: calc(-1 * var(--sb-pad));
+    right: calc(-1 * var(--sb-pad) - var(--sb-rail));
+    height: 1px;
+    background: var(--hair);
+    pointer-events: none;
+  }
+  /* expand/collapse animado — altura/opacity via JS; overflow no meio do toggle */
+  details.sb-det-animating > .body { overflow: hidden; pointer-events: none; }
+  @media (prefers-reduced-motion: reduce) {
+    details > summary .det-chev { transition: none; }
+  }
+  /* seção estática (ex.: Bloco) — mesmo ritmo vertical dos <details> (pad-y pro segment) */
+  aside#sidebar .pane > .sb-static {
+    --det-pad-y: .9rem;
+    padding-block: var(--det-pad-y);
+  }
+  .sb-static-title {
+    font-size: .68rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--lilac); font-stretch: 85%; padding: 0; user-select: none;
+  }
+  .sb-static > .body { display: grid; gap: .7rem; padding: .65rem 0 0; }
+  /* abas Documento/Conteúdo: empilha no mesmo slot pra crossfade sem “pulo” de altura */
+  .pane-stack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pane-stack > .pane {
+    grid-area: 1 / 1;
+    min-width: 0;
+    align-self: start;
+  }
+  .pane.sb-fading { pointer-events: none; }
 
   .hint { font-size: .72rem; color: var(--muted); font-stretch: 90%; line-height: 1.45; margin: 0; }
   .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
-  /* 3 ações de "Texto" (Importar/Em Branco/Abrir) lado a lado, cada uma com a MESMA fatia da
-     largura — .row deixaria cada botão do tamanho do próprio texto (sobra vão à direita). */
-  .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+  /* ações de "Documento" (Em Branco/Abrir) lado a lado, mesma fatia de largura. */
+  .row3 { display: grid; grid-template-columns: repeat(2, 1fr); gap: .5rem; }
   .row3 button { padding-left: .3rem; padding-right: .3rem; font-size: .72rem; text-align: center; }
 
-  /* segment control (Documento / Conteúdo) — .segment/.pane agora em paradigma.css */
+  /* segment control (Configurações / Conteúdo) — .segment/.pane agora em paradigma.css;
+     ícones Ionicons à esquerda do rótulo (options-outline / layers-outline). */
+  #segment button { gap: .35rem; }
+  #segment button svg { width: 14px; height: 14px; flex: none; display: block; }
 
   /* switch (páginas especiais) */
   .swrow { display: flex; align-items: center; justify-content: space-between; gap: .5rem; font-size: .82rem; }
@@ -64,8 +199,27 @@
     background: #fff; transition: transform .12s; }
   .sw[aria-checked="true"] { background: var(--mint); }   /* Paradigma Aqua */
   .sw[aria-checked="true"]::after { transform: translateX(14px); }
-  .subctrl { display: grid; gap: .5rem; padding: 0 0 .2rem 0; }
+  /* gap um pouco maior entre controles relacionados; seções lógicas (Logo / Imagem / +Texto)
+     separam com divisor — ver regras .fieldtitle / .row abaixo. */
+  .subctrl { display: grid; gap: .65rem; padding: 0 0 .2rem 0; }
   .subctrl[hidden] { display: none; }
+  /* reveal animado da sidebar (switchers / logo / fundo / abas) — altura+opacity via JS;
+     .sb-revealing trava interação no meio do slide pra não clicar em controles “fantasma”. */
+  .sb-revealing { pointer-events: none; }
+  /* divisor entre sub-blocos da sidebar Documento: novo grupo com .fieldtitle
+     (Logo da Paradigma após "Mostrar Capa/Contracapa", "Imagem de Fundo" após Logo).
+     padding-top cria o respiro; border-top é a linha. */
+  .subctrl > .field:has(> .fieldtitle) {
+    margin-top: .25rem;
+    padding-top: .85rem;
+    border-top: 1px solid var(--hair);
+  }
+  /* mesmo tratamento entre pares de feature no .body (ex.: Índice → Resumo) */
+  .body > .swrow ~ .swrow {
+    margin-top: .25rem;
+    padding-top: .85rem;
+    border-top: 1px solid var(--hair);
+  }
   /* Título H1–H4 como opção ANINHADA dentro de "Mostrar Índice" — só o grupo dos 4 switches,
      não o resto do subctrl (Cores/Largura ficam no nível de fora, sem recuo). */
   .titlelvls { display: grid; gap: .5rem; padding-left: 14px; margin-left: 2px; border-left: 1px solid var(--hair); }
@@ -117,6 +271,7 @@
     padding: 0; border: 0; border-radius: 5px;
     background: transparent; color: var(--muted); cursor: pointer; font-size: .85rem; line-height: 1;
   }
+  .blockmenu svg { width: 14px; height: 14px; display: block; }
   .blockmenu:hover { color: var(--ink); background: color-mix(in srgb, var(--lilac) 14%, transparent); }
 
   .filebtn { position: relative; overflow: hidden; }
@@ -137,6 +292,7 @@
 
   /* ===================== palco / preview ===================== */
   .stage {
+    flex: 1 1 auto;
     min-width: 0; overflow: auto; position: relative;
     background:
       radial-gradient(ellipse 60% 40% at 50% 0%, color-mix(in srgb, var(--violet) 12%, transparent), transparent 70%),
@@ -145,6 +301,118 @@
   }
   .stage::-webkit-scrollbar { width: 10px; height: 10px; }
   .stage::-webkit-scrollbar-thumb { background: var(--hair-strong); border-radius: 5px; }
+
+  /* índice flutuante do preview: sticky no canto sup. dir. do palco (não rola com as páginas).
+     host height:0 + margin-bottom negativo cancela o gap do flex; o nav fica absolute dentro. */
+  .preview-toc-host {
+    position: sticky; top: 0; z-index: 30;
+    align-self: stretch; width: 100%; height: 0;
+    margin-bottom: -1.4rem; /* = gap do .stage */
+    overflow: visible; pointer-events: none;
+  }
+  .preview-toc {
+    position: absolute; top: .15rem; right: .15rem;
+    pointer-events: auto;
+    display: flex; flex-direction: column; align-items: flex-end;
+  }
+  .preview-toc[hidden] { display: none; }
+  /* botão levemente transparente; no hover do nav inteiro ganha opacidade plena */
+  .preview-toc-btn {
+    width: 2.25rem; height: 2.25rem; padding: 0;
+    display: grid; place-items: center;
+    border-radius: 10px;
+    border: 1px solid var(--hair-strong);
+    background: color-mix(in srgb, var(--ground) 62%, transparent);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    color: var(--muted); opacity: .78;
+    box-shadow: 0 8px 24px -12px #000;
+    cursor: pointer; transition: opacity .15s, color .15s, background .15s, border-color .15s;
+  }
+  .preview-toc-btn svg { width: 18px; height: 18px; display: block; }
+  /* aberto = classe .is-open (JS: hover, clique, fechar no 2º clique / timeout fora) */
+  .preview-toc.is-open .preview-toc-btn {
+    opacity: 1; color: var(--ink);
+    border-color: color-mix(in srgb, var(--violet) 45%, var(--hair-strong));
+    background: color-mix(in srgb, var(--ground) 82%, transparent);
+  }
+  /* painel: colapsado (só o botão) → expande com .is-open */
+  .preview-toc-panel {
+    display: grid; gap: .15rem;
+    width: 0; max-height: 0; opacity: 0;
+    overflow: hidden; pointer-events: none;
+    margin-top: .35rem; padding: 0;
+    border: 1px solid transparent; border-radius: 10px;
+    background: color-mix(in srgb, var(--ground) 88%, transparent);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 16px 40px -18px #000;
+    transition:
+      width .18s ease, max-height .2s ease, opacity .15s ease,
+      padding .15s ease, border-color .15s ease;
+  }
+  .preview-toc.is-open .preview-toc-panel {
+    width: min(300px, calc(100vw - 5rem));
+    max-height: min(52vh, 360px);
+    opacity: 1; overflow: auto; pointer-events: auto;
+    padding: .4rem;
+    border-color: var(--hair-strong);
+  }
+  /* cabeçalho: ÍNDICE | REVISADO (alinha com título + check de cada linha) */
+  .preview-toc-head {
+    display: grid; grid-template-columns: 1fr 3.6rem; gap: .2rem;
+    align-items: center;
+    padding: .15rem .2rem .35rem .55rem;
+    margin-bottom: .1rem;
+    border-bottom: 1px solid var(--hair);
+    font-size: .62rem; font-weight: 600; font-stretch: 85%;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+  }
+  .preview-toc-h-idx { min-width: 0; }
+  .preview-toc-h-rev { text-align: center; }
+  .preview-toc-row {
+    display: grid; grid-template-columns: 1fr 3.6rem; gap: .2rem;
+    align-items: center; border-radius: 6px;
+  }
+  .preview-toc-row:hover { background: color-mix(in srgb, var(--violet) 10%, transparent); }
+  .preview-toc-item {
+    display: block; width: 100%; min-width: 0; box-sizing: border-box;
+    text-align: left; border: 0; border-radius: 6px;
+    background: transparent; color: var(--muted);
+    font-size: .78rem; line-height: 1.3; font-stretch: 90%;
+    padding: .38rem .35rem .38rem .55rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    cursor: pointer; transition: color .1s;
+  }
+  .preview-toc-item.lvl1 {
+    color: var(--ink); font-weight: 600; letter-spacing: -.01em;
+  }
+  .preview-toc-item.lvl2 { padding-left: 1.35rem; font-size: .74rem; }
+  .preview-toc-item:hover,
+  .preview-toc-item:focus-visible {
+    color: var(--ink); outline: none;
+  }
+  /* check de “revisado” (sessão): solid checkmark-circle; off = muted, on = mint */
+  .preview-toc-check {
+    justify-self: center;
+    width: 1.55rem; height: 1.55rem; padding: 0;
+    display: grid; place-items: center;
+    border: 0; border-radius: 999px;
+    background: transparent; color: var(--muted); opacity: .45;
+    cursor: pointer; transition: color .12s, opacity .12s, background .12s;
+  }
+  .preview-toc-check svg { width: 16px; height: 16px; display: block; }
+  .preview-toc-check:hover,
+  .preview-toc-check:focus-visible {
+    opacity: .9; color: var(--ink); outline: none;
+    background: color-mix(in srgb, var(--lilac) 12%, transparent);
+  }
+  .preview-toc-check[aria-pressed="true"] {
+    opacity: 1; color: var(--mint);
+  }
+  .preview-toc-check[aria-pressed="true"]:hover {
+    color: var(--mint);
+    background: color-mix(in srgb, var(--mint) 14%, transparent);
+  }
+  .preview-toc-row.is-reviewed .preview-toc-item { opacity: .72; }
 
   /* embrulho que aplica o zoom sem quebrar o fluxo de scroll */
   #pages { display: flex; flex-direction: column; align-items: center; gap: 1.4rem;
@@ -169,10 +437,14 @@
   .page .rule.top { top: 40px; }
   .page .rule.bot { top: 802px; }          /* 842 - 40 */
 
-  /* área de conteúdo: 2 colunas dentro de [88 .. 754] no eixo Y */
+  /* área de conteúdo: 2 colunas dentro de [88 .. 754] no eixo Y.
+     col-left fica ACIMA da direita: blocos full (tabela/título 499px) transbordam
+     sobre o gutter e precisam receber clique/drag — senão a .col-right engole a
+     metade direita da tabela. O box da esquerda continua 258px; só o overflow pinta
+     por cima. Conteúdo da direita (282+) só perde hit-test onde o full realmente cobre. */
   .page .content { position: absolute; left: 48px; right: 48px; top: 88px; height: 666px; }
-  .page .col-left  { position: absolute; left: 0;   top: 0; width: 258px; height: 100%; }
-  .page .col-right { position: absolute; left: 282px; top: 0; width: 217px; height: 100%; } /* 258+24 */
+  .page .col-left  { position: absolute; left: 0;   top: 0; width: 258px; height: 100%; z-index: 2; }
+  .page .col-right { position: absolute; left: 282px; top: 0; width: 217px; height: 100%; z-index: 1; } /* 258+24 */
 
   /* rodapé: 4px abaixo da linha de baixo */
   .page .foot { position: absolute; left: 48px; right: 48px; top: 806px; height: 14px;
@@ -207,6 +479,17 @@
   .page .toc-cinza .toc-num, .page .toc-cinza .toc-pg { color: #A9A9A9; }
   .page .idx-resumo { font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: justify; outline: none; }
   .page .idx-resumo p { margin: 0 0 8px; }
+  /* seções Índice / Resumo: padding permanente = a borda de foco fica afastada do
+     conteúdo sem “pulo” ao selecionar; box-sizing pra largura (Curto/Total) incluir o pad */
+  .page .idx-section {
+    border-radius: 8px;
+    padding: 6px 8px;
+    box-sizing: border-box;
+  }
+  .page.editing .idx-section { cursor: pointer; }
+  .page.editing .idx-section + .idx-section { margin-top: 8px; }
+  .page.editing .idx-section:hover { background: color-mix(in srgb, #4E39FF 5%, transparent); }
+  .page.editing .idx-section .idx-resumo { cursor: text; }
 
   /* ---------- capa / contracapa ---------- */
   .page.cover-page { overflow: hidden; }
@@ -214,10 +497,29 @@
   .page.cover-page .cover-bg { position: absolute; inset: 0; background-size: cover; background-position: center; }
   /* conteúdo respeita o padding (48h/40v); itens posicionados por coluna (x) + y livre (absolutos) */
   .page.cover-page .cover-area { position: absolute; left: 48px; right: 48px; top: 40px; bottom: 40px; }
-  .page.cover-page .cover-item { position: absolute; color: #000; line-height: 1.15; letter-spacing: -0.01em; outline: none; font-weight: 700; }
+  .page.cover-page .cover-item { position: absolute; color: #000; line-height: 1.15; letter-spacing: -0.01em; outline: none; }
+  .page.cover-page .cover-item.b { font-weight: inherit; } /* h1–h4/p do miolo definem o peso */
+  .page.cover-page .cover-item.title,
+  .page.cover-page .cover-item.subtitle,
+  .page.cover-page .cover-item.h1,
+  .page.cover-page .cover-item.h2,
+  .page.cover-page .cover-item.h3,
+  .page.cover-page .cover-item.h4 { font-weight: 700; }
   .page.editing.cover-page .cover-item:hover { background: color-mix(in srgb, #4E39FF 6%, transparent); }
-  .page.editing.cover-page .cover-item.cover-sel { outline: 2px solid #4E39FF; outline-offset: 3px; border-radius: 2px; }
-  .page.editing.cover-page .cover-item:empty::before { content: attr(data-ph); color: #bbb; }
+  .page.editing.cover-page .cover-item.cover-sel { outline: none; }
+  .page.editing.cover-page .cover-item.cover-sel::after {
+    content: ''; position: absolute; inset: -5px -7px;
+    border: 2px solid color-mix(in srgb, #4E39FF 50%, transparent);
+    border-radius: 8px; pointer-events: none; z-index: 2;
+  }
+  .page.editing.cover-page .cover-item:empty::before,
+  .page.editing.cover-page .cover-item.cover-img-empty::before { content: attr(data-ph); color: #bbb; }
+  /* blocos compostos (tabela/lista/imagem) dentro do envelope da capa */
+  .page.cover-page .cover-item > .fig,
+  .page.cover-page .cover-item > .tbl-wrap,
+  .page.cover-page .cover-item > .b,
+  .page.cover-page .cover-item > .divider { width: 100%; max-width: 100%; }
+  .page.cover-page .cover-item > .divider { margin: 8px 0; }
 
   /* ---------- tipografia do miolo (exata da spec) ---------- */
   .page .b { margin: 0; letter-spacing: -0.01em; outline: none; }
@@ -234,16 +536,27 @@
     font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E;
     padding-left: 12px; position: relative;
   }
-  .page .li.b::before { content: "•"; position: absolute; left: 2px; color: #29E899; }
+  /* data-marker vem do ⋮ (item/subitem) — sempre setado no JS via applyListMarkers.
+     --list-marker-color configurável no ⋮ (padrão aqua Paradigma). */
+  .page .li.b::before {
+    content: attr(data-marker); position: absolute; left: 2px;
+    color: var(--list-marker-color, #29E899);
+  }
   .page h3.b { font-weight: 700; font-size: 16px; line-height: 21px; color: #000; --b-gap: 8px; }
   .page h4.b { font-weight: 700; font-size: 13px; line-height: 17px; color: #000; --b-gap: 6px; }
   .page .ol.b {
     font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E;
     padding-left: 16px; position: relative;
   }
+  /* data-num = "1." / "1.1." / "a." / "•" (subStyle do ⋮); padding-left ajustado no JS */
   .page .ol.b::before {
-    content: attr(data-num); position: absolute; left: 0; color: #29E899;
+    content: attr(data-num); position: absolute; left: 0;
+    color: var(--list-marker-color, #29E899);
     font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  /* subitem ol com estilo "Pontos" — marca como bullet, não tabular */
+  .page .ol.b.ol-as-bullet::before {
+    font-weight: 400; font-variant-numeric: normal;
   }
   .page .divider.b { height: 1px; min-height: 1px; background: #D9D9D9; }
 
@@ -279,15 +592,32 @@
   .page .rimg { position: absolute; left: 0; width: 100%; cursor: grab; }
   .page .rimg.dragging { cursor: grabbing; }
   .page .rimg .drag-badge {
-    position: absolute; top: -14px; left: 0; font-size: 8px; color: #828080;
-    opacity: 0; transition: opacity .1s;
+    position: absolute; top: -16px; left: 0; font-size: 8px; color: #828080;
+    opacity: 0; transition: opacity .18s ease;
+    display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+    line-height: 1; pointer-events: none; z-index: 4;
   }
-  .page.editing .rimg:hover .drag-badge { opacity: 1; }
-  /* travada (cadeado): badge sempre visível, não só no hover — é estado, não dica de gesto */
-  .page.editing .rimg.locked .drag-badge { opacity: 1; color: #4E39FF; }
+  .page .rimg .drag-badge svg { width: 10px; height: 10px; flex-shrink: 0; display: block; }
+  /* solta: "↕ arraste" no hover; travada: só no foco (não no hover) */
+  .page.editing .rimg:not(.locked):hover .drag-badge { opacity: 1; }
+  .page.editing .rimg.locked .drag-badge { color: #4E39FF; }
+  .page.editing .rimg.locked.imgsel .drag-badge,
+  .page.editing .rimg.locked.active-block .drag-badge { opacity: 1; }
+  /* trilha do cadeado: pontilhada no ponto de fixação (topo do .rimg = y da âncora).
+     Comprimento = vão entre as bordas de foco (inset -7px de cada lado):
+     GAP 24 − 7 − 7 = 10px, de left:-17 até left:-7 do .rimg. */
+  .page .rimg .lock-trail {
+    position: absolute; top: 0; left: -17px; width: 10px; height: 0;
+    border-top: 2px dotted #4E39FF; pointer-events: none; z-index: 3;
+    opacity: 0; transition: opacity .18s ease;
+  }
+  .page.editing .rimg.locked.imgsel .lock-trail,
+  .page.editing .rimg.locked.active-block .lock-trail { opacity: .85; }
 
   /* estados de edição */
-  .page.editing .b:hover { background: color-mix(in srgb, #4E39FF 5%, transparent); }
+  /* background-color (não o shorthand background): o shorthand apaga background-image
+     e sumia o zigue-zague da quebra de página no hover. */
+  .page.editing .b:hover { background-color: color-mix(in srgb, #4E39FF 5%, transparent); }
   /* linha vazia ocupa 1 linha (parágrafo em branco é conteúdo); placeholder só no foco */
   .page .b:empty:not(.divider), .page .figtitle:empty, .page figcaption:empty { min-height: 1lh; }
   /* Enter no fim do título/legenda/resumo (diagramacao.js) usa execCommand('insertLineBreak'),
@@ -301,19 +631,54 @@
   .page .figtitle br + br:last-child,
   .page figcaption br + br:last-child,
   .page .idx-resumo br + br:last-child { display: none; }
-  .page.editing .b:empty:focus::before { content: attr(data-ph); color: #bbb; }
+  /* li/ol ficam de fora: o ::before é o marcador (• / 1. / 1.1.) — não pode virar o
+     placeholder "Item". Mesma lógica do checklist (marcador = .ck-box, irmão do texto). */
+  .page.editing .b:empty:focus:not(.li):not(.ol)::before { content: attr(data-ph); color: #bbb; }
   .page.editing .figtitle:empty::before, .page.editing figcaption:empty::before { content: attr(data-ph); color: #bbb; }
-  .page.editing .col-left { outline: 1px dashed color-mix(in srgb,#4E39FF 22%, transparent); outline-offset: 4px; }
-  /* borda no bloco ativo — mostra a quem o menu lateral se refere */
-  .page.editing .b.active-block { outline: 2px solid color-mix(in srgb, #4E39FF 40%, transparent); outline-offset: 3px; border-radius: 2px; }
-  .page.editing .imgsel img { outline: 2px solid #4E39FF; outline-offset: 2px; }
+  /* mesmo border-radius da coluna direita — o outline tracejado acompanha o raio */
+  .page.editing .col-left {
+    border-radius: 4px;
+    outline: 1px dashed color-mix(in srgb,#4E39FF 22%, transparent);
+    outline-offset: 4px;
+  }
+  /* foco = retângulo arredondado afastado do conteúdo, SEM mover o texto.
+     ::after absoluto (inset negativo) desenha o anel fora do box — zero padding/margin
+     no estado ativo, então selecionar/deselecionar não empurra o conteúdo pra baixo.
+     Índice/Resumo: padding permanente na .idx-section + box-shadow inset (sem pulo).
+     .frag tem overflow:clip → anel externo seria cortado; usa inset flush. */
+  /* position:relative só onde ainda é static — .rimg já é absolute (ancora o ::after sozinho) */
+  .page.editing .b.active-block,
+  .page.editing .imgsel,
+  .page.editing .divider.b.divsel,
+  .page.editing .e-pbreak.pbsel {
+    position: relative;
+    outline: none;
+  }
+  .page.editing .rimg.active-block { outline: none; }
+  .page.editing .b.active-block::after,
+  .page.editing .rimg.active-block::after,
+  .page.editing .imgsel::after,
+  .page.editing .divider.b.divsel::after,
+  .page.editing .e-pbreak.pbsel::after {
+    content: '';
+    position: absolute;
+    inset: -5px -7px;
+    border: 2px solid color-mix(in srgb, #4E39FF 50%, transparent);
+    border-radius: 8px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .page.editing .frag.active-block {
+    outline: none;
+    border-radius: 8px;
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, #4E39FF 50%, transparent);
+  }
+  .page.editing .idx-section.idx-sel {
+    outline: none;
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, #4E39FF 50%, transparent);
+  }
   /* divisor: clicável e com borda roxa quando selecionado */
   .page.editing .divider.b { cursor: pointer; }
-  .page.editing .divider.b.divsel { outline: 2px solid #4E39FF; outline-offset: 3px; border-radius: 2px; }
-  /* quebra de página: mesma borda roxa de seleção do divisor (clicável desde o mousedown
-     handler acima — antes não entrava na lista de closest() e Backspace não achava nada
-     pra remover; ver comentário "bug" no mousedown). */
-  .page.editing .e-pbreak.pbsel { outline: 2px solid #4E39FF; outline-offset: 3px; border-radius: 2px; }
 
   /* coluna direita: no hover, uma coluna tracejada (mesma altura da esquerda) com um "+" ao centro */
   .page.editing .col-right { border-radius: 4px; transition: background .12s; }
@@ -343,59 +708,138 @@
   #fmtbar button:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); color: var(--ink); }
   #fmtbar button.on { color: var(--ink); background: color-mix(in srgb, var(--violet) 34%, transparent); }
   #fmtbar .sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--hair-strong); }
-  /* dropdown de tipo de bloco — mesma "moldura" visual dos botões (transparente + hover),
-     mas sem appearance:none: a setinha nativa do <select> já é affordance suficiente aqui,
-     e ficar com o combo nativo do SO é mais simples/acessível que desenhar um custom. */
+  /* dropdown de tipo de bloco — mesma "moldura" visual dos botões (transparente + hover).
+     Reseta o select global (altura fixa + chevron custom de paradigma.css): aqui o combo
+     nativo do SO encaixa melhor na fmtbar compacta. */
   #fmtbar select.typeselect {
     border: 0; background: transparent; color: var(--ink);
     font: inherit; font-size: .78rem; font-weight: 600;
     padding: .28rem .3rem; border-radius: 5px; cursor: pointer;
+    height: auto; background-image: none;
+    -webkit-appearance: menulist; appearance: auto;
   }
   #fmtbar select.typeselect:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
   /* em legenda/título de imagem não faz sentido trocar tipo de bloco */
   #fmtbar.caption-mode .typeselect, #fmtbar.caption-mode .sep { display: none; }
 
   /* menus flutuantes: adicionar imagem (clique na coluna direita) + editar imagem selecionada */
-  #addImgMenu, #imgPanel, #coverPanel, #downloadMenu, #blockStylePanel {
+  #addImgMenu, #imgPanel, #tablePanel, #coverPanel, #logoPanel, #downloadMenu, #blockStylePanel, #idxPanel, #resumoPanel {
     position: fixed; z-index: 40; display: grid; gap: .55rem; width: 232px;
     padding: .7rem; border: 1px solid var(--hair-strong); border-radius: 10px;
     background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
     box-shadow: 0 16px 50px -16px #000;
   }
-  #addImgMenu[hidden], #imgPanel[hidden], #coverPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden] { display: none; }
+  #addImgMenu[hidden], #imgPanel[hidden], #tablePanel[hidden], #coverPanel[hidden], #logoPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden],
+  #idxPanel[hidden], #resumoPanel[hidden] { display: none; }
   /* menu do botão "Baixar" (PDF/ZIP) — mesmo desenho de botão icone+label do .fieldbtn,
      só que gap menor (é um menu, não um formulário) e sem borda própria por botão. */
-  #downloadMenu { gap: .2rem; padding: .35rem; }
+  #downloadMenu { gap: .2rem; padding: .35rem; min-width: 220px; }
   #downloadMenu button {
     display: flex; align-items: center; gap: .55rem; text-align: left; width: 100%;
     padding: .5rem .55rem; border: 0; border-radius: 6px;
     background: transparent; color: var(--ink); cursor: pointer; font-size: .82rem; font-stretch: 85%;
   }
   #downloadMenu button svg { width: 16px; height: 16px; flex: none; color: var(--lilac); }
+  #downloadMenu button .dl-label { flex: 1; min-width: 0; }
   #downloadMenu button:hover { background: color-mix(in srgb, var(--violet) 16%, transparent); }
+  #downloadMenu .dl-badge {
+    flex: none; margin-left: auto;
+    font-size: .6rem; font-weight: 600; font-stretch: 85%;
+    letter-spacing: .04em; text-transform: uppercase;
+    padding: .18rem .42rem; border-radius: 999px; line-height: 1.1;
+    color: var(--lilac);
+    background: color-mix(in srgb, var(--lilac) 16%, transparent);
+  }
   /* ação indisponível no contexto atual (ex.: travar numa página sem bloco de texto próprio) —
      o title= explica o porquê no hover */
   #imgPanel button:disabled { opacity: .4; cursor: default; }
 
-  /* botões de posição da imagem (ícone + label). .fieldbtn (trilha H, t1) reusa as MESMAS
-     declarações via seletor combinado — botões Título/Legenda do painel de imagem, mesmo visual
-     mas fora do grupo (não são mutuamente exclusivos, por isso sem os estados .on). */
-  .placebtns { display: grid; gap: .3rem; margin-top: .3rem; }
-  .placebtns button, .fieldbtn {
+  /* .fieldbtn — botões Título/Legenda/Substituir/Remover do painel de imagem (e afins). Posição usa
+     .segment.iconseg (widthSeg), não mais a lista vertical .placebtns. */
+  .fieldbtn {
     display: flex; align-items: center; gap: .5rem; text-align: left;
     padding: .35rem .5rem; border: 1px solid var(--hair); border-radius: var(--r);
     background: transparent; color: var(--muted); cursor: pointer; font-size: .76rem; font-stretch: 85%;
   }
-  .placebtns button svg, .fieldbtn svg { width: 16px; height: 16px; flex: none; color: var(--lilac); }
-  .placebtns button:hover, .fieldbtn:hover { border-color: var(--hair-strong); color: var(--ink); }
-  .placebtns button.on { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
-  .placebtns button.on svg { color: var(--ink); }
+  .fieldbtn svg { width: 16px; height: 16px; flex: none; color: var(--lilac); }
+  .fieldbtn:hover { border-color: var(--hair-strong); color: var(--ink); }
+  /* botão "Remover": texto + trash-outline na mesma cor vermelha */
+  .fieldbtn.danger { color: #CE5249; }
+  .fieldbtn.danger svg { color: inherit; }
+  .fieldbtn.danger:hover {
+    border-color: color-mix(in srgb, #CE5249 40%, var(--hair));
+    color: #CE5249;
+    background: color-mix(in srgb, #CE5249 12%, transparent);
+  }
+  .fieldbtn.danger:hover svg { color: inherit; }
 
-  /* alça de arraste dos blocos (estilo Notion) + linha de solta */
-  #bhandle { position: fixed; z-index: 45; width: 16px; height: 18px; display: flex; align-items: center; justify-content: center;
-    color: var(--muted); cursor: grab; font-size: 12px; border-radius: 4px; user-select: none; }
-  #bhandle:hover { background: color-mix(in srgb, var(--lilac) 18%, transparent); color: var(--ink); }
-  #bhandle[hidden] { display: none; }
+  /* alça + "+" (Notion). z-index abaixo dos popovers (fmtbar 30, painéis 40…).
+     place-items + line-height:0 = ícone perfeitamente centrado no botão.
+     left/top via JS: botões alinhados entre si e ao eixo vertical do bloco. */
+  #bhandle, #badd {
+    position: fixed; z-index: 20;
+    width: 16px; height: 16px;
+    display: grid; place-items: center;
+    color: #9a9a9a; border-radius: 3px; user-select: none;
+    transform: translateY(-50%);
+    border: 0; padding: 0; margin: 0; background: transparent;
+    line-height: 0; box-sizing: border-box;
+  }
+  #bhandle { cursor: grab; }
+  #bhandle svg, #badd svg {
+    width: 12px; height: 12px; display: block;
+    flex: none; pointer-events: none;
+  }
+  #badd { cursor: pointer; }
+  #bhandle:hover, #badd:hover {
+    background: color-mix(in srgb, #000 10%, transparent);
+    color: #23292F;
+  }
+  #bhandle[hidden], #badd[hidden] { display: none; }
+
+  /* menu do dragger: Duplicar / Remover (ícone + rótulo) */
+  #bmenu {
+    position: fixed; z-index: 46; min-width: 10rem;
+    display: grid; gap: 1px; padding: .3rem;
+    border: 1px solid var(--hair-strong); border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+    box-shadow: 0 12px 40px -12px #000;
+  }
+  #bmenu[hidden] { display: none; }
+  #bmenu button {
+    display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left;
+    padding: .42rem .55rem; border: 0; border-radius: 5px;
+    background: transparent; color: var(--ink); cursor: pointer;
+    font-size: .8rem; font-stretch: 85%;
+  }
+  #bmenu button .ico { display: grid; place-items: center; flex: none; width: 16px; height: 16px; line-height: 0; }
+  #bmenu button svg { width: 16px; height: 16px; display: block; }
+  #bmenu button:hover { background: color-mix(in srgb, var(--violet) 16%, transparent); }
+  #bmenu button.danger { color: #CE5249; }
+  #bmenu button.danger:hover { background: color-mix(in srgb, #CE5249 16%, transparent); }
+
+  /* row "+" no fim da coluna esquerda — aparece no hover da coluna (como o + da direita) */
+  .page.editing .col-add {
+    display: flex; align-items: center; margin-top: 6px;
+    min-height: 22px; opacity: 0; transition: opacity .12s;
+  }
+  .page.editing .col-left:hover > .col-add,
+  .page.editing .col-add:focus-within { opacity: 1; }
+  /* capa/contracapa: mesmo "+" do fim da coluna (adiciona bloco de texto livre) */
+  .page.editing.cover-page .cover-area > .col-add {
+    position: absolute; left: 0; right: 0; bottom: 0; margin-top: 0;
+  }
+  .page.editing.cover-page .cover-area:hover > .col-add,
+  .page.editing.cover-page .cover-area > .col-add:focus-within { opacity: 1; }
+  .page.editing .col-add-btn {
+    flex: 1; height: 22px; display: flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 4px; padding: 0;
+    background: transparent; color: #4E39FF; cursor: pointer;
+    font-size: 18px; font-weight: 300; line-height: 1; opacity: .5;
+  }
+  .page.editing .col-add-btn:hover {
+    background: color-mix(in srgb, #4E39FF 8%, transparent); opacity: 1;
+  }
   #dropline { position: fixed; z-index: 44; height: 2px; background: #4E39FF; border-radius: 2px; pointer-events: none; }
   #dropline[hidden] { display: none; }
   body.grabbing, body.grabbing * { cursor: grabbing !important; }
@@ -431,6 +875,67 @@
 
   .empty { color: var(--muted); font-size: .85rem; margin: 4rem auto; text-align: center; max-width: 34ch; line-height: 1.6; }
 
+  /* ===================== toasts (abrir projeto, etc.) ===================== */
+  #toastHost {
+    position: fixed; right: 1rem; bottom: 1rem; z-index: 200;
+    display: flex; flex-direction: column-reverse; gap: .55rem;
+    width: min(380px, calc(100vw - 2rem));
+    pointer-events: none;
+  }
+  .toast {
+    pointer-events: auto;
+    display: grid; gap: .45rem;
+    padding: .7rem .8rem;
+    border-radius: 10px;
+    border: 1px solid var(--hair-strong);
+    background: color-mix(in srgb, var(--ground) 92%, transparent);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 16px 40px -16px #000;
+    font-size: .82rem; line-height: 1.4;
+    /* forwards: mantém opacity:1 no fim — sem isso, em alguns hosts a animação
+       podia parecer "sumir" se o paint interrompesse o keyframe. */
+    animation: toast-in .18s ease-out forwards;
+  }
+  .toast.is-out { animation: toast-out .16s ease-in forwards; }
+  .toast-body { min-width: 0; display: grid; gap: .25rem; }
+  .toast-title { font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+  .toast-detail {
+    color: var(--muted); font-size: .74rem; font-stretch: 90%;
+    white-space: pre-wrap; word-break: break-word; max-height: 12rem; overflow: auto;
+  }
+  .toast-actions {
+    display: flex; gap: .4rem; justify-content: flex-end; align-items: center;
+    flex-wrap: wrap;
+  }
+  .toast-actions button {
+    font-size: .74rem; font-stretch: 90%;
+    padding: .32rem .6rem; border-radius: 7px; cursor: pointer;
+  }
+  .toast-report {
+    border: 1px solid color-mix(in srgb, var(--violet) 50%, var(--hair-strong));
+    background: color-mix(in srgb, var(--violet) 18%, transparent);
+    color: var(--ink);
+  }
+  .toast-report:hover {
+    background: color-mix(in srgb, var(--violet) 28%, transparent);
+  }
+  .toast-x {
+    border: 1px solid var(--hair);
+    background: transparent; color: var(--muted);
+  }
+  .toast-x:hover { color: var(--ink); background: color-mix(in srgb, var(--lilac) 14%, transparent); }
+  .toast.ok { border-color: color-mix(in srgb, var(--mint) 45%, var(--hair-strong)); }
+  .toast.ok .toast-title { color: var(--mint); }
+  .toast.err { border-color: color-mix(in srgb, #ff6b6b 50%, var(--hair-strong)); }
+  .toast.err .toast-title { color: #ff8f8f; }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes toast-out {
+    to { opacity: 0; transform: translateY(6px); }
+  }
+
   /* ===================== impressão → PDF ===================== */
   @media print {
     @page { size: 595px 842px; margin: 0; }
@@ -440,33 +945,56 @@
     .stage { padding: 0; background: #fff; display: block; overflow: visible; }
     #pages { transform: none !important; gap: 0; }
     .page { box-shadow: none; break-after: page; }
+    #toastHost { display: none !important; }
     .page.editing .b:hover, .page.editing .col-left { background: none; outline: none; }
-    .page.editing .imgsel img, .page.editing .b.active-block, .page.editing .divider.b.divsel { outline: none; }
+    .page.editing .b.active-block, .page.editing .frag.active-block, .page.editing .rimg.active-block,
+    .page.editing .imgsel, .page.editing .divider.b.divsel, .page.editing .e-pbreak.pbsel,
+    .page.editing .idx-section.idx-sel, .page.cover-page .cover-item.cover-sel,
+    .page.cover-page .cover-logo-hit.cover-sel {
+      outline: none; box-shadow: none;
+    }
+    .page.editing .b.active-block::after, .page.editing .rimg.active-block::after,
+    .page.editing .imgsel::after, .page.editing .divider.b.divsel::after,
+    .page.editing .e-pbreak.pbsel::after, .page.cover-page .cover-item.cover-sel::after,
+    .page.cover-page .cover-logo-hit.cover-sel::after {
+      content: none; display: none;
+    }
+    /* padding permanente do editor some no PDF */
+    .page .idx-section { padding: 0; }
     .page.editing .col-right::after { display: none; }
-    .page.cover-page .cover-item.cover-sel { outline: none; }
-    .drag-badge, #fmtbar, #addImgMenu, #imgPanel, #coverPanel, #downloadMenu, #blockStylePanel, #chartModal, .snap-guide, #bhandle, #dropline { display: none !important; }
+    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #chartModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
     #linkedit { display: none !important; }
   }
 
-  /* trilha C: linha de checkbox no painel de imagem (recorte de margem branca) */
-  .checkrow { display: flex; align-items: center; gap: .4rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); cursor: pointer; }
-  .checkrow input[type="checkbox"] { flex: none; }
   /* trilha D: logo fixo da Paradigma no cabeçalho/rodapé da capa e contracapa.
      Faixa absoluta nas mesmas margens do cover-area (48/40); o justify alinha o
-     svg esq/centro/dir. pointer-events:none pra nunca roubar o clique dos textos. */
+     svg esq/centro/dir. A faixa inteira fica pointer-events:none pra não roubar
+     clique dos textos; só o .cover-logo-hit (em volta do svg) recebe clique no
+     modo edição — borda roxa de foco igual aos cover-item. */
   .page.cover-page .cover-logo { position: absolute; left: 48px; right: 48px; display: flex; align-items: center; z-index: 3; pointer-events: none; }
   .page.cover-page .cover-logo.lg-header { top: 40px; }
   .page.cover-page .cover-logo.lg-footer { bottom: 40px; }
   .page.cover-page .cover-logo svg { display: block; }
+  .page.cover-page .cover-logo .cover-logo-hit { position: relative; display: inline-flex; line-height: 0; }
+  .page.editing.cover-page .cover-logo .cover-logo-hit { pointer-events: auto; cursor: pointer; }
+  .page.editing.cover-page .cover-logo .cover-logo-hit:hover { background: color-mix(in srgb, #4E39FF 6%, transparent); border-radius: 6px; }
+  .page.editing.cover-page .cover-logo .cover-logo-hit.cover-sel::after {
+    content: ''; position: absolute; inset: -5px -7px;
+    border: 2px solid color-mix(in srgb, #4E39FF 50%, transparent);
+    border-radius: 8px; pointer-events: none;
+  }
   /* trilha D: picker do logo na sidebar (mesmo desenho dos botões de tipo/posição). 2 colunas
      (não 4): a sidebar é estreita, e cada célula mais larga dá mais espaço pro DESENHO do logo
-     (Completo/Nome são bem mais largos que Ícone — 4 colunas espremia demais). */
-  .logopick { display: grid; grid-template-columns: repeat(2, 1fr); gap: .3rem; margin-top: .3rem; }
+     (Completo/Nome são bem mais largos que Ícone — 4 colunas espremia demais).
+     min-width:0 em cada célula evita o SVG/conteúdo estourar a largura do painel (232px no
+     #logoPanel e sidebar estreita). */
+  .logopick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .3rem; margin-top: .3rem; width: 100%; }
   /* altura FIXA (não min-height): linhas de grid sem grid-template-rows se auto-dimensionam cada
      uma pelo próprio conteúdo mais alto, então "Ícone" (1 linha) e "Nome" (ícone+legenda, 2 linhas)
      acabavam em linhas de altura diferente mesmo com stretch. Fixando a altura em TODOS os botões,
      as duas linhas ficam iguais incondicionalmente — não é coincidência de conteúdo. */
-  .logopick button { height: 76px; display: flex; align-items: center; justify-content: center;
+  .logopick button { height: 76px; min-width: 0; width: 100%; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
     padding: .3rem; border: 1px solid var(--hair); border-radius: var(--r);
     background: transparent; color: var(--muted); cursor: pointer; font-size: .72rem; font-stretch: 85%; }
   .logopick button:hover { border-color: var(--hair-strong); color: var(--ink); }
@@ -496,22 +1024,28 @@
   }
   #linkedit button:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); color: var(--ink); }
   #linkedit #linkApply { color: var(--ink); }
-  /* trilha E: marcas de quebra de página (só existem com editing=true → somem do PDF de graça,
-     já que exportPagesHtml() renderiza com editing=false; o @media print abaixo é o cinto extra) */
-  .page .e-autobreak {                       /* quebra AUTOMÁTICA (transbordo): só informa, verde */
-    position: absolute; left: 0; right: 0; bottom: 0; height: 0;
-    border-top: 1px dashed #29E899; pointer-events: none;
+  /* "Remover" link: trash-outline + texto vermelhos */
+  #linkedit #linkRemove {
+    display: inline-flex; align-items: center; gap: .35rem; color: #CE5249;
   }
-  .page .e-autobreak::after {
-    content: attr(data-label); position: absolute; right: 0; top: 2px;
-    font-size: 8px; font-weight: 700; letter-spacing: .02em; color: #29E899;
+  #linkedit #linkRemove svg { width: 14px; height: 14px; flex: none; color: inherit; }
+  #linkedit #linkRemove:hover {
+    background: color-mix(in srgb, #CE5249 16%, transparent); color: #CE5249;
   }
-  .page .e-pbreak {                          /* quebra MANUAL: linha em zigue-zague, arrastável */
+  /* trilha E: quebra MANUAL (só com editing=true → some do PDF; @media print é cinto extra) */
+  .page .e-pbreak {                          /* linha em zigue-zague, arrastável */
     height: 10px; display: flex; align-items: center; justify-content: center;
     cursor: grab; user-select: none;
     /* zigue-zague tileável (SVG em data URI) — currentColor não resolve dentro de um data:
        URI de background-image (é um recurso externo, não herda variáveis da página), então
        a cor #4E39FF vem cravada direto no SVG. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='10' viewBox='0 0 16 10'%3E%3Cpolyline points='0,2 4,8 8,2 12,8 16,2' fill='none' stroke='%234E39FF' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: repeat-x; background-position: center; background-size: 16px 10px;
+  }
+  /* hover/seleção: mantém o zigue-zague (só tinge o fundo; nunca zera background-image) */
+  .page.editing .e-pbreak.b:hover,
+  .page.editing .e-pbreak.b.pbsel,
+  .page.editing .e-pbreak.b.active-block {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='10' viewBox='0 0 16 10'%3E%3Cpolyline points='0,2 4,8 8,2 12,8 16,2' fill='none' stroke='%234E39FF' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: repeat-x; background-position: center; background-size: 16px 10px;
   }
@@ -522,9 +1056,14 @@
     font-size: 7.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
     color: #4E39FF; pointer-events: none;
   }
-  @media print { .page .e-autobreak, .page .e-pbreak { display: none !important; } }
-  /* trilha B (t7): checklist — envelope [checkbox][texto], alinhado como a lista de pontos */
-  .page .check.b { display: flex; align-items: flex-start; gap: 6px; font-size: 10px; line-height: 14px; color: #4E4E4E; }
+  @media print { .page .e-pbreak { display: none !important; } }
+  /* trilha B (t7): checklist — envelope [checkbox][texto], alinhado como a lista de pontos.
+     --ck-color / --ck-done-opacity vêm do estilo do tipo (menu ⋮) via inline no envelope. */
+  .page .check.b {
+    display: flex; align-items: flex-start; gap: 6px;
+    font-size: 10px; line-height: 14px; color: #4E4E4E;
+    --ck-color: #29E899; --ck-done-opacity: 0.55;
+  }
   /* trilha G (bug): span.ck-box+SVG no lugar do input[type=checkbox] nativo — o nativo
      renderiza a caixa vazia com borda/preenchimento PRETO do SO em vários browsers/impressão.
      SVG com fill/stroke puro (sem background-color) imprime igual em tela e PDF, sem precisar
@@ -536,23 +1075,32 @@
   .page .check.b.checked .ck-box .ck-empty { display: none; }
   .page .check.b.checked .ck-box .ck-filled { display: block; }
   .page .check.b .ck-txt { flex: 1; min-width: 0; outline: none; }
-  .page .check.b.checked .ck-txt { color: #9A9A9A; }   /* trilha G (bug): sem risco — só acinzentado (era text-decoration:line-through) */
+  /* item marcado: mesma cor de texto, só opacidade (configurável no ⋮ do Checklist) */
+  .page .check.b.checked .ck-txt { opacity: var(--ck-done-opacity); }
   .page .ck-txt:empty { min-height: 1lh; }
   .page.editing .ck-txt:empty:focus::before { content: attr(data-ph); color: #bbb; }
 
-  /* trilha H (t2): "Posição"/"Coluna"/"Logo da Paradigma" são <div class="field"> (agrupam um
-     controle composto — botões, grid — não um único input, então <label> teria semântica errada)
+  /* trilha H (t2): "Posição"/"Logo da Paradigma"/"Largura" são <div class="field"> (agrupam um
+     controle composto — segment, grid — não um único input, então <label> teria semântica errada)
      — o global label.field (paradigma.css) só casa com a TAG label, então não pegava. Replica a
      MESMA declaração aqui: "aside .field" cobre TODOS os divs assim dentro da sidebar (inclusive
-     #blockcol) sem tocar no seletor global, que os popovers flutuantes e os gráficos também usam. */
-  #imgPanel .field, #coverPanel .field, aside .field { display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted); }
+     #blockcol); cada popover flutuante precisa do próprio seletor (idx/resumo/blockStyle inclusos —
+     sem isso "Largura" no #idxPanel caía no estilo de texto normal, diferente de "Cores" em <label>). */
+  #imgPanel .field, #tablePanel .field, #coverPanel .field, #logoPanel .field,
+  #idxPanel .field, #resumoPanel .field, #blockStylePanel .field, aside .field {
+    display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted);
+  }
   #blockcol { margin-top: .5rem; }
   #blockcol[hidden] { display: none; }
+  /* cadeado do bloco na coluna direita (sidebar Conteúdo) — mesmo .fieldbtn do painel de imagem */
+  #blocklock { width: 100%; margin-top: .35rem; }
+  #blocklock[hidden] { display: none; }
+  #blocklock:disabled { opacity: .4; cursor: default; }
   /* bug pré-existente: quando um seletor do AUTOR define display (grid/flex), ele vence o
      [hidden] da UA mesmo com especificidade igual — sem esta linha, .grid2[data-logoopts] (Cor do
      logo/Tamanho) e os campos de fundo (data-bgxform) ficavam SEMPRE visíveis, hidden=true e tudo.
      Mesmo padrão do #blockcol[hidden] acima — só faltava replicar aqui. */
-  [data-logoopts][hidden], [data-bgxform][hidden], .bgcard[hidden] { display: none; }
+  [data-logoopts][hidden], [data-bgxform][hidden], .bgactions[hidden] { display: none; }
   /* "Logo da Paradigma" no mesmo peso visual de um rótulo de switcher (ex.: "Mostrar Capa") —
      não o cinza/pequeno padrão de rótulo de campo. Só o TEXTO muda; o <div class="field"> ao
      redor continua o de sempre (empilha o texto sobre o grupo, via aside .field acima). */
@@ -562,16 +1110,42 @@
      fundo em pílula + estado selecionado violeta, só falta centralizar o svg no lugar do texto. */
   .segment.iconseg button { display: flex; align-items: center; justify-content: center; }
   .segment.iconseg svg { width: 16px; height: 16px; display: block; }
-  /* trilha H (t3): linha "rótulo + valor" do slider (Cantos raio / Tamanho) — valor px empurrado
-     pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de baixo, como
-     já era). (t4) botão de reset discreto colado ao lado do valor, dentro do mesmo grupo à direita. */
-  #imgPanel .field-row, #coverPanel .field-row, #blockStylePanel .field-row { display: flex; justify-content: space-between; align-items: baseline; }
-  #imgPanel .field-val, #coverPanel .field-val, #blockStylePanel .field-val { display: inline-flex; align-items: center; gap: .3rem; }
-  #imgPanel .resetbtn, #coverPanel .resetbtn, #blockStylePanel .resetbtn {
+  /* trilha H (t3): linha "rótulo + valor" do slider (Cantos raio / Tamanho / Logo) — valor
+     empurrado pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de
+     baixo, como já era). (t4) botão de reset discreto colado ao lado do valor, no mesmo grupo.
+     `aside` cobre o slider de tamanho do Logo da Paradigma na sidebar esquerda (capa/contracapa). */
+  #imgPanel .field-row, #tablePanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #imgPanel .field-val, #tablePanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
+  /* valor em px digitável no lugar (Cantos raio): sem <input>, sem empurrar layout */
+  #imgPanel .field-edit {
+    cursor: text; outline: none; border-radius: 3px; min-width: 1.2ch;
+    font-variant-numeric: tabular-nums; padding: 0 1px; margin: 0 -1px;
+  }
+  #imgPanel .field-edit:hover { color: var(--ink); }
+  #imgPanel .field-edit:focus {
+    background: color-mix(in srgb, var(--violet) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--violet) 45%, transparent);
+  }
+  #imgPanel .resetbtn, #coverPanel .resetbtn, #logoPanel .resetbtn, #blockStylePanel .resetbtn, aside .resetbtn {
     border: 0; background: transparent; padding: 0 .1rem; margin: 0;
     color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
   }
-  #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover { color: var(--ink); }
+  #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #logoPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover, aside .resetbtn:hover { color: var(--ink); }
+  /* picker de símbolo da lista de pontos (menu ⋮) */
+  #blockStylePanel .markerpick {
+    display: flex; flex-wrap: wrap; gap: .3rem;
+  }
+  #blockStylePanel .markerpick button {
+    width: 28px; height: 28px; padding: 0; border-radius: 6px;
+    border: 1px solid var(--hair-strong); background: transparent; color: var(--ink);
+    font-size: .95rem; line-height: 1; cursor: pointer; display: grid; place-items: center;
+  }
+  #blockStylePanel .markerpick button:hover { border-color: var(--lilac); }
+  #blockStylePanel .markerpick button[aria-selected="true"] {
+    border-color: var(--violet); color: var(--ink);
+    background: color-mix(in srgb, var(--violet) 16%, transparent);
+  }
+  #blockStylePanel .segment[data-a="subStyle"] button { font-size: .72rem; }
 
   /* bloco Callout (estilo Notion) — caixa arredondada com fundo tingido (cor ESCOLHIDA pelo
      usuário via swatch, b.color — DEFAULT_CALLOUT_COLOR se nunca escolheu) + ícone (emoji
@@ -586,11 +1160,21 @@
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .page .callout .callout-row { display: flex; align-items: flex-start; gap: 8px; }
-  .page .callout .co-icon { flex: none; width: 14px; font-size: 11px; line-height: 14px; text-align: center; outline: none; color: #4E4E4E; }
-  .page .callout .co-icon svg { display: block; }
+  .page .callout .co-icon { flex: none; width: 14px; font-size: 11px; line-height: 14px; text-align: center; outline: none; color: #94A3B8; }
+  .page .callout .co-icon svg { display: block; width: 14px; height: 14px; }
+  .page .callout .co-icon .co-icon-txt { font-size: 8px; font-weight: 700; letter-spacing: -0.02em; }
+  /* sem ícone: texto ocupa toda a largura (sem gap/coluna do ícone) */
+  .page .callout.no-icon .callout-row { gap: 0; }
+  .page .callout.no-icon .co-icon { display: none; }
   .page .callout .co-txt {
     flex: 1; min-width: 0; font-weight: 400; font-size: 10px; line-height: 14px;
     color: #4E4E4E; text-align: justify; outline: none;
+  }
+  /* chip de fundo do callout: branco (papel) sob a cor com alpha */
+  #calloutBar .co-bgswatch.paper {
+    background-image: linear-gradient(var(--sp-ov, transparent), var(--sp-ov, transparent)),
+      linear-gradient(#ffffff, #ffffff) !important;
+    background-color: #fff;
   }
   .page .callout .co-txt:empty { min-height: 1lh; }
   .page.editing .callout .co-txt:empty:focus::before { content: attr(data-ph); color: #bbb; }
@@ -636,34 +1220,23 @@
   .ico-pop-grid button:hover { border-color: var(--hair-strong); color: var(--ink); }
   .ico-pop-grid button.on { border-color: var(--violet); color: var(--ink); background: color-mix(in srgb, var(--violet) 16%, transparent); }
 
-  /* trilha E: zoom migrou pro header (coluna do meio, sempre centralizado) — herda o estilo
-     genérico de input/select/button (paradigma.css); header e aside usam o MESMO fundo escuro
-     (--ground, herdado do body, confirmado no CSS — não há tema claro na sidebar), então nada
-     de cor precisa mudar. */
-  header select#zoom { font-size: .82rem; }
+
 
   /* trilha D: sem backend (GitHub Pages), o gate esconde "Gráfico" e "Linha do
      tempo" do menu de Adicionar Imagem (ver gateChartByBackend em
      diagramacao.js) — sem isso a grade deixa buracos no lugar dos escondidos */
   #addImgMenu .am-choices:has(button[data-opt="chart"][hidden]) { grid-template-columns: 1fr; }
 
-  /* trilha A (t2.9): "Sem fundo" vira botão-ícone de lixeira — só existe no DOM com
-     texto/label nenhum (title= cobre a11y); visibilidade (hidden) é setada no JS
-     (syncSpecialUI) conforme state.doc[cover|back].bg != null. */
-  [data-rmbg] { display: inline-flex; align-items: center; justify-content: center; padding: .42rem .55rem; }
-  [data-rmbg] svg { width: 14px; height: 14px; display: block; }
-  [data-rmbg][hidden] { display: none; }
-  /* card com prévia da imagem de fundo (capa/contracapa) — substitui o botão "Imagem de fundo"
-     assim que existe uma imagem selecionada; [data-rmbg] mora dentro, mesmo ícone/comportamento
-     de antes, só que colado à prévia em vez de solto ao lado do botão de arquivo. */
-  .bgcard { display: flex; align-items: center; gap: .55rem; padding: .35rem .4rem .35rem .35rem;
-    border: 1px solid var(--hair); border-radius: var(--r); background: color-mix(in srgb, var(--lilac) 4%, transparent); }
-  .bgcard img { width: 34px; height: 46px; object-fit: cover; border-radius: 4px; flex: none; background: #000; }
-  .bgcard [data-rmbg] { margin-left: auto; }
+  /* ações do fundo (capa/contracapa) com imagem selecionada: Substituir + Remover
+     inline, mesmo .fieldbtn / .fieldbtn.danger do popover de imagem. .filebtn no
+     Substituir = input file absoluto cobrindo o botão (mesmo truque do "Selecionar"). */
+  .bgactions { display: flex; gap: .4rem; }
+  .bgactions .fieldbtn { flex: 1; justify-content: center; min-width: 0; }
   /* trilha A (t3.1): ícone real do logo (via logoPickSvg) no lugar do texto Ícone/
      Completo/Nome — svg já traz fill="currentColor" nos paths, herda a cor do botão
-     (--muted / --ink em aria-pressed) de graça; só precisa centralizar. */
-  .logopick button svg { display: block; margin: 0 auto; }
+     (--muted / --ink em aria-pressed) de graça; só precisa centralizar.
+     max-width:100% segura o desenho largo (Completo/Nome) dentro da célula do grid. */
+  .logopick button svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   /* trilha A (t2.10): tooltip do "Índice + Resumo" — ícone de info empurrado pro fim da linha
      do <summary> (mesmo truque do margin-left:auto de .blocktypes button .sc). Listener no JS
      faz preventDefault no click do ícone pra não togglar o <details> junto.
@@ -671,6 +1244,7 @@
      <button> dentro de <summary> é aninhamento de conteúdo interativo que o Chrome trata de
      forma inconsistente pro hover-tooltip nativo (às vezes nunca dispara). ::after é síncrono e
      não depende do temporizador/heurística nenhuma do navegador. */
+  /* sum-info já herda flex do summary; só reforça alinhamento do ⓘ */
   summary.sum-info { display: flex; align-items: center; }
   .infoicon {
     position: relative; margin-left: auto; border: 0; background: none; padding: 0 0 0 .4rem;
@@ -693,24 +1267,22 @@
 <body>
 <header>
   <div class="hleft">
+    <button type="button" id="btnSidebar" title="Mostrar ou esconder o menu" aria-label="Mostrar ou esconder o menu lateral" aria-controls="sidebar" aria-pressed="true"></button>
     <h1>Diagramador</h1>
     <span class="crumb">Gerador de Relatórios · Paradigma</span>
   </div>
-  <!-- trilha E: zoom saiu do details "Cabeçalho & rodapé" (sidebar) e mora aqui agora; mesmo
-       id (#zoom) — o listener em diagramacao.js busca por id, não por posição. Fora da <nav>
-       (que fica na faixa da direita) pra poder ficar na coluna do MEIO do grid do header e não
-       se deslocar conforme o texto à esquerda ou os botões à direita mudam de tamanho. -->
-  <!-- ícone de lupa deixa claro que é zoom (não outro dropdown qualquer) — precisa de um
-       wrapper: não dá pra colocar SVG DENTRO de um <select> nativo, então o ícone é um irmão
-       posicionado por cima, com pointer-events:none (o clique atravessa pro select). -->
+  <!-- trilha E: zoom no header. Fit (ion-icon expand) + botão % abre popover com slider 10–200%. -->
   <div class="zoomwrap">
-    <svg class="zoomico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
-    <select id="zoom" title="Zoom da visualização">
-      <option value="fit" selected>Ajustar</option>
-      <option value="1">100%</option>
-      <option value="0.75">75%</option>
-      <option value="0.5">50%</option>
-    </select>
+    <button type="button" id="zoomFit" title="Ajustar à largura" aria-label="Ajustar zoom à largura" aria-pressed="true"></button>
+    <button type="button" id="zoomPct" title="Zoom da visualização" aria-haspopup="dialog" aria-expanded="false" aria-controls="zoomPop">
+      <span id="zoomPctLabel">100%</span>
+      <svg class="zoom-chev" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+  <div id="zoomPop" hidden>
+    <label class="field"><span class="field-row">Zoom <span class="field-val" id="zoomPopVal">100%</span></span>
+      <input type="range" id="zoomRange" min="10" max="200" step="1" value="100" data-snaps="10,50,75,100,150,200">
+    </label>
   </div>
   <nav>
     <button id="btnUndo" title="Desfazer (⌘Z)" disabled>↩︎</button>
@@ -722,33 +1294,37 @@
      reabre pelo "Abrir .zip") — mesmo padrão de popover flutuante (position:fixed, JS
      posiciona) do #addImgMenu/#imgPanel/#coverPanel. -->
 <div id="downloadMenu" hidden>
-  <button type="button" data-dl="pdf"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5V4.5H12.5"/></svg><span>PDF</span></button>
-  <button type="button" data-dl="zip"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5V4.5H12.5"/><path d="M7 1.5v2M7 5v1.2M7 7.7v1.2M7 10.4v1.2"/></svg><span>ZIP (projeto editável)</span></button>
+  <button type="button" data-dl="pdf"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5V4.5H12.5"/></svg><span class="dl-label">PDF</span></button>
+  <button type="button" data-dl="zip" title="Projeto editável (.pdgm.zip)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5V4.5H12.5"/><path d="M7 1.5v2M7 5v1.2M7 7.7v1.2M7 10.4v1.2"/></svg><span class="dl-label">ZIP</span><span class="dl-badge">Projeto</span></button>
 </div>
 
 <main>
-  <aside>
+  <aside id="sidebar">
+    <div class="sidebar-panel">
     <div class="segment" id="segment" role="tablist">
-      <button data-seg="documento" aria-selected="true">Documento</button>
+      <button data-seg="documento" aria-selected="true">Configurações</button>
       <button data-seg="conteudo" aria-selected="false">Conteúdo</button>
     </div>
 
+    <div class="pane-stack">
     <div class="pane" data-pane="documento">
-      <details open>
-        <summary>Texto</summary>
+      <!-- default aberto: Documento + Cabeçalho & rodapé; demais fechados (estado persiste em LS) -->
+      <details data-sec="documento" open>
+        <summary>Documento</summary>
         <div class="body">
           <div id="srcRow" hidden></div>
           <div class="row3">
-            <button id="btnFile">Importar Texto</button>
-            <button id="btnNew">Em Branco</button>
-            <button id="btnOpen" title="Abrir um projeto salvo (.pdgm.zip)">Abrir .zip</button>
+            <button type="button" id="btnNew">Em Branco</button>
+            <button type="button" id="btnOpen" title="Abrir um projeto salvo (.pdgm.zip ou .pdgm.json)">Abrir .zip</button>
           </div>
           <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
-          <input type="file" id="fileProject" accept=".pdgm.zip,.zip,.pdgm.json,.json,application/zip,application/json" hidden>
+          <!-- accept com extensões de 1 ponto (.zip/.json): cobre foo.pdgm.zip e
+               "foo.pdgm (9).zip"; .pdgm.zip inteiro é inválido em vários browsers. -->
+          <input type="file" id="fileProject" accept=".zip,.json,application/zip,application/x-zip-compressed,application/json" hidden>
         </div>
       </details>
 
-      <details open>
+      <details data-sec="capa">
         <summary>Capa</summary>
         <div class="body">
           <div class="swrow"><span>Mostrar Capa</span><button class="sw" data-sw="cover" role="switch" aria-checked="true"></button></div>
@@ -761,49 +1337,45 @@
                 <button type="button" data-logokind="nome" title="Nome" aria-pressed="true"><span>Nome</span></button>
               </div>
             </div>
-            <div class="grid2">
-              <label class="field">Posição
-                <select data-logopos="cover">
-                  <option value="header">Cabeçalho (topo)</option>
-                  <option value="footer">Rodapé (base)</option>
-                </select>
-              </label>
-              <label class="field">Alinhamento
-                <select data-logoalign="cover">
-                  <option value="left">Esquerda</option>
-                  <option value="center">Centro</option>
-                  <option value="right">Direita</option>
-                </select>
-              </label>
+            <div class="grid2" data-logoopts="cover" hidden>
+              <div class="field">Posição
+                <div data-slot="logopos" data-kind="cover"></div>
+              </div>
+              <div class="field">Alinhamento
+                <div data-slot="logoalign" data-kind="cover"></div>
+              </div>
             </div>
             <div class="grid2" data-logoopts="cover" hidden>
               <label class="field">Cor do logo
                 <button type="button" class="colorfield" data-logocolor="cover" title="Escolher cor do logo"></button>
               </label>
-              <label class="field">Tamanho <span class="hint" data-logosizev="cover"></span>
-                <input type="range" data-logosize="cover" min="40" max="260" value="100">
+              <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-logosizev="cover"></span><button type="button" class="resetbtn" data-logosizereset="cover" title="Redefinir para 1×">↺</button></span></span>
+                <input type="range" data-logosize="cover" min="40" max="260" value="100" data-snaps="40,70,100,150,200,260">
               </label>
             </div>
             <div class="field"><span class="fieldtitle">Imagem de Fundo</span>
               <button class="filebtn" data-bgbtn="cover">Selecionar<input type="file" data-bg="cover" accept="image/*"></button>
-            </div>
-            <div class="bgcard" data-bgcard="cover" hidden>
-              <img data-bgpreview="cover" alt="Prévia da imagem de fundo">
-              <button type="button" data-rmbg="cover" title="Remover imagem de fundo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
+              <div class="bgactions" data-bgactions="cover" hidden>
+                <label class="fieldbtn filebtn" data-bgreplace="cover"><span>Substituir</span><input type="file" data-bg="cover" accept="image/*"></label>
+                <button type="button" class="fieldbtn danger" data-rmbg="cover"><span>Remover</span></button>
+              </div>
             </div>
             <div class="grid2" data-bgxform="cover" hidden>
-              <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="cover" min="0" max="100" value="50"></label>
-              <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="cover" min="0" max="100" value="50"></label>
+              <label class="field"><span class="field-row">Posição Horizontal ↔ <span class="field-val"><button type="button" class="resetbtn" data-bgxreset="cover" title="Redefinir para o centro">↺</button></span></span>
+                <input type="range" data-bgx="cover" min="0" max="100" value="50" data-snaps="0,25,50,75,100">
+              </label>
+              <label class="field"><span class="field-row">Posição Vertical ↕ <span class="field-val"><button type="button" class="resetbtn" data-bgyreset="cover" title="Redefinir para o centro">↺</button></span></span>
+                <input type="range" data-bgy="cover" min="0" max="100" value="50" data-snaps="0,25,50,75,100">
+              </label>
             </div>
-            <label class="field" data-bgxform="cover" hidden>Escala da imagem <span class="hint" data-bgscalev="cover"></span>
-              <input type="range" data-bgscale="cover" min="100" max="250" value="100">
+            <label class="field" data-bgxform="cover" hidden><span class="field-row">Escala da imagem <span class="field-val"><span data-bgscalev="cover"></span><button type="button" class="resetbtn" data-bgscalereset="cover" title="Redefinir para 1×">↺</button></span></span>
+              <input type="range" data-bgscale="cover" min="100" max="250" value="100" data-snaps="100,125,150,200,250">
             </label>
-            <div class="row"><button data-addtxt="cover">+ Texto</button></div>
           </div>
         </div>
       </details>
 
-      <details open>
+      <details data-sec="index">
         <summary class="sum-info">Índice + Resumo<button type="button" class="infoicon" data-tip="O índice é gerado automaticamente dos títulos do miolo — escolha abaixo quais níveis entram. O resumo é editável na própria página." aria-label="Sobre o índice e o resumo">ⓘ</button></summary>
         <div class="body">
           <div class="swrow"><span>Mostrar Índice</span><button class="sw" data-sw="index" role="switch" aria-checked="true"></button></div>
@@ -835,7 +1407,7 @@
         </div>
       </details>
 
-      <details open>
+      <details data-sec="back">
         <summary>Contracapa</summary>
         <div class="body">
           <div class="swrow"><span>Mostrar Contracapa</span><button class="sw" data-sw="back" role="switch" aria-checked="true"></button></div>
@@ -848,49 +1420,45 @@
                 <button type="button" data-logokind="nome" title="Nome" aria-pressed="true"><span>Nome</span></button>
               </div>
             </div>
-            <div class="grid2">
-              <label class="field">Posição
-                <select data-logopos="back">
-                  <option value="header">Cabeçalho (topo)</option>
-                  <option value="footer">Rodapé (base)</option>
-                </select>
-              </label>
-              <label class="field">Alinhamento
-                <select data-logoalign="back">
-                  <option value="left">Esquerda</option>
-                  <option value="center">Centro</option>
-                  <option value="right">Direita</option>
-                </select>
-              </label>
+            <div class="grid2" data-logoopts="back" hidden>
+              <div class="field">Posição
+                <div data-slot="logopos" data-kind="back"></div>
+              </div>
+              <div class="field">Alinhamento
+                <div data-slot="logoalign" data-kind="back"></div>
+              </div>
             </div>
             <div class="grid2" data-logoopts="back" hidden>
               <label class="field">Cor do logo
                 <button type="button" class="colorfield" data-logocolor="back" title="Escolher cor do logo"></button>
               </label>
-              <label class="field">Tamanho <span class="hint" data-logosizev="back"></span>
-                <input type="range" data-logosize="back" min="40" max="260" value="100">
+              <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-logosizev="back"></span><button type="button" class="resetbtn" data-logosizereset="back" title="Redefinir para 1×">↺</button></span></span>
+                <input type="range" data-logosize="back" min="40" max="260" value="100" data-snaps="40,70,100,150,200,260">
               </label>
             </div>
             <div class="field"><span class="fieldtitle">Imagem de Fundo</span>
               <button class="filebtn" data-bgbtn="back">Selecionar<input type="file" data-bg="back" accept="image/*"></button>
-            </div>
-            <div class="bgcard" data-bgcard="back" hidden>
-              <img data-bgpreview="back" alt="Prévia da imagem de fundo">
-              <button type="button" data-rmbg="back" title="Remover imagem de fundo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
+              <div class="bgactions" data-bgactions="back" hidden>
+                <label class="fieldbtn filebtn" data-bgreplace="back"><span>Substituir</span><input type="file" data-bg="back" accept="image/*"></label>
+                <button type="button" class="fieldbtn danger" data-rmbg="back"><span>Remover</span></button>
+              </div>
             </div>
             <div class="grid2" data-bgxform="back" hidden>
-              <label class="field">Fundo ↔ (horizontal)<input type="range" data-bgx="back" min="0" max="100" value="50"></label>
-              <label class="field">Fundo ↕ (vertical)<input type="range" data-bgy="back" min="0" max="100" value="50"></label>
+              <label class="field"><span class="field-row">Posição Horizontal ↔ <span class="field-val"><button type="button" class="resetbtn" data-bgxreset="back" title="Redefinir para o centro">↺</button></span></span>
+                <input type="range" data-bgx="back" min="0" max="100" value="50" data-snaps="0,25,50,75,100">
+              </label>
+              <label class="field"><span class="field-row">Posição Vertical ↕ <span class="field-val"><button type="button" class="resetbtn" data-bgyreset="back" title="Redefinir para o centro">↺</button></span></span>
+                <input type="range" data-bgy="back" min="0" max="100" value="50" data-snaps="0,25,50,75,100">
+              </label>
             </div>
-            <label class="field" data-bgxform="back" hidden>Escala da imagem <span class="hint" data-bgscalev="back"></span>
-              <input type="range" data-bgscale="back" min="100" max="250" value="100">
+            <label class="field" data-bgxform="back" hidden><span class="field-row">Escala da imagem <span class="field-val"><span data-bgscalev="back"></span><button type="button" class="resetbtn" data-bgscalereset="back" title="Redefinir para 1×">↺</button></span></span>
+              <input type="range" data-bgscale="back" min="100" max="250" value="100" data-snaps="100,125,150,200,250">
             </label>
-            <div class="row"><button data-addtxt="back">+ Texto</button></div>
           </div>
         </div>
       </details>
 
-      <details open>
+      <details data-sec="header" open>
         <summary>Cabeçalho & rodapé</summary>
         <div class="body">
           <label class="field">Cabeçalho (topo das páginas)
@@ -907,39 +1475,50 @@
     </div>
 
     <div class="pane" data-pane="conteudo" hidden>
-      <details open>
-        <summary>Bloco</summary>
+      <div class="sb-static">
+        <div class="sb-static-title">Bloco</div>
         <div class="body">
           <div class="blocktypes" id="blocktypes">
-            <div class="blockrow"><button data-type="h1"><span class="ico" style="font-size:15px;font-weight:800">H</span><span class="lbl">H1</span><span class="sc">#</span></button><button type="button" class="blockmenu" data-styletype="h1" title="Editar estilo do H1">⋮</button></div>
-            <div class="blockrow"><button data-type="h2"><span class="ico" style="font-size:13px;font-weight:800">H</span><span class="lbl">H2</span><span class="sc">##</span></button><button type="button" class="blockmenu" data-styletype="h2" title="Editar estilo do H2">⋮</button></div>
-            <div class="blockrow"><button data-type="h3"><span class="ico" style="font-size:11px;font-weight:700">H</span><span class="lbl">H3</span><span class="sc">###</span></button><button type="button" class="blockmenu" data-styletype="h3" title="Editar estilo do H3">⋮</button></div>
-            <div class="blockrow"><button data-type="h4"><span class="ico" style="font-size:10px;font-weight:700">H</span><span class="lbl">H4</span><span class="sc">####</span></button><button type="button" class="blockmenu" data-styletype="h4" title="Editar estilo do H4">⋮</button></div>
-            <div class="blockrow"><button data-type="p"><span class="ico">¶</span><span class="lbl">Parágrafo</span></button><button type="button" class="blockmenu" data-styletype="p" title="Editar estilo do Parágrafo">⋮</button></div>
-            <div class="blockrow"><button data-type="li"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="2.5" cy="4" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r="1.1" fill="currentColor" stroke="none"/><path d="M6 4h8M6 8h8M6 12h8"/></svg></span><span class="lbl">Lista de Pontos</span><span class="sc">-</span></button><button type="button" class="blockmenu" data-styletype="li" title="Editar estilo da Lista de Pontos">⋮</button></div>
-            <div class="blockrow"><button data-type="ol"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><text x="0" y="6" font-size="6" fill="currentColor" stroke="none" font-weight="700">1</text><text x="0" y="13" font-size="6" fill="currentColor" stroke="none" font-weight="700">2</text><path d="M6 4.5h8M6 11h8"/></svg></span><span class="lbl">Lista Numérica</span><span class="sc">1.</span></button><button type="button" class="blockmenu" data-styletype="ol" title="Editar estilo da Lista Numérica">⋮</button></div>
-            <div class="blockrow"><button data-type="check"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="5" height="5" rx="1.2"/><path d="M3.2 5l1 1 1.6-2"/><path d="M9.5 5h4.5"/><rect x="2" y="9.5" width="5" height="5" rx="1.2"/><path d="M9.5 12h4.5"/></svg></span><span class="lbl">Checklist</span><span class="sc">[]</span></button><button type="button" class="blockmenu" data-styletype="check" title="Editar estilo do Checklist">⋮</button></div>
+            <div class="blockrow"><button data-type="h1"><span class="ico" style="font-size:15px;font-weight:800">H</span><span class="lbl">H1</span><span class="sc">#</span></button><button type="button" class="blockmenu" data-styletype="h1" title="Editar estilo do H1"></button></div>
+            <div class="blockrow"><button data-type="h2"><span class="ico" style="font-size:13px;font-weight:800">H</span><span class="lbl">H2</span><span class="sc">##</span></button><button type="button" class="blockmenu" data-styletype="h2" title="Editar estilo do H2"></button></div>
+            <div class="blockrow"><button data-type="h3"><span class="ico" style="font-size:11px;font-weight:700">H</span><span class="lbl">H3</span><span class="sc">###</span></button><button type="button" class="blockmenu" data-styletype="h3" title="Editar estilo do H3"></button></div>
+            <div class="blockrow"><button data-type="h4"><span class="ico" style="font-size:10px;font-weight:700">H</span><span class="lbl">H4</span><span class="sc">####</span></button><button type="button" class="blockmenu" data-styletype="h4" title="Editar estilo do H4"></button></div>
+            <div class="blockrow"><button data-type="p"><span class="ico">¶</span><span class="lbl">Parágrafo</span></button><button type="button" class="blockmenu" data-styletype="p" title="Editar estilo do Parágrafo"></button></div>
+            <div class="blockrow"><button data-type="li"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="2.5" cy="4" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r="1.1" fill="currentColor" stroke="none"/><path d="M6 4h8M6 8h8M6 12h8"/></svg></span><span class="lbl">Lista de Pontos</span><span class="sc">-</span></button><button type="button" class="blockmenu" data-styletype="li" title="Editar estilo da Lista de Pontos"></button></div>
+            <div class="blockrow"><button data-type="ol"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><text x="0" y="6" font-size="6" fill="currentColor" stroke="none" font-weight="700">1</text><text x="0" y="13" font-size="6" fill="currentColor" stroke="none" font-weight="700">2</text><path d="M6 4.5h8M6 11h8"/></svg></span><span class="lbl">Lista Numérica</span><span class="sc">1.</span></button><button type="button" class="blockmenu" data-styletype="ol" title="Editar estilo da Lista Numérica"></button></div>
+            <div class="blockrow"><button data-type="check"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="5" height="5" rx="1.2"/><path d="M3.2 5l1 1 1.6-2"/><path d="M9.5 5h4.5"/><rect x="2" y="9.5" width="5" height="5" rx="1.2"/><path d="M9.5 12h4.5"/></svg></span><span class="lbl">Checklist</span><span class="sc">[]</span></button><button type="button" class="blockmenu" data-styletype="check" title="Editar estilo do Checklist"></button></div>
             <!-- trilha G: "Citação" tinha sumido da paleta numa edição anterior (regressão) — o tipo 'quote'
                  sempre existiu (funciona, está no #fmtbar) — só o botão daqui tinha ido embora. -->
-            <div class="blockrow"><button data-type="quote"><span class="ico">❝</span><span class="lbl">Citação</span><span class="sc">&gt;</span></button><button type="button" class="blockmenu" data-styletype="quote" title="Editar estilo da Citação">⋮</button></div>
+            <div class="blockrow"><button data-type="quote"><span class="ico">❝</span><span class="lbl">Citação</span><span class="sc">&gt;</span></button><button type="button" class="blockmenu" data-styletype="quote" title="Editar estilo da Citação"></button></div>
             <!-- trilha G: bloco Callout (novo, estilo Notion) — o ícone da PALETA aqui é um SVG,
                  igual aos outros tipos (era 💡, o único emoji da lista); o ícone DENTRO do bloco
                  já criado continua editável/emoji por padrão (picker próprio, ver buildText). -->
-            <div class="blockrow"><button data-type="callout"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5a4.5 4.5 0 0 0-2.5 8.25c.4.28.5.7.5 1.05v.7h4v-.7c0-.35.1-.77.5-1.05A4.5 4.5 0 0 0 8 1.5Z"/><path d="M6.5 14h3"/><path d="M7 12.5h2"/></svg></span><span class="lbl">Callout</span></button><button type="button" class="blockmenu" data-styletype="callout" title="Editar estilo do Callout">⋮</button></div>
+            <div class="blockrow"><button data-type="callout"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5a4.5 4.5 0 0 0-2.5 8.25c.4.28.5.7.5 1.05v.7h4v-.7c0-.35.1-.77.5-1.05A4.5 4.5 0 0 0 8 1.5Z"/><path d="M6.5 14h3"/><path d="M7 12.5h2"/></svg></span><span class="lbl">Callout</span></button><button type="button" class="blockmenu" data-styletype="callout" title="Editar estilo do Callout"></button></div>
             <button data-type="table"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2 6.5h12M2 10h12M6.5 3v10"/></svg></span><span class="lbl">Tabela</span></button>
             <button data-type="image"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M3 12l3.4-3.2 2.4 2.2 2.2-2 2 1.8"/></svg></span><span class="lbl">Imagem</span></button>
             <button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button>
             <button data-type="pagebreak" title="Quebra de página (⌘⏎)"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h8v3H4zM4 11h8v3H4z"/><path d="M1.5 8h3M6.5 8h3M12 8h2.5"/></svg></span><span class="lbl">Quebra de Página</span><span class="sc">⌘⏎</span></button>
           </div>
-          <!-- coluna do bloco EM FOCO — mesmo componente (columnField) do popover de Imagem e
-               da Capa; o JS (syncColUI) preenche/limpa conforme state.activeId -->
-          <div class="field" id="blockcol" hidden>Coluna<div data-slot="col"></div></div>
+          <!-- posição do bloco EM FOCO — mesmo segment (widthSeg) do popover de Imagem e
+               da Capa; o JS (syncColUI) preenche/limpa conforme state.activeId.
+               Coluna direita = modelo da imagem: sem alça/+, Y livre + "Travar no texto". -->
+          <div class="field" id="blockcol" hidden>Posição<div data-slot="col"></div></div>
+          <button type="button" class="fieldbtn" id="blocklock" hidden></button>
         </div>
-      </details>
+      </div>
     </div>
+    </div><!-- /.pane-stack -->
+    </div><!-- /.sidebar-panel -->
   </aside>
 
   <section class="stage" id="stage">
+    <!-- índice flutuante (só no preview): botão list-outline no canto sup. dir.; hover expande H1/H2 -->
+    <div class="preview-toc-host">
+      <nav id="previewToc" class="preview-toc" hidden aria-label="Índice do relatório">
+        <button type="button" class="preview-toc-btn" id="previewTocBtn" title="Índice" aria-label="Índice do relatório" aria-expanded="false" aria-controls="previewTocPanel"></button>
+        <div class="preview-toc-panel" id="previewTocPanel" role="list"></div>
+      </nav>
+    </div>
     <div id="pages"></div>
   </section>
 </main>
@@ -1024,7 +1603,7 @@
 <div id="linkedit" hidden>
   <input id="linkUrl" type="url" placeholder="https://…" spellcheck="false" aria-label="URL do link">
   <button id="linkApply" title="Aplicar link">✓</button>
-  <button id="linkRemove" title="Remover link" hidden>Remover</button>
+  <button id="linkRemove" title="Remover link" hidden type="button">Remover</button>
 </div>
 
 <script type="module" src="diagramacao.js"></script>

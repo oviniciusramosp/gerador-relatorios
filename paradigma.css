@@ -22,6 +22,11 @@
   --muted:       color-mix(in srgb, var(--lilac) 78%, transparent);
 
   --r: 6px;
+  /* controles de formulário (input/select/segment/colorfield): mesma altura e
+     mesmo raio externo do segment control, pra alinharem lado a lado. */
+  --ctrl-h: 2rem;
+  --ctrl-r: 9px;
+  --ctrl-pad-x: .6rem;
   color-scheme: dark;
 }
 
@@ -56,12 +61,136 @@ input, select, textarea, button {
   border-radius: var(--r);
   padding: .42rem .6rem;
 }
+/* campos de formulário: altura e raio iguais ao .segment (Posição vs Alinhamento, etc.) */
+input:not([type="checkbox"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]),
+select {
+  height: var(--ctrl-h);
+  padding: 0 var(--ctrl-pad-x);
+  border-radius: var(--ctrl-r);
+  box-sizing: border-box;
+}
+textarea {
+  border-radius: var(--ctrl-r);
+}
+/* select nativo reserva espaço assimétrico pro chevron do SO — appearance:none +
+   chevron próprio com o MESMO inset L/R (--ctrl-pad-x) deixa o ícone mais à esquerda. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  background-color: color-mix(in srgb, var(--lilac) 7%, transparent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23BAB1FF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--ctrl-pad-x) center;
+  background-size: 12px 12px;
+}
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
   outline: 2px solid var(--violet); outline-offset: 1px;
 }
-input[type="color"] { padding: 2px; height: 2rem; cursor: pointer; }
-input[type="range"] { padding: 0; border: 0; background: none; accent-color: var(--violet); }
+input[type="color"] { padding: 2px; height: var(--ctrl-h); cursor: pointer; border-radius: var(--ctrl-r); }
+input[type="range"] { padding: 0; border: 0; background: none; accent-color: var(--violet); height: auto; }
 input[type="checkbox"] { accent-color: var(--violet); width: 1rem; height: 1rem; padding: 0; }
+
+/* snap points em range (range-snap.js): marcas DENTRO da trilha + ímã.
+   A trilha visual é desenhada por NÓS (::before), não pelo pseudo nativo do
+   browser — WebKit/Safari/Firefox colocam a track nativa em Y diferente, e
+   ticks a 50% do input ficavam abaixo da barra (o bug do “não centralizado”).
+   ::before e .range-snap-ticks usam o MESMO top/height → marcas sempre no
+   miolo da barra. Trilha nativa fica transparente (só carrega o polegar).
+   --range-thumb: centro min/max = metade disso (px, não rem). */
+.range-snap {
+  --range-thumb: 14px;
+  --range-track-h: 6px;
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 1.25rem;
+}
+/* trilha visual — full-width, centro vertical do controle */
+.range-snap::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--range-track-h);
+  transform: translateY(-50%);
+  border-radius: calc(var(--range-track-h) / 2);
+  background: color-mix(in srgb, var(--lilac) 28%, transparent);
+  pointer-events: none;
+  z-index: 0;
+}
+.range-snap input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  z-index: 2; /* polegar acima dos ticks */
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  accent-color: var(--violet);
+}
+/* mesma caixa vertical da trilha (::before); left/right = metade do thumb */
+.range-snap-ticks {
+  position: absolute;
+  left: calc(var(--range-thumb) / 2);
+  right: calc(var(--range-thumb) / 2);
+  top: 50%;
+  height: var(--range-track-h);
+  transform: translateY(-50%);
+  z-index: 1;
+  pointer-events: none;
+}
+.range-snap-ticks span {
+  position: absolute;
+  top: 0;
+  bottom: 0; /* preenche a altura da trilha → sempre centralizado nela */
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--lilac) 70%, #fff);
+  opacity: .95;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ground) 55%, transparent);
+}
+/* trilha nativa invisível — só define a geometria em que o polegar corre */
+.range-snap input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--range-track-h);
+  border-radius: calc(var(--range-track-h) / 2);
+  background: transparent;
+  border: 0;
+}
+.range-snap input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--range-thumb);
+  height: var(--range-thumb);
+  /* centra o thumb na track nativa de --range-track-h */
+  margin-top: calc((var(--range-track-h) - var(--range-thumb)) / 2);
+  border-radius: 50%;
+  background: var(--violet);
+  border: 0;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #000 25%, transparent);
+  position: relative;
+  z-index: 3;
+}
+.range-snap input[type="range"]::-moz-range-track {
+  height: var(--range-track-h);
+  border-radius: calc(var(--range-track-h) / 2);
+  background: transparent;
+  border: 0;
+}
+.range-snap input[type="range"]::-moz-range-thumb {
+  width: var(--range-thumb);
+  height: var(--range-thumb);
+  border-radius: 50%;
+  background: var(--violet);
+  border: 0;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #000 25%, transparent);
+}
 
 button { cursor: pointer; font-stretch: 85%; }
 button:hover { background: color-mix(in srgb, var(--lilac) 14%, transparent); }
@@ -77,18 +206,171 @@ button.primary:hover { background: color-mix(in srgb, var(--violet) 84%, white);
   padding: .9rem; background: color-mix(in srgb, var(--lilac) 4%, transparent);
 }
 
-/* segment control (abas) — 2 opções por padrão; .cols-3 pra três */
+/* segment control (abas) — 2 opções por padrão; .cols-3 pra três.
+   Altura/raio = --ctrl-h/--ctrl-r (mesmos dos inputs/selects). padding interno 2px
+   + botões em flex preenchem o resto → não depende de line-height do texto. */
 .segment {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px;
+  height: var(--ctrl-h); box-sizing: border-box; align-items: stretch;
   background: color-mix(in srgb, var(--lilac) 8%, transparent);
-  border: 1px solid var(--hair); border-radius: 9px;
+  border: 1px solid var(--hair); border-radius: var(--ctrl-r);
 }
 .segment.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 .segment button {
-  border: 0; background: transparent; color: var(--muted); padding: .45rem;
-  border-radius: 6px; font-size: .78rem; font-weight: 600; font-stretch: 85%; cursor: pointer;
+  border: 0; background: transparent; color: var(--muted);
+  height: 100%; min-height: 0; padding: 0 .35rem;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: calc(var(--ctrl-r) - 3px);
+  font-size: .78rem; font-weight: 600; font-stretch: 85%; cursor: pointer;
 }
 .segment button:hover { background: color-mix(in srgb, var(--lilac) 12%, transparent); color: var(--ink); }
 .segment button[aria-selected="true"] { background: var(--violet); color: #fff; }
 .pane[hidden] { display: none; }
 .pane { display: grid; gap: .9rem; align-content: start; }
+
+/* ── picker de ícone (icon-pop.js) — compartilhado: timeline, bolhas, callout ──── */
+  .icon-pop {
+    position: fixed; z-index: 70; width: 20rem; max-height: 70vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: .35rem; padding: .6rem;
+    border: 1px solid var(--hair-strong); border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 8%, var(--ground)); box-shadow: 0 18px 50px -20px #000;
+  }
+  .icon-pop .ip-label { font-size: .6rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: .2rem 0 0; }
+  /* toggle Solid | Outline (callout) — mesma pílula do segment do app */
+  .ip-style {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px;
+    border: 1px solid var(--hair); border-radius: 7px; background: color-mix(in srgb, var(--ink) 4%, transparent);
+  }
+  .ip-style button {
+    padding: .32rem .4rem; border: 0; border-radius: 5px; background: transparent;
+    color: var(--muted); cursor: pointer; font-size: .72rem; font-weight: 600; font-stretch: 85%;
+  }
+  .ip-style button:hover { color: var(--ink); }
+  .ip-style button[aria-selected="true"] {
+    background: color-mix(in srgb, var(--violet) 22%, transparent); color: var(--ink);
+  }
+  .ip-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: .25rem; }
+  .ip-grid button {
+    aspect-ratio: 1; display: grid; place-items: center; padding: 0;
+    border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .ip-grid button svg { width: 1.15rem; height: 1.15rem; }
+  .ip-grid button:hover { background: color-mix(in srgb, var(--violet) 18%, transparent); color: var(--ink); }
+  .ip-grid button.on { border-color: var(--mint); color: var(--mint); }
+  .ip-row { display: flex; gap: .35rem; align-items: stretch; }
+  .ip-row input {
+    flex: 1; min-width: 0; height: 2rem; box-sizing: border-box;
+    padding: 0 .5rem; font-size: .78rem;
+    border: 1px solid var(--hair-strong); border-radius: 6px;
+    background: color-mix(in srgb, var(--lilac) 6%, transparent); color: var(--ink);
+  }
+  /* lupa dentro do campo de busca */
+  .ip-search-wrap {
+    position: relative; display: flex; align-items: center;
+  }
+  .ip-search-ico {
+    position: absolute; left: .5rem; width: 14px; height: 14px;
+    display: grid; place-items: center; color: var(--muted); pointer-events: none;
+  }
+  .ip-search-ico svg { width: 14px; height: 14px; display: block; }
+  .ip-search {
+    width: 100%; height: 2rem; box-sizing: border-box;
+    padding: 0 .5rem 0 1.85rem; font-size: .78rem;
+    border: 1px solid var(--hair-strong); border-radius: 6px;
+    background: color-mix(in srgb, var(--lilac) 6%, transparent); color: var(--ink);
+  }
+  /* check — mesma altura do input de sigla */
+  .ip-ok {
+    flex: none; width: 2rem; height: 2rem; box-sizing: border-box;
+    display: grid; place-items: center; padding: 0;
+    border: 1px solid var(--hair-strong); border-radius: 6px;
+    background: color-mix(in srgb, var(--lilac) 6%, transparent); color: var(--ink); cursor: pointer;
+  }
+  .ip-ok svg { width: 16px; height: 16px; display: block; }
+  .ip-ok:hover { background: color-mix(in srgb, var(--violet) 18%, transparent); border-color: var(--violet); }
+  /* "Sem ícone" — célula vazia, sem traço nem badge */
+  .ip-grid button.ip-none { color: transparent; }
+  .ip-grid button.ip-none::after { content: none; }
+
+
+/* botão de ícone na lista (timeline e bolhas) */
+  .ev-icon {
+    width: 2.1rem; height: 2.1rem; padding: 0; display: grid; place-items: center;
+    border-radius: 50%; border: 1px solid var(--hair-strong); color: var(--mint); cursor: pointer;
+  }
+  .ev-icon svg { width: 1.1rem; height: 1.1rem; }
+  .ev-icon .badge { font-size: .58rem; font-weight: 600; }
+
+/* ── sidebar expandable <details> (Diagramador, Gráficos, …) ───────────────
+   Chevron Ionicons (via JS .det-chev), classe .is-open em sync com a animação
+   de altura do .body, borda inferior full-bleed (estoura padding + rail).
+   A página monta: aside#sidebar > .sidebar-panel > details[data-sec] …     */
+aside#sidebar > .sidebar-panel {
+  --sb-pad: 1rem;
+  --sb-rail: 8px;
+  box-sizing: border-box;
+  padding: var(--sb-pad);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  display: grid;
+  gap: 0;
+  align-content: start;
+}
+aside#sidebar > .sidebar-panel::-webkit-scrollbar { width: var(--sb-rail); }
+aside#sidebar > .sidebar-panel::-webkit-scrollbar-thumb {
+  background: var(--hair-strong); border-radius: 4px;
+}
+
+/* summary: flex + gap pro chevron; sem list-style nativo */
+aside#sidebar details > summary {
+  cursor: pointer; list-style: none;
+  font-size: .68rem; font-weight: 600;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--lilac);
+  font-stretch: 85%; padding: 0; user-select: none;
+  display: flex; align-items: center; gap: .35rem;
+}
+aside#sidebar details > summary::-webkit-details-marker { display: none; }
+
+/* chevron real (Ionicons chevron-forward) — gira com .is-open (não com [open],
+   que no close só muda no fim da animação) */
+aside#sidebar details > summary .det-chev {
+  flex: none; width: 12px; height: 12px;
+  display: grid; place-items: center;
+  transition: transform .26s cubic-bezier(.4, 0, .2, 1);
+  transform: rotate(0deg);
+}
+aside#sidebar details > summary .det-chev svg { width: 12px; height: 12px; display: block; }
+aside#sidebar details.is-open > summary .det-chev { transform: rotate(90deg); }
+
+/* corpo: respiro abaixo do título; o padding do <details> cuida da borda */
+aside#sidebar details > .body {
+  display: grid; gap: .7rem; padding: .65rem 0 0;
+}
+
+/* seções: pad vertical + divisor full-bleed via ::after (border no box não
+   cobre o gutter da scrollbar). data-sec cobre seções no painel, dentro de
+   .pane (Importar/Customizar) e nested (CSV antigo). */
+aside#sidebar details[data-sec] {
+  --det-pad-y: .9rem;
+  position: relative;
+  padding-block: var(--det-pad-y);
+  border-bottom: 0;
+}
+aside#sidebar details[data-sec]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: calc(-1 * var(--sb-pad));
+  right: calc(-1 * var(--sb-pad) - var(--sb-rail));
+  height: 1px;
+  background: var(--hair);
+  pointer-events: none;
+}
+
+/* expand/collapse animado — overflow no meio do toggle (JS) */
+aside#sidebar details.sb-det-animating > .body {
+  overflow: hidden; pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  aside#sidebar details > summary .det-chev { transition: none; }
+}

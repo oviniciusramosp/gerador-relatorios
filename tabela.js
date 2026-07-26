@@ -66,7 +66,50 @@ const csvCell = (v) => {
 };
 // saída em CSV — formato comum, abre no Excel/Sheets. Números com ponto decimal
 // (nossos dados são numéricos), então a vírgula separa colunas sem ambiguidade.
-export const toTable = (sp) => [
+/* Sankey não tem série nem rótulo: o dado são LIGAÇÕES, então a caixa de texto
+ * vira "origem,destino,valor" — uma por linha. É o formato mais direto de
+ * digitar à mão e o mesmo que sai de qualquer planilha de fluxo. */
+export const linksToTable = (sp) => [
+  'origem,destino,valor',
+  ...(sp.links || []).map((l) => [csvCell(l.from), csvCell(l.to), l.value ?? ''].join(',')),
+].join('\n');
+
+// "origem,destino,valor" -> [{from,to,value}]. Ignora cabeçalho e linha torta,
+// pra digitação em andamento não apagar o gráfico a cada tecla.
+export function parseLinks(texto) {
+  const linhas = String(texto).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const links = [];
+  for (const linha of linhas) {
+    const c = linha.split(/[,;\t]/).map((x) => x.trim().replace(/^"|"$/g, ''));
+    if (c.length < 3) continue;
+    const v = num(c[2]);
+    if (!c[0] || !c[1] || v == null) continue;   // cabeçalho cai aqui, sem alarde
+    links.push({ from: c[0], to: c[1], value: v });
+  }
+  return links;
+}
+
+/* Bolhas: "rótulo,valor,ícone,grupo,categoria". Ícone e categoria também são
+ * escolhíveis na lista lateral (picker e swatch) — aqui é o caminho de digitar
+ * ou colar tudo de uma vez. */
+export const bubblesToTable = (sp) => [
+  'rótulo,valor,ícone,grupo,categoria',
+  ...(sp.bubbles || []).map((b) => [csvCell(b.label), b.value ?? '', b.icon || '', csvCell(b.group || ''), csvCell(b.cat || '')].join(',')),
+].join('\n');
+
+export function parseBubbles(texto) {
+  const linhas = String(texto).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const out = [];
+  for (const linha of linhas) {
+    const c = linha.split(/[,;\t]/).map((x) => x.trim().replace(/^"|"$/g, ''));
+    const v = num(c[1]);
+    if (!c[0] || v == null) continue;              // cabeçalho e linha torta caem aqui
+    out.push({ label: c[0], value: v, icon: c[2] || '', group: c[3] || '', cat: c[4] || '' });
+  }
+  return out;
+}
+
+export const toTable = (sp) => (sp.type === 'bubble' ? bubblesToTable(sp) : sp.type === 'sankey' ? linksToTable(sp) : [
   ['', ...sp.series.map((s) => csvCell(s.name))].join(','),
   ...sp.labels.map((l, i) => [csvCell(l), ...sp.series.map((s) => s.data[i] ?? '')].join(',')),
-].join('\n');
+].join('\n'));

@@ -26,6 +26,7 @@
 </style>
 </head>
 <body>
+<nav id="fbNav" style="position:fixed;top:1rem;right:1rem;z-index:5;display:flex;gap:.4rem"></nav>
 <main>
   <p class="eyebrow">Paradigma</p>
   <h1>Gerador de Relatórios</h1>
@@ -37,5 +38,9 @@
     <li><a href="timelines.html"><span class="n">04</span><span class="t">Linhas do tempo<span class="d">Eventos (à mão ou lidos de uma imagem) → SVG/PNG no padrão da casa</span></span><span class="tag">pronto</span></a></li>
   </ol>
 </main>
+<script type="module">
+  import { initFeedback } from './feedback.js';
+  initFeedback({ nav: '#fbNav' });
+</script>
 </body>
 </html>

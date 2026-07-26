@@ -39,7 +39,8 @@ export function initSlashMenu({ defs, onPick }) {
   }
 
   function place(id) {
-    const host = document.querySelector(`#pages [data-id="${id}"]`);
+    // data-id (miolo) ou data-cid (capa/contracapa — buildCoverItem grava os dois)
+    const host = document.querySelector(`#pages [data-id="${id}"], #pages [data-cid="${id}"]`);
     if (!host) return;
     const r = host.getBoundingClientRect();
     pop.hidden = false;                                  // precisa estar visível pra medir
@@ -57,6 +58,14 @@ export function initSlashMenu({ defs, onPick }) {
     onPick(def, id);
   }
 
+  // clique fora fecha (mesmo padrão do icon-pop/swatch). setTimeout no open evita que o
+  // mesmo clique que abriu o menu (botão "+") feche na hora.
+  function outside(e) {
+    if (!open) return;
+    if (pop.contains(e.target)) return;
+    api.close();
+  }
+
   // keydown CAPTURE no document → roda antes do handler de Enter do bloco (bubble em #pages)
   document.addEventListener('keydown', (e) => {
     if (!open) return;
@@ -67,14 +76,27 @@ export function initSlashMenu({ defs, onPick }) {
   }, true);
 
   const api = {
-    open(id, filtro) {
+    // opts.exclude = ['pagebreak', ...] — ex.: capa não tem quebra de página
+    // opts.extra   = [{type,label,icon}, ...] prepend (ex.: Título/Subtítulo só na capa)
+    open(id, filtro, opts = {}) {
       curId = id;
       const f = norm(filtro);
-      items = f ? defs.filter(d => norm(d.label).includes(f) || norm(d.type).includes(f)) : defs.slice();
+      let base = defs;
+      if (opts.exclude?.length) {
+        const ban = new Set(opts.exclude);
+        base = base.filter(d => !ban.has(d.type));
+      }
+      if (opts.extra?.length) base = opts.extra.concat(base);
+      items = f ? base.filter(d => norm(d.label).includes(f) || norm(d.type).includes(f)) : base.slice();
       sel = 0; open = true;
       paint(); place(id);
+      removeEventListener('pointerdown', outside, true);
+      setTimeout(() => addEventListener('pointerdown', outside, true), 0);
     },
-    close() { open = false; curId = null; pop.hidden = true; },
+    close() {
+      open = false; curId = null; pop.hidden = true;
+      removeEventListener('pointerdown', outside, true);
+    },
     isOpen() { return open; },
   };
   return api;

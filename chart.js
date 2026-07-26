@@ -46,7 +46,37 @@ export const SERIES_NAMES = ['Violeta', 'Verde', 'Âmbar', 'Lilás', 'Coral', 'A
   'Magenta', 'Oliva', 'Teal', 'Rosa', 'Roxo', 'Laranja'];
 
 export const DEFAULTS = {
-  type: 'line',          // line | area | bar | hbar | stacked | stacked100 | donut | pie | candle
+  type: 'line',          // line | area | bar | hbar | stacked | stacked100 | donut | pie | candle | sankey | bubble
+  // bubble: cada item é uma bolha com ÁREA proporcional ao valor e um ícone
+  // dentro. `group` separa em blocos (TRADFI | CRYPTO), `cat` dá cor e legenda.
+  bubbles: [],           // [{ label, value, icon, group, cat }]
+  bubbleCats: {},        // { "Derivativos": "#232B3B", "Spot": "#D3D7DE" } — ordem = ordem da legenda
+  bubbleGroups: {},      // subtítulo por grupo; sem entrada, mostra a soma do que está desenhado
+  bubbleLabel: 'below',  // below | above | right — onde fica o rótulo em relação à bolha
+  bubbleMinR: 9,         // raio MÍNIMO em px: valor miúdo existe no dado e sumia no desenho
+  // ícone dentro da bolha: `max` impede que ele domine a bolha gigante, `min` é
+  // o tamanho abaixo do qual ele vira borrão e é melhor não desenhar
+  bubbleIcon: { min: 13, max: 56 },
+  // sankey: o dado NÃO são séries, são ligações — spec.links = [{from,to,value}].
+  // A espessura do fluxo é o valor; as colunas saem da topologia (ver sankey()).
+  links: [],
+  // cor por nó: { "Lucro Líquido": "#01AD6F" } — o resto sai da paleta
+  nodeColors: {},
+  // ajuste manual do sankey no modo Editar: px de deslocamento VERTICAL por nó
+  // (o horizontal é a etapa do fluxo, mover mudaria o significado). Por NOME,
+  // pra sobreviver a mudança de dado — o índice não sobrevive.
+  nodeOffsets: {},
+  // cor por fatia de pizza/rosca, por RÓTULO: { "Gênesis": "#554FFE" }
+  sliceColors: {},
+  // sankey: fator de espessura das barras (0.15–1), independente da altura da
+  // imagem. Serve pra crescer a imagem pelo TEXTO sem engordar as barras junto.
+  sankeyScale: 1,
+  // sankey: espessura MÍNIMA de nó e fita, em px. Sem piso, o fluxo miúdo sai
+  // com fração de pixel e some no antialiasing — some do desenho, não do dado.
+  sankeyMinLink: 2,
+  // junta as fatias abaixo de `pct` numa só (pizza/rosca) — a cauda longa de
+  // 0,3% gasta card e cor da paleta sem ser legível no desenho
+  groupSmall: { on: false, pct: 2, label: 'Outros' },
   // combo: series[i].as = 'bar'|'line' mistura formas; series[i].axis = 'y2'
   // manda a série pro eixo direito (config em spec.y2, mesmo formato do y).
   // candle: séries 1-4 = abertura/máxima/mínima/fechamento (+5ª ex.: volume)
@@ -62,7 +92,10 @@ export const DEFAULTS = {
   // stroke: 'solid' | 'dashed' | 'dotted' — `dashed: true` ainda é aceito (specs antigas)
   series: [],
   // side: lado do eixo de valor (left|right) — o y2, se houver, vai pro oposto
-  y: { format: 'num', prefix: '', suffix: '', title: '', min: null, max: null, ticks: 5, zero: true, side: 'left' },
+  // scale: 'linear' | 'log' — log serve pra série que cresce por ordem de
+  // grandeza (TVL, market cap, preço); exige valores > 0 e ignora `zero`,
+  // porque em log o zero fica infinitamente longe. Não vale em stacked100.
+  y: { format: 'num', prefix: '', suffix: '', title: '', min: null, max: null, ticks: 5, zero: true, side: 'left', scale: 'linear' },
   x: { title: '', every: 1, hidden: [], offsets: {} },
   // every: mostra 1 a cada N rótulos · hidden: índices sem TEXTO do rótulo
   // (o ponto/barra continua no lugar, só o texto some) · offsets: {indice: dx}
@@ -96,6 +129,8 @@ export const DEFAULTS = {
 };
 
 import { LOGOS } from './logos.js';
+// mesmo set (36 da casa + 421 Ionicons) e mesmo desenho do criador de timelines
+import { iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
 
 // ── util ─────────────────────────────────────────────────────────────────────
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -143,9 +178,11 @@ const deepMerge = (base, over) => {
 
 export function formatValue(v, y = {}) {
   if (v == null || Number.isNaN(v)) return '—';
-  const { format = 'num', prefix = '', suffix = '' } = y;
+  const { format = 'num', prefix = '', suffix = '', dp } = y;
   // maximumFractionDigits (não minimum): 80 sai "80", 68.5 sai "68,5"
-  const br = (x, d) => x.toLocaleString('pt-BR', { maximumFractionDigits: d });
+  // `dp` força o número de casas — o eixo log/symlog usa isso porque as 2 casas
+  // padrão transformam 0,001 em "0" e o eixo ganha três rótulos "0" seguidos
+  const br = (x, d) => x.toLocaleString('pt-BR', { maximumFractionDigits: dp ?? d });
   let s;
   if (format === 'pct') s = br(v, Math.abs(v) < 10 ? 1 : 0) + '%';
   else if (format === 'compact') {
@@ -156,6 +193,68 @@ export function formatValue(v, y = {}) {
   else if (format === 'brl') s = 'R$ ' + br(v, Math.abs(v) < 10 ? 2 : 0);
   else s = br(v, 2);
   return prefix + s + suffix;
+}
+
+/* Ticks de escala log: potências de 10, com subdivisões só quando o intervalo
+ * é curto — numa faixa de 1 década "1, 10" sozinho é inútil, mas em 5 décadas
+ * o 1-2-5 de cada uma vira uma parede de rótulo. Sempre cai em décadas
+ * fechadas nas pontas, então o domínio (min/max dos ticks) fica redondo. */
+function logTicks(min, max) {
+  const lo = Math.floor(Math.log10(min)), hi = Math.ceil(Math.log10(max));
+  const decadas = hi - lo;
+  const mults = decadas <= 1 ? [1, 2, 3, 5, 7] : decadas <= 3 ? [1, 2, 5] : [1];
+  const out = [];
+  for (let e = lo; e <= hi; e++) {
+    for (const m of mults) {
+      const v = +(m * 10 ** e).toPrecision(12);
+      if (v >= 10 ** lo && v <= 10 ** hi) out.push(v);
+    }
+  }
+  return out.length >= 2 ? out : [10 ** lo, 10 ** hi];
+}
+
+/* SYMLOG — log que atravessa o zero (PnL, funding, variação: cruzam o zero E
+ * variam por ordem de grandeza). Log puro não existe pra negativo, e não é
+ * questão de implementação: log(-5) não é definido, e log(0) é -infinito.
+ *
+ * Solução clássica (a `symlog` do matplotlib): LINEAR dentro de [-T, T], LOG
+ * fora, espelhado nos dois lados. A faixa linear é o que permite o zero
+ * existir no eixo; T é a fronteira.
+ *
+ *   |v| ≤ T  →  v/T                     (ocupa 1 unidade de eixo, linear)
+ *   |v| > T  →  ±(1 + log10(|v|/T))     (cada década vale 1 unidade)
+ *
+ * A transformação é contínua em ±T (as duas expressões dão ±1), então não há
+ * degrau visível na curva. */
+export const symlog = (v, T) => (v === 0 ? 0
+  : Math.sign(v) * (Math.abs(v) <= T ? Math.abs(v) / T : 1 + Math.log10(Math.abs(v) / T)));
+// exportada porque o editor precisa da inversa EXATA pra converter o arraste de
+// volta em valor — reimplementar lá sairia do sincronismo na primeira mudança
+export const symlogInv = (y, T) => (y === 0 ? 0
+  : Math.sign(y) * (Math.abs(y) <= 1 ? Math.abs(y) * T : T * 10 ** (Math.abs(y) - 1)));
+
+/* Fronteira da faixa linear. Idealmente é a menor magnitude não-zero (assim
+ * todo dado cai na parte log), mas com um piso: um único valor minúsculo
+ * (0,0001 no meio de milhões) geraria 10 décadas e espremeria o resto do
+ * gráfico. Limita em 5 décadas abaixo do maior valor absoluto. */
+function symThreshold(vals) {
+  const abs = vals.map(Math.abs).filter((v) => v > 0);
+  if (!abs.length) return 1;
+  const maxAbs = Math.max(...abs), minAbs = Math.min(...abs);
+  return 10 ** Math.max(Math.floor(Math.log10(minAbs)), Math.floor(Math.log10(maxAbs)) - 5);
+}
+
+// Ticks do symlog: o ZERO (que é o ponto do eixo em que o dado muda de sinal,
+// então nunca pode faltar) mais as décadas de cada lado que couberem.
+function symTicks(min, max, T) {
+  const dec = (limite) => {
+    const out = [];
+    for (let e = Math.log10(T); 10 ** e <= Math.abs(limite) * 1.0000001; e++) out.push(+(10 ** e).toPrecision(12));
+    return out;
+  };
+  const neg = min < 0 ? dec(min).map((v) => -v).reverse() : [];
+  const pos = max > 0 ? dec(max) : [];
+  return [...neg, 0, ...pos];
 }
 
 // Passos "redondos" (1/2/2.5/5 × 10^n) cobrindo [min,max].
@@ -287,7 +386,11 @@ export function renderChart(userSpec = {}, opts = {}) {
 
   // meta interno pra pegar a caixa do plot (pro logo INTERNO); reusa o do editor
   const meta = opts.meta || {};
-  if (s.type === 'donut' || s.type === 'pie') {
+  if (s.type === 'bubble') {
+    out.push(...bubbles(s, t, { pad, top, plotBottom, W, H, fs, meta }));
+  } else if (s.type === 'sankey') {
+    out.push(...sankey(s, t, { pad, top, plotBottom, W, H, fs, meta }));
+  } else if (s.type === 'donut' || s.type === 'pie') {
     out.push(...donut(series, labels, s, t, { pad, top, plotBottom, W, fs }));
   } else {
     out.push(...cartesian(series, labels, s, t, { pad, top, plotBottom, W, fs, meta, uid }));
@@ -386,19 +489,50 @@ function cartesian(series, labels, s, t, box) {
   }
   if (!vals.length) vals = [0, 1];
 
-  let vMin = s.y.min ?? Math.min(...vals);
-  let vMax = s.y.max ?? Math.max(...vals);
-  if (s.y.zero && s.y.min == null && vMin > 0 && !isCandle) vMin = 0;   // candle não força o zero
-  if (s.y.zero && s.y.max == null && vMax < 0) vMax = 0;
-  const ticks = (s.y.min != null && s.y.max != null)
-    ? niceTicks(vMin, vMax, s.y.ticks).filter((v) => v >= vMin - 1e-9 && v <= vMax + 1e-9)
-    : niceTicks(vMin, vMax, s.y.ticks);
-  const dMin = s.y.min ?? Math.min(...ticks), dMax = s.y.max ?? Math.max(...ticks);
+  /* Escala log. Nunca em stacked100 — lá a soma É a escala, e segmento
+   * empilhado em log não soma visualmente.
+   *
+   * Duas variantes, escolhidas pelo DADO, não por opção separada na UI: com
+   * tudo positivo é log puro; havendo negativo ou zero, vira SYMLOG (linear
+   * perto do zero, log fora — ver symlog() lá em cima). Quem pede "escala
+   * logarítmica" quer comprimir ordens de grandeza; se a série cruza o zero,
+   * o log puro simplesmente não existe e recusar seria inútil.  */
+  const podeLog = s.y.scale === 'log' && s.type !== 'stacked100' && vals.some((v) => v !== 0);
+  const symY = podeLog && vals.some((v) => v <= 0);
+  const logY = podeLog && !symY;
+  const T = symY ? symThreshold(vals) : 1;
+
+  let vMin = s.y.min ?? Math.min(...(logY ? vals.filter((v) => v > 0) : vals));
+  let vMax = s.y.max ?? Math.max(...(logY ? vals.filter((v) => v > 0) : vals));
+  // `zero` não se aplica: em log puro o zero fica infinitamente longe, e em
+  // symlog ele já está garantido no eixo por construção
+  if (!podeLog && s.y.zero && s.y.min == null && vMin > 0 && !isCandle) vMin = 0;   // candle não força o zero
+  if (!podeLog && s.y.zero && s.y.max == null && vMax < 0) vMax = 0;
+  const ticks = symY ? symTicks(vMin, vMax, T)
+    : logY ? logTicks(Math.max(vMin, 1e-12), Math.max(vMax, 1e-11))
+      : (s.y.min != null && s.y.max != null)
+        ? niceTicks(vMin, vMax, s.y.ticks).filter((v) => v >= vMin - 1e-9 && v <= vMax + 1e-9)
+        : niceTicks(vMin, vMax, s.y.ticks);
+  // em log, min/max manual só vale se for positivo (o editor congela o domínio
+  // ao entrar em edição gravando esses dois campos — sem isso o eixo fugiria
+  // enquanto o ponto é arrastado)
+  const okLim = (v) => (logY ? v > 0 : v != null);
+  const dMin = (okLim(s.y.min) ? s.y.min : null) ?? Math.min(...ticks);
+  const dMax = (okLim(s.y.max) ? s.y.max : null) ?? Math.max(...ticks);
 
   const yFmt = s.type === 'stacked100' ? { format: 'pct' } : s.y;
+  /* Casas decimais dos RÓTULOS do eixo em escala log/symlog. Cada tick é uma
+   * ordem de grandeza diferente, então as 2 casas padrão colapsam a ponta de
+   * baixo: num eixo de funding (0,001 · 0,01 · 0,1) saíam "0", "0,01", "0,1" —
+   * dois rótulos "0" e um "-0". Aqui as casas saem do MENOR tick, não do valor
+   * sendo formatado, pra todos os rótulos ficarem coerentes entre si. */
+  const menorTick = Math.min(...ticks.map(Math.abs).filter((v) => v > 0));
+  const tickFmt = podeLog && menorTick < 1
+    ? { ...yFmt, dp: Math.min(6, Math.ceil(-Math.log10(menorTick))) }
+    : yFmt;
   // texto do tick: override manual (spec.y.tickText[valor]) ou o formatado
   const tickText = s.y.tickText || {};
-  const tickLabels = ticks.map((v) => tickText[yKey(v)] ?? formatValue(v, yFmt));
+  const tickLabels = ticks.map((v) => tickText[yKey(v)] ?? formatValue(v, tickFmt));
 
   // escala do y2 (só se alguma série pedir)
   const has2 = serY2.length > 0;
@@ -464,8 +598,18 @@ function cartesian(series, labels, s, t, box) {
   const bottom = plotBottom - catAxisH - (s.x.title ? fs.axis * 1.5 : 0);
   const plotH = bottom - top, plotW = right - left;
 
-  const V = (v) => horiz ? left + ((v - dMin) / (dMax - dMin)) * plotW
-                         : bottom - ((v - dMin) / (dMax - dMin)) * plotH;
+  /* Fração 0-1 do valor dentro do domínio — o coração das três escalas:
+   *   linear  distância = diferença de valor
+   *   log     distância = diferença de EXPOENTE (valor ≤ 0 encosta no piso em
+   *           vez de virar NaN e sumir com a série inteira)
+   *   symlog  distância = diferença de symlog(), que já trata sinal e zero    */
+  const tf = symY ? (v) => symlog(v, T) : logY ? (v) => Math.log10(Math.max(v, Number.MIN_VALUE)) : (v) => v;
+  const t0 = tf(dMin), t1 = tf(dMax), span = (t1 - t0) || 1;
+  const frac = (v) => (podeLog
+    ? Math.min(1, Math.max(0, (tf(v) - t0) / span))
+    : (v - dMin) / (dMax - dMin));
+  const V = (v) => horiz ? left + frac(v) * plotW
+                         : bottom - frac(v) * plotH;
   const V2 = (v) => bottom - ((v - d2Min) / (d2Max - d2Min)) * plotH;
   const Vfor = (se) => (onY2(se) ? V2 : V);
   const fmtFor = (se) => (onY2(se) ? y2cfg : yFmt);
@@ -474,7 +618,9 @@ function cartesian(series, labels, s, t, box) {
   // stacked100 mede em 0–100 (%); os outros no domínio real do eixo.
   if (meta) {
     meta.plot = { left, right, top, bottom, plotW, plotH, horiz };
-    meta.scale = { dMin, dMax };
+    // log/sym: o editor precisa inverter pixel→valor pela MESMA curva, senão o
+    // ponto largado pula de ordem de grandeza (sym leva o T junto)
+    meta.scale = { dMin, dMax, log: logY, sym: symY, T };
     meta.scale2 = has2 ? { dMin: d2Min, dMax: d2Max } : null;
     meta.format = s.type === 'stacked100' ? { format: 'pct' } : s.y;
     meta.format2 = has2 ? y2cfg : null;
@@ -743,48 +889,663 @@ function roundedEnd(x, y, w, h, r, horiz, grow, fill) {
   return `<path d="${d}" fill="${fill}"/>`;
 }
 
+/* ── bubble (bolhas com ícone) ────────────────────────────────────────────────
+ *
+ * Cada item vira um círculo com ÁREA proporcional ao valor e um ícone dentro —
+ * é o formato de "tamanho de mercado", onde o que importa é a comparação de
+ * grandeza entre coisas que não estão numa série temporal.
+ *
+ * Área, não raio: o olho lê ÁREA. Com raio proporcional, um valor 4× maior
+ * viraria uma bolha 16× maior em área — o gráfico exageraria por um fator igual
+ * ao próprio valor. Daí `r ∝ √valor`, que é a regra do formato.
+ *
+ * `group` quebra em blocos com título e um total calculado (TRADFI | CRYPTO);
+ * `cat` dá a cor e monta a legenda. Bolhas alinhadas pelo TOPO: com o centro
+ * alinhado, os rótulos (que vão embaixo) ficariam em degrau conforme o raio.
+ */
+function bubbles(s, t, box) {
+  const { pad, top, plotBottom, W, H: H_, fs, meta } = box;
+  const out = [];
+  const itens = (s.bubbles || [])
+    .map((b) => ({ label: String(b.label ?? ''), value: Math.abs(+b.value || 0),
+      icon: b.icon || '', group: String(b.group ?? ''), cat: String(b.cat ?? '') }))
+    .filter((b) => b.value > 0);
+  if (!itens.length) return out;
+
+  const cats = s.bubbleCats || {};
+  const corDe = (b) => cats[b.cat] || t.series[Math.max(0, Object.keys(cats).indexOf(b.cat)) % t.series.length];
+  const grupos = [...new Set(itens.map((b) => b.group))];
+  const fmt = (v) => formatValue(v, s.y);
+
+  // — legenda das categorias, canto superior direito (identidade nunca só por cor) —
+  const usadas = [...new Set(itens.map((b) => b.cat))].filter(Boolean);
+  let topo = top;
+  if (usadas.length > 1) {
+    let ly = top + fs.legend * 0.9;
+    for (const c of usadas) {
+      const cor = cats[c] || t.series[usadas.indexOf(c) % t.series.length];
+      const tw = textW(c, fs.legend);
+      out.push(`<circle cx="${n2(W - pad - tw - fs.legend * 1.1)}" cy="${n2(ly - fs.legend * 0.32)}" r="${n2(fs.legend * 0.42)}" fill="${cor}"/>`);
+      out.push(txt(W - pad, ly, esc(c), { size: fs.legend, fill: t.muted, anchor: 'end', stretch: 90 }));
+      ly += fs.legend * 1.7;
+    }
+    topo = Math.max(top, ly - fs.legend * 1.7 + fs.legend);
+  }
+
+  /* Escala: a maior bolha ocupa a altura que sobra depois de reservar o
+   * cabeçalho do grupo e o rótulo de baixo. A largura entra na conta porque com
+   * muitas bolhas o limite deixa de ser a altura — a soma dos diâmetros é que
+   * estoura, e as bolhas passariam por cima uma da outra. */
+  const ondeRot = ['above', 'right'].includes(s.bubbleLabel) ? s.bubbleLabel : 'below';
+  const aoLado = ondeRot === 'right';
+  const cabecalho = grupos.some((g) => g) ? fs.legend * 3.2 : 0;
+  const rotuloH = aoLado ? 0 : fs.legend * 2.6;         // nome + valor fora da bolha
+  const gapRot = fs.legend * 0.85;                      // respiro bolha → rótulo (IGUAL pra todas)
+  const gapX = fs.legend * 1.1, gapGrupo = fs.legend * 2.4;
+  const alturaUtil = Math.max(20, plotBottom - topo - cabecalho - rotuloH - (aoLado ? 0 : gapRot));
+  const larguraUtil = W - 2 * pad - gapX * Math.max(0, itens.length - 1)
+    - gapGrupo * Math.max(0, grupos.length - 1);
+  const maxV = Math.max(...itens.map((b) => b.value));
+  const raiz = itens.reduce((a, b) => a + Math.sqrt(b.value), 0);
+  // dois tetos: pela altura (a maior bolha cabe) e pela largura (todas cabem lado a lado)
+  // k é a escala em px por √valor — costuma ser MENOR que 1 (√7,9 trilhões já
+  // é 2,8 milhões), então nada de piso aqui: um `Math.max(1, …)` transformava
+  // os raios em milhões de pixels
+  const kAltura = alturaUtil / 2 / Math.sqrt(maxV);
+  const kLargura = larguraUtil / 2 / raiz;
+  const k = Math.max(0, Math.min(kAltura, kLargura)) || 1;   // r = k·√valor
+  /* Raio MÍNIMO: valor miúdo ao lado de gigante vira um ponto de 1px — existe
+   * no dado e some no desenho. O piso entra depois da proporção, então só
+   * levanta quem sumiria; e é cortado pelo raio da maior bolha, senão num
+   * conjunto todo pequeno o piso viraria o tamanho de todas. */
+  const rMin = Math.max(0, Math.min(s.bubbleMinR ?? 9, k * Math.sqrt(maxV)));
+  const raio = (b) => Math.max(rMin, k * Math.sqrt(b.value));
+
+  /* Cada bolha ocupa uma FAIXA, não o próprio diâmetro: o rótulo embaixo
+   * costuma ser mais largo que a bolha (uma bolha de 6px com "Derivativos
+   * US$ 200 bi" embaixo), e reservar só o diâmetro fazia os textos de bolhas
+   * vizinhas se encavalarem. */
+  const doGrupo = (g) => itens.filter((b) => b.group === g);
+  const larguraTexto = (b) => Math.max(textW(b.label, fs.legend * 0.9), textW(fmt(b.value), fs.legend * 1.15));
+  // com o rótulo À DIREITA o texto não disputa espaço horizontal com o vizinho
+  // pelo centro: ele soma ao diâmetro, em vez de ser o maior dos dois
+  const faixaK = (b, kk) => {
+    const d = Math.max(Math.min(s.bubbleMinR ?? 9, kk * Math.sqrt(maxV)), kk * Math.sqrt(b.value)) * 2;
+    return aoLado ? d + fs.legend * 0.6 + larguraTexto(b) : Math.max(d, larguraTexto(b));
+  };
+  const faixa = (b) => faixaK(b, k);
+  // o grupo também não pode ser mais estreito que o próprio cabeçalho, senão o
+  // texto do título vaza por cima do grupo seguinte (ou pra fora da imagem)
+  const cabTexto = (g) => {
+    const soma = doGrupo(g).reduce((a, b) => a + b.value, 0);
+    return (s.bubbleGroups || {})[g] ?? `Total: ${fmt(soma)}`;
+  };
+  const largGrupoK = (g, kk) => Math.max(
+    doGrupo(g).reduce((a, b) => a + faixaK(b, kk), 0) + gapX * Math.max(0, doGrupo(g).length - 1),
+    g ? Math.max(textW(g, fs.legend * 1.5), textW(cabTexto(g), fs.legend * 0.82)) : 0);
+  const largGrupo = (g) => largGrupoK(g, k);
+  const largComK = (kk) => grupos.reduce((a, g) => a + largGrupoK(g, kk), 0) + gapGrupo * Math.max(0, grupos.length - 1);
+  const largTotal = largComK(k);
+  let x = pad + Math.max(0, (W - 2 * pad - largTotal) / 2);
+  // topo das bolhas, comum a todas. Com o rótulo ACIMA, ele mora nesta folga —
+  // sem reservar, o texto subiria por cima do cabeçalho do grupo.
+  const yTopo = topo + cabecalho + (ondeRot === 'above' ? rotuloH + gapRot : 0);
+
+  grupos.forEach((g, gi) => {
+    const doG = doGrupo(g);
+    const inicioG = x;
+    if (g) {
+      /* Subtítulo do grupo: por padrão a SOMA do que está desenhado, porque
+       * esse é o número que o gráfico pode garantir. Qualquer outra métrica
+       * (a referência trazia "Derivatives: 44%", que não sai da soma das
+       * bolhas) entra como texto livre em `spec.bubbleGroups` — inventar uma
+       * fórmula pra bater com um número que não conheço seria chutar. */
+      out.push(txt(x, topo + fs.legend * 1.15, esc(g),
+        { size: fs.legend * 1.5, fill: t.ink, weight: 600, ls: -0.01 }));
+      out.push(txt(x, topo + fs.legend * 2.5, esc(cabTexto(g)),
+        { size: fs.legend * 0.82, fill: t.faint, weight: 600, stretch: 90 }));
+    }
+    // linha separando o grupo anterior — só entre grupos, nunca na borda
+    if (gi > 0) {
+      const lx = x - gapGrupo / 2;
+      out.push(`<line x1="${n2(lx)}" y1="${n2(topo)}" x2="${n2(lx)}" y2="${n2(plotBottom)}" stroke="${t.grid}" stroke-width="1"/>`);
+    }
+
+    doG.forEach((b) => {
+      const r = raio(b), fx = faixa(b);
+      // com rótulo ao lado, a bolha encosta à esquerda da faixa e o texto ocupa
+      // o resto; nos outros modos ela fica no meio, com o texto centrado nela
+      const cx = aoLado ? x + r : x + fx / 2;
+      const cy = yTopo + r;
+      out.push(`<circle cx="${n2(cx)}" cy="${n2(cy)}" r="${n2(r)}" fill="${corDe(b)}"/>`);
+
+      /* Ícone dentro, no MESMO set do criador de timelines (36 da casa + 421
+       * Ionicons) e com a mesma sigla `txt:` como alternativa.
+       *
+       * `max` trava o crescimento: sem teto, na bolha gigante o ícone vira um
+       * desenho enorme que rouba a leitura do tamanho — que é o dado. `min` é o
+       * piso de legibilidade: abaixo dele o traço vira borrão, e é melhor
+       * bolha limpa que ícone ilegível. */
+      const ic = { ...DEFAULTS.bubbleIcon, ...(s.bubbleIcon || {}) };
+      const tinta = ehClaro(corDe(b)) ? '#0E0C1B' : '#FFFFFF';
+      const lado = Math.min(r * 1.15, ic.max);
+      if (b.icon && lado >= ic.min) {
+        if (isTextIcon(b.icon)) {
+          // sigla dimensionada pelo MESMO `lado` do ícone: assim ela tem o peso
+          // visual dos ícones vizinhos em vez de virar um texto solto
+          const fsSigla = lado * 0.46;
+          out.push(txt(cx, cy + fsSigla * 0.36, esc(textIconLabel(b.icon)),
+            { size: fsSigla, fill: tinta, anchor: 'middle', weight: 600, stretch: 90 }));
+        } else {
+          out.push(iconSvg(b.icon, { x: cx - lado / 2, y: cy - lado / 2, w: lado, h: lado }, tinta,
+            Math.max(1.2, 24 / lado * 1.6)));
+        }
+      }
+
+      /* Rótulo à distância CONSTANTE da borda da bolha — não numa base comum.
+       * Com base comum, a bolha pequena ficava com o texto longe dela e a
+       * ligação entre os dois se perdia; a distância fixa mantém o par colado,
+       * em qualquer tamanho. */
+      if (aoLado) {
+        const tx = cx + r + fs.legend * 0.6;
+        out.push(txt(tx, cy - fs.legend * 0.1, esc(b.label), { size: fs.legend * 0.9, fill: t.muted, stretch: 90 }));
+        out.push(txt(tx, cy + fs.legend * 1.15, esc(fmt(b.value)),
+          { size: fs.legend * 1.15, fill: t.ink, weight: 600 }));
+      } else if (ondeRot === 'above') {
+        const baseY = cy - r - gapRot;
+        out.push(txt(cx, baseY - fs.legend * 1.25, esc(b.label), { size: fs.legend * 0.9, fill: t.muted, anchor: 'middle', stretch: 90 }));
+        out.push(txt(cx, baseY, esc(fmt(b.value)), { size: fs.legend * 1.15, fill: t.ink, anchor: 'middle', weight: 600 }));
+      } else {
+        const baseY = cy + r + gapRot + fs.legend * 0.75;
+        out.push(txt(cx, baseY, esc(b.label), { size: fs.legend * 0.9, fill: t.muted, anchor: 'middle', stretch: 90 }));
+        out.push(txt(cx, baseY + fs.legend * 1.25, esc(fmt(b.value)),
+          { size: fs.legend * 1.15, fill: t.ink, anchor: 'middle', weight: 600 }));
+      }
+      x += fx + gapX;
+    });
+    // avança pela largura do GRUPO (que pode ser maior que a soma das faixas,
+    // quando o cabeçalho é mais largo) — senão o título do grupo seguinte
+    // começa cedo demais e escreve por cima do anterior
+    x = inicioG + largGrupo(g) + gapGrupo;
+  });
+
+  if (meta) {
+    meta.bubbles = itens.map((b) => ({ label: b.label, value: b.value, r: raio(b) }));
+    /* Largura mínima pra tudo caber lado a lado. Calculada com a escala da
+     * ALTURA (`kAltura`), não com a escala em uso: as duas se perseguem —
+     * alargar a imagem aumenta as bolhas, que pedem mais largura ainda, e o
+     * número nunca convergia (medido: com o valor de uma passada, uma bolha
+     * saía em cx=1438 numa imagem de 1396). Pela altura o alvo é fixo, e é o
+     * teto: com essa largura, quem limita passa a ser a altura e tudo cabe. */
+    meta.minWidth = Math.ceil(largComK(kAltura) + 2 * pad);
+  }
+  return out;
+}
+
+// luminância aproximada, pra decidir tinta clara ou escura sobre o preenchimento
+function ehClaro(hex) {
+  const m = /^#?([\da-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return false;
+  const v = parseInt(m[1], 16);
+  return (0.299 * (v >> 16) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) > 150;
+}
+
+/* ── sankey (diagrama de fluxo) ───────────────────────────────────────────────
+ *
+ * Dado = LIGAÇÕES, não séries: [{from, to, value}]. A espessura do fluxo é o
+ * valor, e é isso que faz o gráfico responder "de onde veio e pra onde foi"
+ * numa olhada — receita por fonte → agregações → total → lucro/custo.
+ *
+ * Três decisões que o layout exige:
+ *
+ * 1. COLUNA de cada nó = maior caminho desde uma origem (não o menor). Com o
+ *    menor, um atalho "fonte → total" puxaria o Total pra 2ª coluna e todas as
+ *    etapas intermediárias ficariam espremidas depois dele.
+ * 2. ALTURA do nó = max(entrada, saída). Num nó que só repassa, os dois lados
+ *    são iguais; num que junta ou vaza, o maior lado é que manda — senão os
+ *    fluxos não caberiam na própria caixa.
+ * 3. ORDEM dentro da coluna: baricentro dos vizinhos, algumas passadas. É o
+ *    que desembaraça os cruzamentos; sem isso o desenho vira um novelo mesmo
+ *    com os valores certos.
+ */
+function sankey(s, t, box) {
+  const { pad, top, plotBottom, W, H: H_, fs, meta } = box;
+  const out = [];
+  const links = (s.links || [])
+    .map((l) => ({ from: String(l.from ?? ''), to: String(l.to ?? ''), value: Math.abs(+l.value || 0) }))
+    .filter((l) => l.from && l.to && l.value > 0 && l.from !== l.to);
+  if (!links.length) return out;
+
+  // — nós na ordem em que aparecem —
+  const nome = [];
+  for (const l of links) for (const k of [l.from, l.to]) if (!nome.includes(k)) nome.push(k);
+  const N = nome.map((n) => ({ n, entra: [], sai: [] }));
+  const idx = new Map(nome.map((n, i) => [n, i]));
+  links.forEach((l, i) => {
+    l.a = idx.get(l.from); l.b = idx.get(l.to); l.i = i;
+    N[l.a].sai.push(l); N[l.b].entra.push(l);
+  });
+
+  // — coluna: maior caminho desde uma origem. O `visto` corta ciclo (fluxo que
+  //   volta pra trás não tem coluna definida e travaria o laço) —
+  const col = N.map(() => 0);
+  const prof = (i, visto) => {
+    if (visto.has(i)) return 0;
+    visto.add(i);
+    let m = 0;
+    for (const l of N[i].entra) m = Math.max(m, prof(l.a, visto) + 1);
+    visto.delete(i);
+    return m;
+  };
+  N.forEach((_, i) => { col[i] = prof(i, new Set()); });
+  // quem não alimenta ninguém vai pra última coluna: são os destinos finais, e
+  // alinhá-los à direita é o que fecha o desenho
+  const nCols = Math.max(...col) + 1;
+  N.forEach((nd, i) => { if (!nd.sai.length) col[i] = nCols - 1; });
+
+  const valor = N.map((nd) => Math.max(
+    nd.entra.reduce((a, l) => a + l.value, 0),
+    nd.sai.reduce((a, l) => a + l.value, 0)));
+
+  // — geometria —
+  const colunas = Array.from({ length: nCols }, (_, c) => N.map((_, i) => i).filter((i) => col[i] === c));
+  const nodeW = Math.max(6, 10 * s.fontScale);
+  /* Respiro entre nós: uma linha de texto, não um valor fixo miúdo. Num fluxo
+   * real a coluna 1 tem um nó gigante e uma penca de miúdos; com respiro
+   * pequeno demais os miúdos viram uma pilha espremida no rodapé, cada rótulo
+   * colado no do vizinho.
+   *
+   * Mas o respiro também não pode ser a altura CHEIA do rótulo (nome+valor):
+   * a escala é o que SOBRA depois dos gaps, então com 10 nós numa coluna os
+   * gaps comiam 90% da altura e as fitas viravam fios de cabelo — o gráfico
+   * deixava de mostrar a proporção, que é a única coisa que ele existe pra
+   * mostrar. Uma linha basta: o anti-colisão dos rótulos espalha o resto. */
+  const gapV = fs.legend * 1.2;
+  const alturaDisp = plotBottom - top;
+
+  /* ESPESSURA DO NÓ — duas coisas que o fluxo real exige e que a proporção
+   * pura não entrega:
+   *
+   * 1. `y.scale: 'log'`. Com US$ 699M ao lado de US$ 2,26M, a barra pequena
+   *    fica com 0,8px: existe no dado e some no desenho. Em log a razão de
+   *    357× vira ~8×, e as duas aparecem. Comprimir é MENTIR sobre a
+   *    proporção — por isso não é o padrão e o eixo diz qual escala está
+   *    valendo; é a troca consciente entre "proporção fiel" e "dá pra ver".
+   *    Fórmula log10(1 + v/min): passa pela origem (valor 0 → espessura 0) e
+   *    não explode com valor menor que 1, o que log puro faria.
+   *
+   * 2. `sankeyScale`. A espessura é uma FRAÇÃO da altura, então esticar a
+   *    imagem pra caber o texto engordava as barras junto e não sobrava nada:
+   *    o texto continuava apertado. Com o fator, altura da imagem e espessura
+   *    da barra viram controles separados — cresce a imagem, encolhe a barra,
+   *    e o que sobra vira respiro pro rótulo.                                 */
+  const positivos = valor.filter((v) => v > 0);
+  const minV = positivos.length ? Math.min(...positivos) : 1;
+  const logY = s.y?.scale === 'log';
+  const peso = (v) => (logY ? Math.log10(1 + Math.max(0, v) / minV) : Math.max(0, v));
+  const fator = Math.min(1, Math.max(0.15, s.sankeyScale ?? 1));
+
+  /* PISO de espessura. Numa distribuição real o fluxo miúdo sai com fração de
+   * pixel e some no antialiasing — some do DESENHO, não do dado, que é o pior
+   * tipo de sumiço: o gráfico passa a mostrar menos do que sabe. E o controle
+   * de espessura piorava isso (metade de 1,5px é 0,75px). Piso em px, aplicado
+   * DEPOIS da proporção: só os que sumiriam são levantados.
+   *
+   * O nó também respeita o piso das fitas dele — um nó com 5 saídas miúdas
+   * precisa de 5 pisos de altura, senão as fitas vazam pra fora da caixa. */
+  const minLink = Math.max(0, s.sankeyMinLink ?? 2);
+  const pisoNo = (i) => Math.max(minLink, N[i].sai.length * minLink, N[i].entra.length * minLink);
+
+  /* A escala sai por iteração, não por fórmula: quem já está no piso não
+   * responde mais à escala, então o espaço que sobra pros outros muda a cada
+   * ajuste. 6 passadas convergem de sobra e mantêm a conta fechada. */
+  let escala = Math.min(...colunas.map((c) => {
+    const soma = c.reduce((a, i) => a + peso(valor[i]), 0);
+    const sobra = alturaDisp - gapV * Math.max(0, c.length - 1);
+    return soma > 0 ? Math.max(0, sobra) / soma : Infinity;
+  })) * fator;
+  /* Teto na altura do nó: nó maior que a área não tem posição válida — ficaria
+   * pra fora por definição, e "nada fora da imagem" vale acima do piso. Só
+   * morde quando o piso × nº de fitas passa da área (piso muito alto num nó
+   * muito ramificado); nesse caso o piso cede, porque é ele que é opcional. */
+  const alt = (i) => Math.min(alturaDisp, Math.max(1.5, pisoNo(i), peso(valor[i]) * escala));
+  // piso da FITA cede junto: forçar minLink num nó que já bateu no teto faria
+  // as fitas somarem mais que a caixa e vazarem por baixo dela
+  const pisoFita = (i) => Math.min(minLink, alt(i) / Math.max(1, N[i].sai.length, N[i].entra.length));
+  for (let passo = 0; passo < 6; passo++) {
+    const excesso = Math.max(...colunas.map((c) => {
+      const usado = c.reduce((a, i) => a + alt(i), 0) + gapV * Math.max(0, c.length - 1);
+      return usado - alturaDisp;
+    }));
+    if (excesso <= 0.5) break;
+    // encolhe só a parte que ainda responde à escala (a que está no piso é fixa)
+    const col_ = colunas.reduce((pior, c) => {
+      const usado = c.reduce((a, i) => a + alt(i), 0) + gapV * Math.max(0, c.length - 1);
+      return usado > pior.usado ? { c, usado } : pior;
+    }, { c: [], usado: -Infinity }).c;
+    const flexivel = col_.filter((i) => peso(valor[i]) * escala > pisoNo(i))
+      .reduce((a, i) => a + peso(valor[i]), 0);
+    if (flexivel <= 0) break;                         // tudo no piso: não há o que encolher
+    escala = Math.max(0, escala - excesso / flexivel);
+  }
+
+  // ordem inicial: como veio no dado; depois baricentro pra desembaraçar
+  const ordem = colunas.map((c) => [...c]);
+  const yDe = new Array(N.length).fill(0);
+  /* NENHUM retângulo pode sair da imagem — nem por arraste, nem por piso, nem
+   * por coluna cheia. O corte é aqui, no renderer, e não só no editor: a spec
+   * pode chegar de qualquer lugar (JSON colado, arquivo salvo, IA) e o desenho
+   * tem que se defender sozinho. */
+  const dentro = (y, i) => Math.max(top, Math.min(y, plotBottom - alt(i)));
+  const empilha = () => ordem.forEach((c) => {
+    const somaNos = c.reduce((a, i) => a + alt(i), 0);
+    // com muitos nós (ou piso alto) a coluna não cabe com o respiro cheio —
+    // aperta o respiro antes de deixar vazar, que é o mal menor
+    const g = somaNos + gapV * Math.max(0, c.length - 1) > alturaDisp && c.length > 1
+      ? Math.max(0, (alturaDisp - somaNos) / (c.length - 1))
+      : gapV;
+    let y = top + Math.max(0, (alturaDisp - (somaNos + g * Math.max(0, c.length - 1))) / 2);
+    c.forEach((i) => { yDe[i] = dentro(y, i); y += alt(i) + g; });
+  });
+  empilha();
+  const efetivo = new Array(N.length).fill(0);
+  const aplicaOffsets = () => {
+    // ajuste manual do editor: soma DEPOIS do layout automático, por nome, pra
+    // sobreviver a mudança de dado (o índice muda quando uma ligação entra ou sai)
+    const off = s.nodeOffsets || {};
+    N.forEach((nd, i) => {
+      const base = yDe[i];
+      // o arraste também é cortado: puxar o nó pra fora da imagem o esconderia
+      yDe[i] = dentro(base + (off[nd.n] || 0), i);
+      // guarda o quanto DE FATO andou: o editor regrava isso no lugar do valor
+      // pedido, senão um arraste longo demais deixaria um offset gigante
+      // guardado e voltar o nó exigiria desfazer todo o excesso primeiro
+      efetivo[i] = yDe[i] - base;
+    });
+  };
+  for (let passo = 0; passo < 6; passo++) {
+    const dir = passo % 2 === 0;                     // alterna: puxa da esquerda, depois da direita
+    ordem.forEach((c) => {
+      const centro = (i) => {
+        const viz = dir ? N[i].entra.map((l) => l.a) : N[i].sai.map((l) => l.b);
+        if (!viz.length) return yDe[i] + alt(i) / 2;
+        return viz.reduce((a, j) => a + yDe[j] + alt(j) / 2, 0) / viz.length;
+      };
+      c.sort((i, j) => centro(i) - centro(j));
+    });
+    empilha();
+  }
+  aplicaOffsets();   // só no fim: o baricentro trabalha sobre o layout limpo
+
+  // — cor: paleta por nó, com override manual (spec.nodeColors) —
+  const cores = s.nodeColors || {};
+  const corDe = (i) => cores[nome[i]] || t.series[i % t.series.length];
+
+  /* Fluxos primeiro, nós por cima. Cada ligação sai empilhada na borda direita
+   * da origem e chega empilhada na esquerda do destino — a ordem do
+   * empilhamento segue a posição vertical do OUTRO lado, senão os fluxos se
+   * cruzam dentro do próprio nó. */
+  const offSai = new Array(N.length).fill(0), offEntra = new Array(N.length).fill(0);
+  /* Faixa reservada à direita pros rótulos da ÚLTIMA coluna. Antes eles eram
+   * escritos à esquerda do nó (não havia espaço à direita) e caíam POR CIMA do
+   * nó anterior — medido: 3 rótulos sobre nós. Encolhendo o grafo, todo rótulo
+   * escreve à direita, sempre fora do desenho. */
+  const fsNome = fs.legend;
+  const rotFim = N.map((nd, i) => (nd.sai.length ? 0 : textW(nd.n, fsNome) + fsNome * 0.6));
+  const reserva = Math.min(Math.max(0, ...rotFim), (W - 2 * pad) * 0.28);
+  const plotW = W - 2 * pad - reserva;
+  const xDe = (c) => pad + (nCols === 1 ? 0 : (plotW - nodeW) * c / (nCols - 1));
+  const meio = (i) => yDe[i] + alt(i) / 2;
+  [...links]
+    .sort((p, q) => (meio(p.b) - meio(q.b)) || (meio(p.a) - meio(q.a)))
+    .forEach((l) => {
+      /* Espessura de cada PONTA em relação ao nó daquela ponta, não um valor
+       * único pra fita. Em escala linear dá exatamente no mesmo (a fração do
+       * valor vezes a altura proporcional é o próprio valor × escala), mas em
+       * log é o que mantém tudo encaixado: o nó comprime, e as fitas dentro
+       * dele comprimem junto, sempre preenchendo a caixa sem sobrar nem faltar.
+       * A fita então afina ou engorda no caminho — é a cara honesta de uma
+       * escala que não conserva soma. */
+      // o piso vale pras fitas também — e cabe, porque `pisoNo` já reservou
+      // espaço no nó pra cada fita que entra ou sai dele
+      const h0 = Math.max(pisoFita(l.a), (l.value / (valor[l.a] || 1)) * alt(l.a));
+      const h1 = Math.max(pisoFita(l.b), (l.value / (valor[l.b] || 1)) * alt(l.b));
+      const x0 = xDe(col[l.a]) + nodeW, x1 = xDe(col[l.b]);
+      const y0 = yDe[l.a] + offSai[l.a], y1 = yDe[l.b] + offEntra[l.b];
+      offSai[l.a] += h0; offEntra[l.b] += h1;
+      const cm = (x0 + x1) / 2;   // curva em S: horizontal nas pontas, como manda o padrão
+      out.push(`<path d="M${n2(x0)} ${n2(y0)}C${n2(cm)} ${n2(y0)},${n2(cm)} ${n2(y1)},${n2(x1)} ${n2(y1)}`
+        + `L${n2(x1)} ${n2(y1 + h1)}C${n2(cm)} ${n2(y1 + h1)},${n2(cm)} ${n2(y0 + h0)},${n2(x0)} ${n2(y0 + h0)}Z"`
+        + ` fill="${corDe(l.a)}" opacity="0.26"/>`);
+    });
+
+  if (meta) meta.sankeyNodes = [];
+  N.forEach((nd, i) => {
+    const x = xDe(col[i]), y = yDe[i], h = alt(i);
+    out.push(`<rect x="${n2(x)}" y="${n2(y)}" width="${n2(nodeW)}" height="${n2(h)}" rx="2" fill="${corDe(i)}"/>`);
+    // geometria pro editor arrastar o nó (o rótulo acompanha)
+    if (meta) meta.sankeyNodes.push({ n: nd.n, x, y, w: nodeW, h, offset: efetivo[i] });
+  });
+
+  /* Rótulos. Três coisas que o desenho exige e que a primeira versão errava:
+   *
+   * 1. Ancorado no TOPO do nó, não no centro. Num nó alto o texto fica sobre o
+   *    começo do próprio fluxo (é o que a referência faz) e some da frente dos
+   *    vizinhos; centrado, ele flutuava no meio do fluxo e brigava com tudo.
+   * 2. QUEBRA em duas linhas quando não cabe até a coluna seguinte — sem isso
+   *    "Receita Padrão da Corretora" atravessava o gráfico inteiro por cima
+   *    dos outros nós.
+   * 3. Anti-colisão por coluna: nós finos e vizinhos (as taxas pequenas aqui)
+   *    apontam quase pra mesma altura e os textos empilham um no outro.       */
+  const larguraCol = nCols > 1 ? (plotW - nodeW) / (nCols - 1) : plotW;
+  const cabe = Math.max(fs.legend * 4, larguraCol - nodeW - fs.legend * 1.6);
+  const quebra = (texto) => {
+    if (textW(texto, fs.legend) <= cabe) return [texto];
+    const p = texto.split(' ');
+    if (p.length < 2) return [texto];
+    // corta no espaço que deixa as duas metades mais parecidas
+    let melhor = 1, dif = Infinity;
+    for (let k = 1; k < p.length; k++) {
+      const d = Math.abs(textW(p.slice(0, k).join(' '), fs.legend) - textW(p.slice(k).join(' '), fs.legend));
+      if (d < dif) { dif = d; melhor = k; }
+    }
+    return [p.slice(0, melhor).join(' '), p.slice(melhor).join(' ')];
+  };
+
+  const off = s.nodeOffsets || {};
+  const rot = N.map((nd, i) => {
+    const linhas = quebra(nd.n);
+    return { i, linhas, c: col[i],
+      // nó movido à mão: o rótulo é ÂNCORA, não cede. Sem isso o anti-colisão
+      // puxava o rótulo de volta pro lugar "certo" e ele descolava do nó que o
+      // usuário acabou de arrastar — o movimento parecia não ter pegado.
+      fixo: !!off[nd.n],
+      // duas linhas de nome + a do valor
+      h: fs.legend * (0.95 * linhas.length + 1.05),
+      y: yDe[i] + Math.min(fs.legend * 0.95, alt(i) / 2 + fs.legend * 0.35) };
+  });
+  /* Duas passadas, não um deslocamento em bloco. Empurrar a coluna inteira pra
+   * cima quando o último rótulo estoura embaixo jogava o PRIMEIRO pra fora da
+   * imagem (medido: y = -163) — o nó grande fica no topo e os finos se
+   * amontoam no fim, então o empurrão acumulado é enorme. Descendo e depois
+   * subindo só quem passou do limite, cada um cede o mínimo. */
+  const respiro = fs.legend * 0.25;
+  for (let c = 0; c < nCols; c++) {
+    const col_ = rot.filter((r) => r.c === c).sort((a, b) => a.y - b.y);
+    if (!col_.length) continue;
+    // `fixo` (nó arrastado à mão) não cede em nenhuma passada — quem desvia são
+    // os automáticos, dos dois lados dele
+    for (let k = 1; k < col_.length; k++) {                     // desce quem sobrepõe
+      if (col_[k].fixo) continue;
+      col_[k].y = Math.max(col_[k].y, col_[k - 1].y + col_[k - 1].h + respiro);
+    }
+    let limite = plotBottom;                                    // sobe quem passou do fim
+    for (let k = col_.length - 1; k >= 0; k--) {
+      if (!col_[k].fixo && col_[k].y + col_[k].h > limite) col_[k].y = limite - col_[k].h;
+      limite = Math.min(limite, col_[k].y - respiro);
+    }
+    let piso = top + fs.legend * 0.9;                            // e ninguém acima do topo
+    for (const r of col_) {
+      if (!r.fixo) r.y = Math.max(r.y, piso);
+      piso = Math.max(piso, r.y + r.h + respiro);
+    }
+  }
+
+  /* Altura mínima pra caber TODOS os rótulos. A coluna mais cheia é quem manda:
+   * quando não cabe, o anti-colisão empilha o que pode e o resto encavala — o
+   * gráfico fica errado por falta de espaço, não por bug. Em vez de espremer, o
+   * renderer devolve o número e quem chama decide (o editor cresce a imagem). */
+  if (meta) {
+    const porCol = Array.from({ length: nCols }, (_, c) => rot.filter((r) => r.c === c)
+      .reduce((a, r) => a + r.h + respiro, 0));
+    // os PISOS também pedem altura: um nó com muitas fitas precisa de um piso
+    // por fita. Sem contar isso aqui, o piso batia no teto do nó e cedia
+    // silenciosamente — a imagem cresce e o piso é respeitado de verdade.
+    const porPiso = colunas.map((c) => c.reduce((a, i) => a + pisoNo(i), 0) + gapV * Math.max(0, c.length - 1));
+    meta.minHeight = Math.ceil(Math.max(...porCol, ...porPiso) + (H_ - (plotBottom - top)) + fs.legend);
+  }
+  // sempre à direita do nó: a faixa reservada acima garante espaço até na
+  // última coluna, então nenhum rótulo precisa invadir o desenho pra caber
+  rot.forEach((r) => {
+    const tx = xDe(r.c) + nodeW + fs.legend * 0.5;
+    r.linhas.forEach((linha, k) => out.push(txt(tx, r.y + k * fs.legend * 0.95, esc(linha),
+      { size: fs.legend, fill: t.ink, weight: 600, anchor: 'start', stretch: 90 })));
+    out.push(txt(tx, r.y + r.linhas.length * fs.legend * 0.95, esc(formatValue(valor[r.i], s.y)),
+      { size: fs.legend * 0.85, fill: t.faint, anchor: 'start', stretch: 90 }));
+  });
+  return out;
+}
+
 // ── donut ────────────────────────────────────────────────────────────────────
 function donut(series, labels, s, t, box) {
   const { pad, top, plotBottom, W, fs } = box;
   const out = [];
-  const data = series.length > 1 && series[0].data.length === 1
-    ? series.map((se) => ({ name: se.name, v: se.data[0] ?? 0, color: se.color }))
-    : labels.map((l, i) => ({ name: l, v: series[0]?.data[i] ?? 0, color: series[0]?.color && series.length === 1 ? t.series[i % t.series.length] : t.series[i % t.series.length] }));
+  const cores = s.sliceColors || {};
+  let data = series.length > 1 && series[0].data.length === 1
+    ? series.map((se, i) => ({ name: se.name, v: se.data[0] ?? 0, color: cores[se.name] || se.color || t.series[i % t.series.length] }))
+    : labels.map((l, i) => ({ name: l, v: series[0]?.data[i] ?? 0, color: cores[l] || t.series[i % t.series.length] }));
+
+  /* Junta as fatias miúdas numa só. Numa distribuição real a cauda longa vira
+   * um punhado de fatias de 0,3% — invisíveis no desenho, mas cada uma
+   * gastando um card e uma cor da paleta, e empurrando as que importam pra
+   * fora do olho. Agrupar é o que a paleta da casa já pressupõe ("a 7ª série
+   * vira Outros, não uma cor nova"). Só agrupa 2+: virar "Outros" com uma
+   * fatia só troca um nome informativo por um genérico.                       */
+  const g = s.groupSmall || {};
+  const bruto = data.reduce((a, d) => a + Math.abs(d.v), 0) || 1;
+  if (g.on && g.pct > 0) {
+    const miudas = data.filter((d) => (Math.abs(d.v) / bruto) * 100 < g.pct);
+    if (miudas.length > 1) {
+      const soma = miudas.reduce((a, d) => a + d.v, 0);
+      data = data.filter((d) => !miudas.includes(d));
+      data.push({ name: g.label || 'Outros', v: soma, color: cores[g.label || 'Outros'] || t.faint, _juntou: miudas.length });
+    }
+  }
   const total = data.reduce((a, d) => a + Math.abs(d.v), 0) || 1;
 
-  const size = Math.min(plotBottom - top, (W - pad * 2) * 0.62);
-  const cx = pad + size / 2, cy = top + size / 2;
+  /* Cards em volta da rosca, cada um na ALTURA da sua fatia, em vez da lista
+   * lateral: com a lista, achar de quem é a fatia exige ir e voltar entre
+   * gráfico e legenda comparando cor. Aqui o card fica do lado pra onde a
+   * fatia aponta, então a leitura é local. O gráfico vai pro centro da imagem,
+   * com uma coluna de cards de cada lado. */
+  const fsVal = fs.legend * 1.15, fsName = fs.legend * 0.9;
+  const sw = fs.legend * 0.72;                    // lado do quadradinho de cor
+  const gapSw = fs.legend * 0.5;                  // quadradinho → texto
+  const linhaH = fsName * 1.2;                    // valor → nome
+  /* % da fatia com casas FIXAS, decididas pelo conjunto. Numa distribuição,
+   * arredondar 38,9→39 e 23,8→24 faz a soma fechar em 100,3% e apaga a
+   * diferença entre fatias vizinhas. E as casas têm que ser as MESMAS em todas:
+   * "31%" ao lado de "38,9%" parece defeito, não precisão.
+   *
+   * Formatado aqui, e não pelo formatValue: lá as casas são um teto ("até N"),
+   * então 31 sairia "31" e 38,9 sairia "38,9" no mesmo eixo. Piso fixo é o que
+   * essa leitura precisa — e não dá pra impor isso lá, porque no eixo log
+   * "1,000" (1 com 3 casas) se confunde com mil. */
+  const temFracao = data.some((d) => {
+    const p = (Math.abs(d.v) / total) * 100;
+    return Math.abs(p - Math.round(p)) >= 0.05;
+  });
+  const pct = (p) => (temFracao ? p.toFixed(1).replace('.', ',') : String(Math.round(p))) + '%';
+  const cards = data.map((d) => {
+    const share = pct((Math.abs(d.v) / total) * 100);
+    const val = s.y.format === 'pct' ? pct(d.v) : formatValue(d.v, s.y);
+    // dado já em % não precisa da fatia recalculada ("42% · 42%" não informa nada)
+    const destaque = s.y.format === 'pct' ? val : share;
+    const abaixo = s.y.format === 'pct' ? d.name : `${d.name} · ${val}`;
+    return { ...d, destaque, abaixo,
+      w: sw + gapSw + Math.max(textW(destaque, fsVal), textW(abaixo, fsName)) };
+  });
+  const cardW = Math.max(...cards.map((c) => c.w));
+  const cardH = fsVal + linhaH;
+  const gapChart = 26 * s.fontScale;              // respiro entre fatia e card
+
+  // o gráfico é o que sobra depois de reservar as duas colunas de card
+  const alturaDisp = plotBottom - top;
+  const size = Math.max(60, Math.min(alturaDisp, W - 2 * pad - 2 * (cardW + gapChart)));
+  const cx = W / 2, cy = top + alturaDisp / 2;
   // pie = rosca cheia (raio interno 0)
   const rOut = size / 2, rIn = s.type === 'pie' ? 0 : rOut * (1 - s.donutThickness);
   const GAPa = 2 / rOut; // respiro de ~2px em radianos
 
   let a = -Math.PI / 2;
-  data.forEach((d) => {
+  const marcas = [];
+  data.forEach((d, i) => {
     const sweep = (Math.abs(d.v) / total) * Math.PI * 2;
     if (sweep > GAPa * 1.5) out.push(`<path d="${arc(cx, cy, rOut, rIn, a + GAPa / 2, a + sweep - GAPa / 2)}" fill="${d.color}"/>`);
-    // pizza: % escrito NA fatia (fatia pequena não cabe texto — fica só na legenda)
+    const mid = a + sweep / 2;
+    // pizza: % escrito NA fatia (fatia pequena não cabe texto — fica só no card)
     if (s.type === 'pie' && sweep / (Math.PI * 2) >= 0.05) {
-      const mid = a + sweep / 2, rr = rOut * 0.62;
+      const rr = rOut * 0.62;
       out.push(txt(cx + Math.cos(mid) * rr, cy + Math.sin(mid) * rr + fs.legend * 0.35,
-        esc(formatValue((Math.abs(d.v) / total) * 100, { format: 'pct' })),
+        esc(pct((Math.abs(d.v) / total) * 100)),
         { size: fs.legend, fill: '#fff', anchor: 'middle', weight: 600 }));
     }
+    // lado = pra onde a fatia aponta; altura = onde ela está
+    marcas.push({ ...cards[i], mid, dir: Math.cos(mid) >= 0 ? 1 : -1, y: cy + Math.sin(mid) * rOut * 0.98 });
     a += sweep;
   });
 
-  // rótulos diretos à direita — legenda + valor, identidade nunca só por cor
-  let ly = top + fs.legend * 1.2;
-  const lx = pad + size + 34 * s.fontScale;
-  data.forEach((d) => {
-    out.push(`<rect x="${n2(lx)}" y="${n2(ly - fs.legend * 0.72)}" width="${n2(fs.legend * 0.78)}" height="${n2(fs.legend * 0.78)}" rx="2" fill="${d.color}"/>`);
-    out.push(txt(lx + fs.legend * 1.2, ly, esc(d.name), { size: fs.legend, fill: t.muted, stretch: 90 }));
-    // se o dado já está em %, mostrar a fatia calculada ao lado repete a mesma
-    // informação ("42% · 42%") — nesse caso vale só o valor
-    const val = formatValue(d.v, s.y);
-    const share = formatValue((Math.abs(d.v) / total) * 100, { format: 'pct' });
-    out.push(txt(W - pad, ly, esc(s.y.format === 'pct' ? val : `${val}  ·  ${share}`),
-      { size: fs.legend, fill: t.ink, anchor: 'end', weight: 600, stretch: 90 }));
-    ly += fs.legend * 2;
+  /* Equilibra as duas colunas. Fatia cujo meio cai perto da vertical (topo ou
+   * base do círculo) tem |cos| ~ 0 e escolhe lado por uma fração de grau —
+   * numa distribuição real isso jogava 4 cards de um lado e 1 do outro, com o
+   * gráfico visualmente torto. Quem muda de lado é sempre a mais vertical, que
+   * é a que menos "aponta" pra algum lado. */
+  for (let volta = 0; volta < marcas.length; volta++) {
+    const dir = marcas.filter((m) => m.dir === 1), esq = marcas.filter((m) => m.dir === -1);
+    if (Math.abs(dir.length - esq.length) <= 1) break;
+    const cheio = dir.length > esq.length ? 1 : -1;
+    const troca = marcas.filter((m) => m.dir === cheio)
+      .sort((x, y2) => Math.abs(Math.cos(x.mid)) - Math.abs(Math.cos(y2.mid)))[0];
+    if (!troca) break;
+    troca.dir = -cheio;
+  }
+
+  /* Empurra os cards que se sobrepõem, coluna por coluna, e recentra a coluna
+   * se o empurrão vazar da área — mesma ideia do anti-colisão dos rótulos de
+   * linha. Sem isso, duas fatias finas vizinhas escrevem uma por cima da outra. */
+  [1, -1].forEach((dir) => {
+    const col = marcas.filter((m) => m.dir === dir).sort((x, y2) => x.y - y2.y);
+    if (!col.length) return;
+    const minGap = cardH + fs.legend * 0.55;
+    for (let i = 1; i < col.length; i++) {
+      if (col[i].y - col[i - 1].y < minGap) col[i].y = col[i - 1].y + minGap;
+    }
+    const sobra = (col.at(-1).y + cardH) - plotBottom;
+    if (sobra > 0) col.forEach((m) => { m.y -= sobra; });
+    const falta = top + fsVal - col[0].y;
+    if (falta > 0) col.forEach((m) => { m.y += falta; });
+  });
+
+  // identidade nunca só por cor: o nome vai escrito no card, sempre
+  marcas.forEach((m) => {
+    const xBorda = cx + m.dir * (size / 2 + gapChart);   // lado do card virado pro gráfico
+    const xSw = m.dir > 0 ? xBorda : xBorda - sw;
+    const xTxt = m.dir > 0 ? xBorda + sw + gapSw : xBorda - sw - gapSw;
+    const anchor = m.dir > 0 ? 'start' : 'end';
+    out.push(`<rect x="${n2(xSw)}" y="${n2(m.y - fsVal * 0.72)}" width="${n2(sw)}" height="${n2(sw)}" rx="2" fill="${m.color}"/>`);
+    // valor na COR DA FATIA (é o que amarra card e seção à distância)
+    out.push(txt(xTxt, m.y, esc(m.destaque), { size: fsVal, fill: m.color, anchor, weight: 600, stretch: 90 }));
+    out.push(txt(xTxt, m.y + linhaH, esc(m.abaixo), { size: fsName, fill: t.muted, anchor, stretch: 90 }));
   });
   return out;
 }

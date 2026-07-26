@@ -250,7 +250,15 @@ export function renderTimeline(userSpec = {}, opts = {}) {
     ? `@font-face{font-family:"Plex";src:url("${opts.fontDataUri}") format("truetype-variations");font-weight:100 700;font-stretch:62% 100%}`
     : '';
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(s.title || 'Linha do tempo')}">
+  // opts.embedPlan: carimba o plano do Figma num <metadata> (elemento padrão de
+  // SVG, ignorado por qualquer renderer). É assim que UM texto no clipboard serve
+  // aos dois caminhos: colado direto no Figma vira vetor; colado no plugin da
+  // Paradigma vira frame com auto-layout.
+  const meta = opts.embedPlan
+    ? `\n<metadata id="pdgm-timeline">${esc(JSON.stringify(figmaPlan(userSpec)))}</metadata>`
+    : '';
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(s.title || 'Linha do tempo')}">${meta}
 <style>${font}text{font-family:"Plex",system-ui,sans-serif;font-synthesis:none}</style>
 ${s.transparent ? '' : `<rect width="${W}" height="${H}" fill="${t.surface}"/>`}
 ${out.join('\n')}
@@ -350,6 +358,71 @@ function drawHorizontal(out, s, t, p, accent, card) {
   }
 }
 
+// ── plano pro Figma ──────────────────────────────────────────────────────────
+// Auto-layout NÃO cabe em SVG (nem em nenhum formato de clipboard público — o
+// formato nativo do Figma é binário proprietário). Então o SVG copiado leva este
+// plano embutido num <metadata>, e o plugin da Paradigma (figma-plugin/) monta
+// frames com layoutMode a partir dele. Sem o plugin, o mesmo texto colado no
+// Figma vira camadas vetoriais normais — só sem auto-layout.
+//
+// O plano é COMPLETO de propósito: cores em rgba 0-1, medidas em px e o SVG de
+// cada ícone já tingido. O plugin não precisa conhecer tema, paleta nem a
+// biblioteca de ícones — ele só empilha nós.
+const rgba = (v) => {
+  const s = String(v ?? '').trim();
+  const m = /^rgba?\(([^)]+)\)$/i.exec(s);
+  if (m) {
+    const [r, g, b, a = 1] = m[1].split(',').map((x) => parseFloat(x));
+    return { r: r / 255, g: g / 255, b: b / 255, a: +a };
+  }
+  const h = /^#([0-9a-f]{6})$/i.exec(s);
+  if (!h) return null;
+  const n = parseInt(h[1], 16);
+  return { r: ((n >> 16) & 255) / 255, g: ((n >> 8) & 255) / 255, b: (n & 255) / 255, a: 1 };
+};
+
+export function figmaPlan(userSpec = {}) {
+  const s = deepMerge(DEFAULTS, userSpec);
+  const t = THEMES[s.theme] || THEMES.dark;
+  const p = plan(s), m = p.m;
+  const accent = s.accent || ACCENT[s.theme] || ACCENT.dark;
+  const cardTok = CARD[s.theme] || CARD.dark;
+  const cells = p.horiz ? p.cols : p.rows;
+  const cardW = cells?.[0]?.cardW ?? 260;
+  const iconOf = (ev) => {
+    if (isTextIcon(ev.icon)) return { badge: textIconLabel(ev.icon) };
+    if (!ev.icon) return {};
+    const k = m.node * 0.52;
+    return { svg: iconSvg(ev.icon, { x: 0, y: 0, w: k, h: k }, ev.color || accent, 1.8) };
+  };
+  return {
+    v: 1,
+    layout: s.layout,
+    size: p.size,
+    cor: {
+      surface: s.transparent ? null : rgba(t.surface), ink: rgba(t.ink), muted: rgba(t.muted),
+      faint: rgba(t.faint), accent: rgba(accent), card: rgba(cardTok.fill), cardStroke: rgba(cardTok.stroke),
+    },
+    txt: {
+      range: p.head.find((h) => h.kind === 'eyebrow')?.text || '',
+      title: p.head.find((h) => h.kind === 'title')?.text || '',
+      subtitle: p.head.find((h) => h.kind === 'sub')?.text || '',
+      source: s.source && s.show?.source ? s.source : '',
+    },
+    med: {
+      pad: m.pad, gap: m.gap, conn: m.conn, node: m.node, cardPad: m.cardPad,
+      lineH: m.lineH, dateGap: m.dateGap, cardW, fs: m.fs, radius: 8 * m.F,
+    },
+    op: { card: s.card, connector: s.connector, arrow: s.arrow },
+    events: (cells || []).map((c) => ({
+      date: c.hasDate ? String(c.ev.date).toUpperCase() : '',
+      text: c.ev.text || '',
+      side: c.side,
+      ...iconOf(c.ev),
+    })),
+  };
+}
+
 // ── datas: parse e ordenação ─────────────────────────────────────────────────
 const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho',
   'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
@@ -375,6 +448,41 @@ export function dateKey(str) {
   return +year * 12 + month;
 }
 
+// Texto comparável: sem acento, sem caixa, sem pontuação, espaço normalizado.
+const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * Junta as listas de eventos vindas de FATIAS com sobreposição da mesma imagem.
+ * Mesmo evento = mesma data + um texto contido no outro (a fatia corta o card no
+ * meio, então uma versão vem truncada) — fica a versão MAIS LONGA, e o ícone de
+ * quem tiver. Determinístico: quem decide é esta regra, não o modelo.
+ */
+export function mergeEvents(lists) {
+  const out = [];
+  for (const list of lists) {
+    for (const ev of list || []) {
+      const t = norm(ev.text);
+      // sem texto, ou texto que é nota do próprio modelo sobre a borda da fatia
+      // ("(texto cortado)"): não é evento, é resto do fatiamento
+      if (!t || /^\(.*\)$/.test(String(ev.text).trim())) continue;
+      const d = norm(ev.date);
+      const hit = out.find((o) => {
+        const od = norm(o.date), ot = norm(o.text);
+        // data VAZIA é curinga: a fatia cortou o rótulo e só veio o texto
+        if (d && od && d !== od) return false;
+        return ot && (ot.includes(t) || t.includes(ot));
+      });
+      if (!hit) { out.push({ ...ev }); continue; }
+      // repetido: fica a versão mais completa, e nem data nem ícone se perdem
+      if (String(ev.text || '').length > String(hit.text || '').length) hit.text = ev.text;
+      if (!String(hit.date || '').trim() && ev.date) hit.date = ev.date;
+      if (!hit.icon && ev.icon) hit.icon = ev.icon;
+    }
+  }
+  return out;
+}
+
 /** Ordena eventos por data (estável; sem data fica no fim, na ordem original). */
 export function sortEvents(events) {
   return events
@@ -384,15 +492,40 @@ export function sortEvents(events) {
 }
 
 // ── lista de texto (um evento por linha: "data | texto | icone") ──────────────
+// Na lista de texto cada evento é UMA linha, então quebra de linha dentro do
+// texto do card viaja escapada como \n literal (e volta em parseLines).
 export function toLines(events) {
   return (events || []).map((e) =>
-    [e.date || '', e.text || '', e.icon || ''].join(' | ').replace(/\s*\|\s*$/, '')).join('\n');
+    [e.date || '', String(e.text ?? '').replace(/\n/g, '\\n'), e.icon || '']
+      .join(' | ').replace(/\s*\|\s*$/, '')).join('\n');
+}
+
+/**
+ * Resposta do Claude pra uma imagem (ver ia-timeline.md): linhas de meta
+ * (`TITULO:`, `SUBTITULO:`, `FONTE:`, `LAYOUT:`) + uma linha `data | texto |
+ * ícone` por evento. Texto puro em vez de JSON de propósito: aspas dentro do
+ * texto ("Jelly Jelly") quebravam o JSON e levavam a transcrição inteira com
+ * elas. Só linha COM `|` conta como evento, então preâmbulo do modelo ("Aqui
+ * está a transcrição:") é ignorado em vez de virar evento fantasma.
+ */
+export function parseSliceText(txt) {
+  const META = { titulo: 'title', subtitulo: 'subtitle', fonte: 'source', layout: 'layout' };
+  const meta = {}, evLines = [];
+  for (const raw of String(txt ?? '').split('\n')) {
+    const ln = raw.trim().replace(/^```\w*$|^```$/, '');
+    if (!ln) continue;
+    const m = /^([A-Za-zÀ-ú]+)\s*:\s*(.*)$/.exec(ln);
+    const key = m && META[m[1].toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')];
+    if (key) { if (m[2].trim()) meta[key] = m[2].trim(); continue; }
+    if (ln.includes('|')) evLines.push(ln);
+  }
+  return { meta, events: parseLines(evLines.join('\n')) };
 }
 
 export function parseLines(str) {
   return String(str ?? '').split('\n').map((ln) => ln.trim()).filter(Boolean).map((ln) => {
     const [date = '', text = '', icon = ''] = ln.split('|').map((v) => v.trim());
-    const ev = { date, text };
+    const ev = { date, text: text.replace(/\\n/g, '\n') };
     if (icon) ev.icon = icon;
     return ev;
   });

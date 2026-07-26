@@ -4,21 +4,49 @@
  * Claude Code (sua assinatura, sem chave de API) sobre a imagem enviada e
  * devolve a spec do gráfico. É o "usar o LLM pela UI" sem API.
  *
- *   node server.mjs           # porta 5180
- *   node server.mjs 5999      # outra porta
+ *   node --watch server.mjs   # porta 5280 — SEMPRE com --watch (ver abaixo)
+ *   node --watch server.mjs 5999
+ *
+ * Porta 5280, não 5180: a 5180 é a padrão do MCP do Figma e vivia ocupada.
  *
  * ponytail: sem framework — http/fs/child_process bastam pra um servidor local.
  */
 import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir, unlink, rm, stat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
-const PORT = +process.argv[2] || +process.env.PORT || 5180;
-const IA_DIR = join(ROOT, '_ia');
+const PORT = +process.argv[2] || +process.env.PORT || 5280;
+// IA_DIR por env pra o teste automatizado poder apontar pra um tmp: a rota
+// grava SEMPRE no mesmo caminho fixo (_ia/input.png), então um teste rodando
+// contra a pasta real apaga a imagem da última conversão do usuário — e o
+// /api/refine, que relê essa imagem, passa a falhar. Aconteceu.
+const IA_DIR = process.env.IA_DIR || join(ROOT, '_ia');
+
+/* Guarda contra o pior bug de todos: o servidor rodando código que não existe
+ * mais. Node carrega o módulo UMA vez — editar este arquivo não muda nada num
+ * processo já no ar, e o sintoma engana (mensagem de erro de uma versão
+ * antiga, "corrigida" há horas, apontando pra causa errada). Aconteceu de
+ * verdade: 4 servidores no ar ao mesmo tempo, 3 com código velho, cada um
+ * numa porta.
+ *
+ * O arquivo em disco é a verdade; a memória, não. Se divergirem, as rotas de
+ * IA recusam com o motivo exato em vez de rodar a versão velha calada.
+ * `node --watch` (launch.json) reinicia sozinho e nem chega aqui — isto é a
+ * rede pra quem subiu na mão. */
+const SELF = fileURLToPath(import.meta.url);
+const BOOT_MTIME = statSync(SELF).mtimeMs;
+const staleMsg = () => {
+  let disk;
+  try { disk = statSync(SELF).mtimeMs; } catch { return null; }   // arquivo sumiu: não é o meu caso de uso
+  if (disk <= BOOT_MTIME) return null;
+  const hhmm = (ms) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return `este servidor está rodando código de ${hhmm(BOOT_MTIME)}, mas o server.mjs mudou às ${hhmm(disk)}. `
+    + `Reinicie com "node --watch server.mjs" (mate este processo: PID ${process.pid}).`;
+};
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -49,9 +77,52 @@ const MODEL_REFINE = MODEL_CONVERT;
 // motivo). Isso é a causa raiz do timeout de 3min em pedido simples, não só
 // paliativo — sem essas flags o CLI perde a maior parte do tempo conectando
 // coisa que a tarefa nunca usa.
-function runClaude(prompt, extraArgs = [], model = MODEL_CONVERT, signal) {
-  const args = ['-p', prompt, '--output-format', 'json', '--model', model,
-    '--tools', 'Read', '--allowedTools', 'Read',
+//
+// --effort: MEDIDO com a timeline de 21 eventos (862×1825), mesmo prompt:
+//   effort default (=high) → passou de 5min30 sem terminar (era ISSO que batia no
+//                            timeout, não os MCP)
+//   effort medium          → 17s a 28s, transcrição exata quando a imagem chega em
+//                            resolução legível
+// Transcrever texto de imagem não se beneficia de raciocínio profundo, então quem
+// chama passa `--effort medium` em extraArgs. Nunca deixe herdar o default: o
+// tempo explode e o resultado não melhora.
+/* Teto por INATIVIDADE, não por relógio de parede. MEDIDO com stream-json e
+ * timestamp por evento: o CLI lia a imagem em ~20s e depois passava MINUTOS
+ * mudo — não travado, escrevendo/raciocinando. O teto de wall-clock (2, 3, 4
+ * min) matava trabalho legítimo bem no meio, sempre perto do fim, e o usuário
+ * via "o CLI travou" numa chamada que ia terminar.
+ *
+ * O que indica processo morto é PARAR DE DAR SINAL, não demorar — então cada
+ * byte no stdout rearma o relógio. Quem cancela de verdade é o usuário:
+ * fechar a aba aborta o processo na hora (ver `signal`).
+ *
+ * O `rate_limit_event` sobe o teto por precaução, mas ATENÇÃO: ele aparece em
+ * praticamente toda chamada como aviso (`allowed_warning`) mesmo com a conta
+ * em 36% de uso — não é sinal de fila, e culpá-lo pela demora foi um
+ * diagnóstico errado que custou horas. A causa real do tempo era `--effort` e
+ * o `Read` das instruções (ver a rota /api/convert e o README). */
+const IDLE_MS = 240000;          // 4 min sem UM byte = morreu de verdade
+const IDLE_QUEUED_MS = 900000;   // 15 min quando a API avisou que estamos na fila
+
+/* Progresso da chamada em andamento, pro cliente perguntar "e aí, tá vivo?".
+ * Global sem medo: `cliBusy` garante UMA chamada por vez. O que o usuário vê
+ * na tela sai daqui — e o motivo de existir é concreto: uma extração de 12
+ * séries passa MINUTOS só escrevendo o JSON, e sem isso a tela fica com um
+ * cronômetro subindo que parece travamento. */
+let progress = null;   // { fase, chars, desde }
+const setProgress = (p) => { progress = p ? { ...progress, ...p } : null; };
+
+function runClaude(prompt, extraArgs = [], model = MODEL_CONVERT, signal, idleMs = IDLE_MS) {
+  // stream-json (não json): o resultado vem no ÚLTIMO evento, mas os eventos
+  // intermediários são o sinal de vida que alimenta o teto de inatividade — com
+  // --output-format json o stdout fica mudo até o fim e não dá pra distinguir
+  // "pensando" de "morto".
+  // --include-partial-messages: os deltas de texto/raciocínio chegam token a
+  // token. É o que permite dizer "escrevendo, 4.200 caracteres" em vez de um
+  // contador mudo — numa extração de 12 séries a resposta leva MINUTOS sendo
+  // escrita, e sem isso o silêncio é indistinguível de travamento.
+  const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    '--model', model, '--tools', 'Read', '--allowedTools', 'Read',
     '--strict-mcp-config', '--setting-sources', 'project,local', '--disable-slash-commands',
     ...extraArgs];
   // limpa flags de "estou dentro do Claude Code" — senão o CLI recusa rodar
@@ -61,21 +132,62 @@ function runClaude(prompt, extraArgs = [], model = MODEL_CONVERT, signal) {
   return new Promise((resolve, reject) => {
     // stdin 'ignore' (=/dev/null): sem isso, claude -p espera EOF de um pipe
     // aberto e trava pra sempre. `signal`: aborta o processo se o CLIENTE
-    // desistir (fetch cancelado) — sem isso o CLI ficava rodando até 4 min
-    // órfão, e um "tenta de novo" empilhava um 2º processo pesado em cima do
+    // desistir (fetch cancelado) — sem isso o CLI ficava rodando órfão até o
+    // teto, e um "tenta de novo" empilhava um 2º processo pesado em cima do
     // 1º ainda vivo, piorando cada tentativa seguinte.
     const cp = spawn('claude', args, { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], signal });
-    let out = '', err = '', done = false;
-    const finish = (fn, arg) => { if (done) return; done = true; clearTimeout(kill); fn(arg); };
-    // teto de 2 min: sem os conectores/plugins acima, ler 1 imagem + responder
-    // não deveria chegar nem perto disso — se travar mesmo assim, mata e devolve
-    // erro (não deixa a requisição pendurada pra sempre)
-    const kill = setTimeout(() => { cp.kill('SIGKILL'); finish(reject, new Error('o CLI travou (timeout 2 min)')); }, 120000);
-    cp.stdout.on('data', (d) => (out += d));
+    let buf = '', err = '', done = false, resultEv = null, idleT = null;
+    let throttled = false, lastByte = Date.now(), stalledMs = 0;
+    const finish = (fn, arg) => { if (done) return; done = true; clearTimeout(idleT); fn(arg); };
+    const armIdle = () => {
+      clearTimeout(idleT);
+      const limit = throttled ? IDLE_QUEUED_MS : idleMs;
+      idleT = setTimeout(() => {
+        cp.kill('SIGKILL');
+        finish(reject, new Error(throttled
+          ? `a API não respondeu em ${Math.round(limit / 60000)} min na fila do limite de uso da conta — tente daqui a pouco`
+          : `o CLI ficou ${Math.round(limit / 60000)} min sem dar sinal de vida (não é fila da API: travou mesmo)`));
+      }, limit);
+    };
+    armIdle();
+    cp.stdout.on('data', (d) => {
+      // maior SILÊNCIO observado — métrica honesta de "quanto esperamos por
+      // fora". Contar do primeiro rate_limit_event até o fim media quase o
+      // request inteiro (o evento costuma vir logo no começo) e fazia a UI
+      // dizer "3s na fila" num trabalho de 6s, o que não quer dizer nada.
+      stalledMs = Math.max(stalledMs, Date.now() - lastByte);
+      lastByte = Date.now();
+      armIdle();                       // sinal de vida: reinicia o relógio
+      buf += d;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line); } catch { continue; }   // linha não-JSON: ignora
+        // deltas token a token → progresso real na tela
+        if (ev.type === 'stream_event') {
+          const d = ev.event?.delta;
+          if (d?.type === 'text_delta') setProgress({ fase: 'escrevendo', chars: (progress?.chars || 0) + d.text.length });
+          else if (d?.type === 'thinking_delta') setProgress({ fase: 'analisando a imagem' });
+        }
+        if (ev.type === 'user') setProgress({ fase: 'leu a imagem' });
+        // a API avisando que a conta está perto/no limite: a espera que pode
+        // vir a seguir é externa, então o teto de inatividade passa a ser o
+        // generoso (status 'allowed' puro é informativo, não muda nada)
+        if (ev.type === 'rate_limit_event' && ev.rate_limit_info?.status !== 'allowed' && !throttled) {
+          throttled = true;
+          armIdle();
+        }
+        if (ev.type === 'result') resultEv = { ...ev, _stalledMs: stalledMs, _throttled: throttled };
+      }
+    });
     cp.stderr.on('data', (d) => (err += d));
     cp.on('error', (e) => finish(reject, e.name === 'AbortError' ? new Error('cancelado') : e));   // claude não encontrado, abort, etc.
-    const settle = (code) => finish(code === 0 ? resolve : reject,
-      code === 0 ? out : new Error(err || `claude saiu com código ${code}`));
+    // devolve o envelope do evento `result` já em JSON — mesma forma do
+    // --output-format json de antes, então quem chama não muda
+    const settle = (code) => finish(
+      resultEv ? resolve : reject,
+      resultEv ? JSON.stringify(resultEv) : new Error(err.trim() || `claude saiu com código ${code} sem resultado`));
     // 'close' = processo E pipes fecharam (caminho normal). MAS o CLI às vezes
     // deixa um daemon herdado (MCP/plugin) segurando o stdout — aí o 'close'
     // nunca vem e o request penduraria pra sempre. 'exit' + dreno de 400ms
@@ -84,9 +196,15 @@ function runClaude(prompt, extraArgs = [], model = MODEL_CONVERT, signal) {
     cp.on('exit', (code) => setTimeout(() => settle(code), 400));
   });
 }
-const convertPrompt = (imgPath) =>
-  `Leia o arquivo de imagem "${imgPath}" (é um gráfico) e as instruções em `
-  + `"ia-instrucoes.md". Devolva SÓ o JSON minificado da spec, sem texto em volta.`;
+// Instruções INLINE, não "abra ia-instrucoes.md com o Read": o Read custa uma
+// volta de API inteira (3 turnos em vez de 2). Mesma decisão já medida na
+// timeline. Continua lendo o .md a cada pedido, então editar o guia vale na
+// hora, sem reiniciar o server.
+const convertPrompt = async (imgPath) => {
+  const guia = await readFile(join(ROOT, 'ia-instrucoes.md'), 'utf8');
+  return `${guia}\n\n---\n\nImagem a ler: "${imgPath}"\n\n`
+    + `Devolva SÓ o JSON minificado da spec, sem texto em volta.`;
+};
 
 // tira ```json, pega o primeiro objeto {...} balanceado
 function extractJson(text) {
@@ -103,38 +221,87 @@ function extractJson(text) {
   throw new Error('JSON incompleto na resposta');
 }
 
+// Só 1 CLI do Claude por vez. Sem isso, um timeout do cliente + "tenta de
+// novo" empilhava um 2º processo pesado em cima do 1º (que continuava rodando
+// órfão no servidor) — cada retentativa ficava mais lenta que a anterior. Com
+// o lock, a 2ª tentativa recebe erro claro na hora em vez de competir por CPU.
+let cliBusy = false;
+
 // Grava a imagem recebida e roda o CLI com o prompt de `promptFor(caminhoRel)`.
 // `base` separa os arquivos por ferramenta ('input' = gráfico, 'timeline' = linha
 // do tempo) — senão uma conversão sobrescreve a imagem que a outra ainda usa no
 // /api/refine.
-async function handleImage(req, res, base, promptFor) {
+async function handleImage(req, res, base, promptFor, { effort, timeoutMs, raw: rawMode } = {}) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
   const buf = Buffer.concat(chunks);
   if (!buf.length) return json(res, 400, { error: 'imagem vazia' });
+  const stale = staleMsg();
+  if (stale) return json(res, 503, { error: stale });
+  if (cliBusy) return json(res, 429, { error: 'já tem uma extração rodando — espera terminar' });
+  cliBusy = true;   // trava ANTES do await: senão dois pedidos passam pelo if acima
+  setProgress(null); setProgress({ fase: 'abrindo a sessão', chars: 0, desde: Date.now() });
 
+  // ?part=1&parts=3 → a imagem é a fatia 1 de 3 da mesma linha do tempo. Uma
+  // chamada de CLI POR FATIA (o cliente manda em sequência) porque juntar tudo
+  // numa sessão só estoura o teto: MEDIDO com 21 eventos — 1 fatia sozinha 28s,
+  // as 2 fatias na mesma sessão passaram de 2 min. Quem junta as listas é o
+  // cliente, com regra determinística (mergeEvents), não o modelo.
+  const q = new URL(req.url, 'http://x').searchParams;
+  const parts = Math.max(1, +q.get('parts') || 1);
+  const part = Math.min(parts, Math.max(1, +q.get('part') || 1));
   const ext = (req.headers['content-type'] || '').includes('jpeg') ? '.jpg' : '.png';
-  const imgPath = join(IA_DIR, base + ext);
+  const name = parts > 1 ? `${base}-${part}` : base;
   await mkdir(IA_DIR, { recursive: true });
-  await writeFile(imgPath, buf);
+  await writeFile(join(IA_DIR, name + ext), buf);
 
+  // se o cliente desistir (fetch abortado/aba fechada), mata o CLI na hora em
+  // vez de deixar rodando até o teto de 2 min — ver runClaude() pro porquê
+  const ctrl = new AbortController();
+  res.on('close', () => ctrl.abort());
   try {
-    const raw = await runClaude(promptFor(`_ia/${base}${ext}`));
+    const extra = effort ? ['--effort', effort] : [];
+    const raw = await runClaude(await promptFor(`_ia/${name}${ext}`, { part, parts }), extra, MODEL_CONVERT, ctrl.signal, timeoutMs);
     // envelope do --output-format json: { type:'result', result, session_id, ... }
     const env = JSON.parse(raw);
     if (env.is_error) throw new Error(env.result || 'CLI retornou erro');
-    const spec = extractJson(env.result ?? raw);
-    if (spec.error) throw new Error(spec.error);
+    // rawMode: a resposta é TEXTO (linhas `data | texto | ícone`), não JSON —
+    // quem parseia é o cliente (parseSliceText). Ver ia-timeline.md: aspas dentro
+    // do texto quebravam o JSON e derrubavam a transcrição inteira.
+    let body;
+    if (rawMode) {
+      const text = String(env.result ?? '');
+      const erro = /^\s*ERRO:\s*(.+)$/im.exec(text);
+      if (erro) throw new Error(erro[1].trim());
+      body = { text };
+    } else {
+      const spec = extractJson(env.result ?? raw);
+      if (spec.error) throw new Error(spec.error);
+      body = { spec };
+    }
     // session_id volta pro cliente pra ele CONVERSAR com a mesma sessão depois
-    json(res, 200, { spec, sessionId: env.session_id, cost: env.total_cost_usd, ms: env.duration_ms });
+    if (!res.writableEnded) json(res, 200, { ...body, sessionId: env.session_id, cost: env.total_cost_usd, ms: env.duration_ms, stalledMs: env._stalledMs });
   } catch (e) {
-    json(res, 502, { error: String(e.message || e) });
+    if (!res.writableEnded) json(res, 502, { error: String(e.message || e) });
+  } finally {
+    cliBusy = false; setProgress(null);
   }
 }
 
-const timelinePrompt = (imgPath) =>
-  `Leia o arquivo de imagem "${imgPath}" (é uma linha do tempo) e as instruções em `
-  + `"ia-timeline.md". Devolva SÓ o JSON minificado da spec, sem texto em volta.`;
+// Instruções INLINE (lidas do md a cada pedido, então editar o md continua valendo
+// na hora, sem reiniciar o server): mandar o CLI abrir ia-timeline.md com o Read
+// custa uma volta de API a mais — 3 turnos em vez de 2 — e não melhora nada.
+const timelinePrompt = async (imgPath, { part, parts } = {}) => {
+  const guia = await readFile(join(ROOT, 'ia-timeline.md'), 'utf8');
+  const fatia = parts > 1
+    ? `\n\nATENÇÃO: esta imagem é a FATIA ${part} de ${parts} de uma linha do tempo maior — ela mostra `
+      + `só um trecho, e fatias vizinhas se sobrepõem. Transcreva os eventos DESTA fatia (inclusive os `
+      + `cortados pela borda, com o texto que estiver visível); quem junta as fatias e remove repetição `
+      + `é a ferramenta, não você. Título/subtítulo: só se aparecerem aqui.`
+    : '';
+  return `${guia}\n\n---\n\nImagem a ler: "${imgPath}"${fatia}\n\n`
+    + `Devolva SÓ o JSON minificado da spec, sem texto em volta.`;
+};
 
 // Corrige um dado ("o valor de março é 55 mil", "remove o ponto de junho") —
 // SEMPRE relendo a imagem original, nunca confiando cegamente na spec atual
@@ -151,6 +318,9 @@ async function handleRefine(req, res) {
   catch { return json(res, 400, { error: 'JSON inválido' }); }
   const { sessionId, spec, message } = body;
   if (!sessionId || !message) return json(res, 400, { error: 'faltou sessionId ou message' });
+  const stale = staleMsg();
+  if (stale) return json(res, 503, { error: stale });
+  if (cliBusy) return json(res, 429, { error: 'já tem uma extração rodando — espera terminar' });
 
   const imgRel = ['_ia/input.png', '_ia/input.jpg'].find((p) => existsSync(join(ROOT, p)));
   if (!imgRel) return json(res, 400, { error: 'imagem original não encontrada — converta de novo' });
@@ -164,13 +334,88 @@ async function handleRefine(req, res) {
     + `enquanto estiver conferindo. Devolva SÓ o JSON da spec corrigida, mesmo schema (type, title, `
     + `subtitle, source, labels, series:[{name,data}], y). Mude apenas o necessário e mantenha o resto `
     + `igual. Sem texto fora do JSON.`;
+  const ctrl = new AbortController();
+  res.on('close', () => ctrl.abort());
+  cliBusy = true;
+  setProgress(null); setProgress({ fase: 'abrindo a sessão', chars: 0, desde: Date.now() });
   try {
-    const raw = await runClaude(prompt, [], MODEL_REFINE);
+    // mesmo motivo do convert: conferir números contra a imagem é leitura, não
+    // raciocínio profundo — o effort default multiplica o tempo sem melhorar
+    const raw = await runClaude(prompt, ['--effort', 'low'], MODEL_REFINE, ctrl.signal);
     const env = JSON.parse(raw);
     if (env.is_error) throw new Error(env.result || 'CLI retornou erro');
     const out = extractJson(env.result ?? raw);
     if (out.error) throw new Error(out.error);
-    json(res, 200, { spec: out, sessionId: env.session_id || sessionId, cost: env.total_cost_usd, ms: env.duration_ms });
+    if (!res.writableEnded) json(res, 200, { spec: out, sessionId: env.session_id || sessionId, cost: env.total_cost_usd, ms: env.duration_ms, stalledMs: env._stalledMs });
+  } catch (e) {
+    if (!res.writableEnded) json(res, 502, { error: String(e.message || e) });
+  } finally {
+    cliBusy = false; setProgress(null);
+  }
+}
+
+/* DefiLlama por URL. O gráfico do site é ECharts em <canvas>: o dado mora em
+ * PIXEL, não no DOM, então colar o HTML não traz nada — diferente do recharts,
+ * que guarda a curva no `d` do <path>. Mas o DefiLlama publica os mesmos
+ * números em API aberta, e o próprio embed carrega o slug e as métricas na
+ * URL (…/chart/protocol/lighter?openInterest=true). Então: em vez de tentar
+ * ler o canvas, lê a fonte — e o dado sai EXATO, não estimado.
+ *
+ * Métricas separadas em endpoints diferentes (medido: derivatives responde 402,
+ * é pago; open-interest e fees são abertos). */
+// base trocável só pro self-check apontar pra uma API falsa e rodar offline
+const LLAMA_BASE = process.env.LLAMA_BASE || 'https://api.llama.fi';
+const LLAMA = {
+  tvl: { url: (s) => `${LLAMA_BASE}/protocol/${s}`,
+    pontos: (d) => (d.tvl || []).map((p) => [p.date, p.totalLiquidityUSD]), nome: 'TVL' },
+  openInterest: { url: (s) => `${LLAMA_BASE}/summary/open-interest/${s}`,
+    pontos: (d) => d.totalDataChart || [], nome: 'Open Interest' },
+  fees: { url: (s) => `${LLAMA_BASE}/summary/fees/${s}`,
+    pontos: (d) => d.totalDataChart || [], nome: 'Fees' },
+};
+const MAX_PONTOS = 400;   // mesmo teto do import por HTML
+
+async function handleLlama(req, res) {
+  const q = new URL(req.url, 'http://x').searchParams;
+  const slug = (q.get('slug') || '').trim().toLowerCase();
+  if (!/^[\w.-]+$/.test(slug)) return json(res, 400, { error: 'slug inválido' });
+  const quer = Object.keys(LLAMA).filter((k) => q.get(k) === '1');
+  if (!quer.length) return json(res, 400, { error: 'nenhuma métrica pedida' });
+
+  try {
+    const series = [];
+    for (const k of quer) {
+      const r = await fetch(LLAMA[k].url(slug));
+      // uma métrica que o protocolo não tem não derruba as outras: o gráfico
+      // do site também some com a linha nesse caso
+      if (!r.ok) { if (k === quer[0]) throw new Error(`DefiLlama HTTP ${r.status} em ${k}`); continue; }
+      const pts = LLAMA[k].pontos(await r.json()).filter((p) => p && p[1] != null);
+      if (pts.length) series.push({ nome: LLAMA[k].nome, pts });
+    }
+    if (!series.length) throw new Error('a API do DefiLlama não devolveu dado pra esse protocolo');
+
+    /* Alinhamento por DIA. As séries vêm com contagens e horários diferentes
+     * (TVL 1243 pontos com hora cheia, open interest 555 à meia-noite): casar
+     * por índice misturaria datas diferentes na mesma coluna. O eixo é a união
+     * dos dias, e a série que não tem aquele dia fica com null (buraco), que o
+     * renderer já sabe desenhar. */
+    const dia = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+    const porDia = series.map((s) => {
+      const m = new Map();
+      for (const [ts, v] of s.pts) m.set(dia(ts), v);   // último do dia vence
+      return m;
+    });
+    let dias = [...new Set(porDia.flatMap((m) => [...m.keys()]))].sort();
+    if (dias.length > MAX_PONTOS) {
+      const passo = (dias.length - 1) / (MAX_PONTOS - 1);
+      dias = Array.from({ length: MAX_PONTOS }, (_, i) => dias[Math.round(i * passo)]);
+    }
+    // devolve a data CRUA (ISO): quem sabe se cabe "12/Mar/23" ou só "Mar/23"
+    // no eixo é o cliente, que conhece a largura e a fonte do gráfico
+    json(res, 200, {
+      dias,
+      series: series.map((s, i) => ({ name: s.nome, data: dias.map((d) => porDia[i].get(d) ?? null) })),
+    });
   } catch (e) {
     json(res, 502, { error: String(e.message || e) });
   }
@@ -359,16 +604,28 @@ async function serveStatic(req, res) {
 }
 
 createServer((req, res) => {
-  if (req.method === 'POST' && req.url === '/api/convert') return handleImage(req, res, 'input', convertPrompt);
-  if (req.method === 'POST' && req.url === '/api/timeline') return handleImage(req, res, 'timeline', timelinePrompt);
+  // effort low no gráfico: MEDIDO na mesma imagem (stacked100, 12 séries, 16
+  // meses) — default >6min40 sem terminar · medium 6min00 · low 2min32, com o
+  // mesmo resultado (12 séries, 16 rótulos, título certo). Ler gráfico é
+  // transcrição, não análise: o raciocínio profundo só queima tempo. Opus low
+  // foi testado e é PIOR aqui (3min45 e US$ 0,38 por leitura).
+  if (req.method === 'POST' && req.url === '/api/convert') return handleImage(req, res, 'input', convertPrompt, { effort: 'low' });
+  // effort medium na timeline: é transcrição de texto, não análise — ver runClaude()
+  // pros números (default/high passou de 5min sem terminar; medium fecha em ~30s)
+  // startsWith, não ===: a rota recebe ?part=1&parts=2 (uma chamada por fatia)
+  if (req.method === 'POST' && req.url.startsWith('/api/timeline')) return handleImage(req, res, 'timeline', timelinePrompt, { effort: 'medium', timeoutMs: 180000, raw: true });
   if (req.method === 'POST' && req.url === '/api/pdf') return handlePdf(req, res);
   if (req.method === 'POST' && req.url === '/api/refine') return handleRefine(req, res);
+  if (req.method === 'GET' && req.url.startsWith('/api/llama')) return handleLlama(req, res);
   if (req.method === 'GET' && req.url.startsWith('/api/candles')) return handleCandles(req, res);
   if (req.method === 'GET' && req.url.startsWith('/api/symbols')) return handleSymbols(req, res);
   // trilha D: o client faz um GET rápido (timeout curto) nessa rota pra decidir se
   // esconde o import de gráfico (que depende de /api/convert + /api/refine, só
   // existem com este server rodando — no GitHub Pages estático não existe).
-  if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { ok: true });
+  if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { ok: true, pid: process.pid, stale: staleMsg() });
+  // "ainda está viva?" — o cliente pergunta enquanto espera, pra mostrar
+  // progresso de verdade em vez de um cronômetro mudo
+  if (req.method === 'GET' && req.url === '/api/progress') return json(res, 200, { rodando: cliBusy, ...(progress || {}) });
   if (req.method === 'GET') return serveStatic(req, res);
   json(res, 405, { error: 'método' });
 }).listen(PORT, () => console.log(`Gerador em http://localhost:${PORT}  (IA via CLI do Claude)`));

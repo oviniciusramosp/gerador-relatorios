@@ -118,6 +118,42 @@ export const ICONS = {
     + '<circle cx="12" cy="12" r="3"/>' },
 };
 
+// Registro pra biblioteca externa (Ionicons completo, ionicons-lib.js): o editor
+// registra no boot e o renderer passa a achar essas chaves também. Fica fora do
+// ICONS curado de propósito — timeline.js sozinho (Node, teste, PDF) continua
+// funcionando com o set pequeno, sem carregar 160 KB pra nada.
+// EXTRA = outline (default charts/timelines); EXTRA_SOLID = filled (callout).
+const EXTRA = {};
+const EXTRA_SOLID = {};
+/** Registra um mapa de ícones. style: 'outline' (default) | 'solid'. */
+export function registerIcons(obj, { style = 'outline' } = {}) {
+  Object.assign(style === 'solid' ? EXTRA_SOLID : EXTRA, obj);
+}
+/**
+ * Entrada do ícone (paths oficiais do Ionicons quando a lib está registrada).
+ *   solid   → filled → outline lib → casa
+ *   outline → casa → outline lib   (charts/timelines: desenhos curados vencem)
+ *   outline + preferLib → outline lib → casa  (callout: Ionicons oficial)
+ */
+export const findIcon = (k, style = 'outline', preferLib = false) => {
+  if (style === 'solid') return EXTRA_SOLID[k] || EXTRA[k] || ICONS[k] || null;
+  if (preferLib) return EXTRA[k] || ICONS[k] || null;
+  return ICONS[k] || EXTRA[k] || null;
+};
+/**
+ * Mapa completo pra o picker.
+ *   libOnly: só Ionicons (callout) — evita colisão star/bulb da casa
+ *   solid: filled por cima; outline: casa por cima (a menos de libOnly)
+ */
+export const allIcons = (style = 'outline', { libOnly = false } = {}) => {
+  if (libOnly) {
+    return style === 'solid' ? { ...EXTRA_SOLID } : { ...EXTRA };
+  }
+  return style === 'solid'
+    ? { ...ICONS, ...EXTRA, ...EXTRA_SOLID }
+    : { ...EXTRA, ...ICONS };
+};
+
 /** Nó com sigla em vez de ícone: `txt:S&P`. */
 export const isTextIcon = (k) => typeof k === 'string' && k.startsWith('txt:');
 export const textIconLabel = (k) => (isTextIcon(k) ? k.slice(4) : '');
@@ -125,14 +161,32 @@ export const textIconLabel = (k) => (isTextIcon(k) ? k.slice(4) : '');
 /**
  * <svg> aninhado com o ícone, tingido gravando a cor DIRETO no stroke/fill —
  * currentColor não sobrevive à rasterização em canvas (mesmo motivo do logo em
- * chart.js). box = {x,y,w,h}.
+ * chart.js). box = {x,y,w,h}. style: 'outline' | 'solid'.
  */
-export function iconSvg(key, box, color, strokeWidth = 1.7) {
-  const ic = ICONS[key];
+/**
+ * style: 'outline' | 'solid'
+ * preferLib: true no callout (Ionicons oficial, não o set 24×24 da casa)
+ */
+export function iconSvg(key, box, color, strokeWidth = 1.7, style = 'outline', preferLib = false) {
+  const ic = findIcon(key, style, preferLib || style === 'solid');
   if (!ic) return '';
   const n = (v) => Math.round(v * 100) / 100;
+  // vb/sw da própria entrada: casa = 24×24 traço ~1.7; Ionicons = 512×512 traço 32
+  // (default --ionicon-stroke-width do site: https://ionic.io/ionicons/usage).
+  const vb = ic.vb || 24;
+  // ic.solid = variante filled oficial (ou logo-*). Fallback outline/casa usa stroke
+  // mesmo se o pedido era 'solid' — nunca forçar fill em path de traço.
+  const paint = ic.solid
+    // filled: fill no raiz; filhos com fill="none" (furos) são PRESERVADOS no inner
+    ? `fill="${color}" stroke="none"`
+    : `fill="none" stroke="${color}" stroke-width="${ic.sw || strokeWidth}"`
+      + ` stroke-linecap="round" stroke-linejoin="round"`;
+  // currentColor no inner (bolinhas do outline info, etc.) → cor concreta
+  const inner = ic.inner
+    .replace(/currentColor/g, color)
+    .replace(/fill="black"/gi, `fill="${color}"`)
+    .replace(/fill="#000(?:000)?"/gi, `fill="${color}"`);
   return `<svg x="${n(box.x)}" y="${n(box.y)}" width="${n(box.w)}" height="${n(box.h)}"`
-    + ` viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="${strokeWidth}"`
-    + ` stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
-    + ic.inner.replace(/currentColor/g, color) + '</svg>';
+    + ` viewBox="0 0 ${vb} ${vb}" ${paint} aria-hidden="true">`
+    + inner + '</svg>';
 }
