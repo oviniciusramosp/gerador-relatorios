@@ -4020,6 +4020,13 @@ let projectWriting = false;
 let suppressProjectAutosave = false;
 let projectSaveT = null;
 let projectWatchT = null;
+// timestamps da UI (ms desde epoch) — tooltip do botão Salvar/Salvo
+let lastProjectWriteAt = 0;   // último autosave / Salvar no handle
+let lastProjectPollAt = 0;    // último ciclo de poll (viu o disco)
+let lastProjectReadAt = 0;    // última vez que o conteúdo veio do disco (abrir/reload)
+let lastUiChangeAt = 0;       // última mudança de conteúdo no Diagramador
+// Handle do zip recém-aberto, à espera do opt-in de sincronia (modal / “Não Salvo”)
+let pendingLinkHandle = null;
 const PROJECT_AUTOSAVE_MS = 900;
 const PROJECT_POLL_MS = 1000;
 
@@ -4029,12 +4036,33 @@ function isProjectSource(s = state.doc?.source) {
 function isMdSource(s = state.doc?.source) {
   return s && s.kind === 'file' && !isProjectSource(s);
 }
+function formatProjectTs(ms) {
+  if (!ms || !Number.isFinite(ms)) return '—';
+  try {
+    return new Date(ms).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
+  } catch {
+    return new Date(ms).toISOString();
+  }
+}
 function clearFileLink() {
+  // cancela autosave pendente ANTES de soltar o handle — senão um timer velho
+  // grava o state novo (ex.: Em Branco) por cima do .zip do projeto anterior
+  clearTimeout(projectSaveT);
+  projectSaveT = null;
+  suppressProjectAutosave = true;
   fileHandle = null;
+  pendingLinkHandle = null;
   linkedMtime = 0;
   projectDirty = false;
+  projectWriting = false;
+  lastProjectWriteAt = 0;
+  lastProjectPollAt = 0;
+  lastProjectReadAt = 0;
+  lastUiChangeAt = 0;
   idb.del('fh');
   stopProjectWatch();
+  updateSaveSourceBtn();
+  setTimeout(() => { suppressProjectAutosave = false; }, 400);
 }
 function stopProjectWatch() {
   if (projectWatchT) { clearInterval(projectWatchT); projectWatchT = null; }
@@ -4053,10 +4081,13 @@ function scheduleProjectAutosave() {
   if (suppressProjectAutosave) return;
   if (!fileHandle || !isProjectSource()) return;
   projectDirty = true;
+  lastUiChangeAt = Date.now();   // última mudança no Diagramador
+  updateSaveSourceBtn();
   clearTimeout(projectSaveT);
   projectSaveT = setTimeout(() => {
     saveProjectToHandle({ quiet: true }).catch((e) => {
       console.warn('[projeto] autosave', e);
+      updateSaveSourceBtn();
     });
   }, PROJECT_AUTOSAVE_MS);
 }
@@ -4138,6 +4169,10 @@ function applyDocFile(doc, opts = {}) {
       state.doc.source = { kind: 'file', label: label || keep.name, format };
       if (opts.mtime != null) linkedMtime = opts.mtime;
       projectDirty = false;
+      lastProjectReadAt = Date.now();
+      lastProjectPollAt = lastProjectReadAt;
+      // conteúdo = disco → mesmo timestamp exibido
+      lastUiChangeAt = linkedMtime || lastProjectReadAt;
       startProjectWatch();
     } else if (label) {
       // aberto sem FSA: nome no chip / download, sem gravação in-place
@@ -4340,27 +4375,42 @@ async function openDocZipFile(buf, label, fileMeta, pending, opts = {}) {
 }
 
 // Lê File e decide zip vs json por extensão OU magic bytes (PK..).
-// handle opcional (File System Access) → vínculo live no mesmo ficheiro.
-async function openProjectBlob(f, handle = null) {
+// opts.linkNow: ativa auto-sync já (ex.: modal “Selecionar .zip” do Salvar).
+// opts.offerSync: após abrir, mostra modal de sincronia (fluxo Abrir .zip).
+// handle FSA sem linkNow → fica em pendingLinkHandle (Não Salvo até opt-in).
+async function openProjectBlob(f, handle = null, opts = {}) {
   if (!f) {
     showToast('err', 'Nenhum arquivo selecionado',
       'O seletor fechou sem um arquivo. Tente de novo em Abrir .zip.');
     return;
   }
   const meta = { size: f.size, name: f.name };
-  const linkOpts = { handle, mtime: f.lastModified };
-  // Feedback imediato: arrayBuffer/load/render podem demorar (iCloud, zip grande)
-  // e sem isso o clique parece ter falhado em silêncio.
+  const linkNow = !!opts.linkNow && !!handle;
+  const linkOpts = {
+    handle: linkNow ? handle : null,
+    mtime: f.lastModified,
+    label: f.name,
+  };
   const pending = showToast('ok', 'Abrindo projeto…', f.name || '');
   try {
     const buf = await f.arrayBuffer();
+    let ok = false;
     if (isDocZip(f.name) || looksLikeZip(buf)) {
-      await openDocZipFile(buf, f.name, meta, pending, linkOpts);
+      ok = await openDocZipFile(buf, f.name, meta, pending, linkOpts);
+    } else {
+      dismissToast(pending);
+      ok = openDocFile(new TextDecoder().decode(buf), f.name, meta, linkOpts);
+    }
+    if (!ok) return;
+    if (linkNow) {
+      pendingLinkHandle = null;
       return;
     }
-    // extensão .json ou conteúdo texto — tenta JSON do projeto
-    dismissToast(pending);
-    openDocFile(new TextDecoder().decode(buf), f.name, meta, linkOpts);
+    // conteúdo na UI sem auto-sync no zip anterior/novo
+    if (handle) pendingLinkHandle = handle;
+    else pendingLinkHandle = null;
+    if (opts.offerSync !== false) openSyncOfferModal();
+    updateSaveSourceBtn();
   } catch (e) {
     console.error('[abrir projeto]', e);
     dismissToast(pending);
@@ -4387,13 +4437,11 @@ async function pickFile() {
   setBlocks(parseMarkdown(await f.text()));
 }
 
-// "Abrir" (peer de "Novo Documento"): reabre um projeto salvo — .pdgm.zip (formato
-// atual, com mídia separada) ou .pdgm.json (formato antigo, ainda lido por compat).
-//
-// Preferência: showOpenFilePicker (Chrome/Edge) → FileSystemFileHandle com
-// readwrite, autosave e poll de lastModified (MCP/outro processo no mesmo zip).
-// Fallback: <input type=file> (Safari/Firefox) — abre sem vínculo live.
-async function pickProjectFile() {
+// "Abrir" (peer de "Novo Documento"): carrega um projeto NOVO.
+// Só desvincula o anterior DEPOIS de o utilizador escolher o ficheiro (cancelar = mantém o atual).
+// Sincronia com o arquivo escolhido é OPT-IN (modal / Não Salvo → Sincronizar).
+// opts.linkNow: já pede escrita e ativa auto-sync (fluxo do modal Salvar).
+async function pickProjectFile(opts = {}) {
   if (window.showOpenFilePicker) {
     let h;
     try {
@@ -4407,17 +4455,27 @@ async function pickProjectFile() {
         }],
         multiple: false,
       });
-    } catch { return; }   // cancelou
+    } catch { return; }   // cancelou — não mexe no projeto atual
+    // solta o zip ANTERIOR só agora (não sobrescrever o velho com o doc novo)
+    clearFileLink();
     try {
-      // pede escrita cedo: autosave precisa de readwrite
-      if (h.queryPermission && await h.queryPermission({ mode: 'readwrite' }) !== 'granted') {
-        if (h.requestPermission && await h.requestPermission({ mode: 'readwrite' }) !== 'granted') {
-          showToast('err', 'Sem permissão de escrita',
-            'O projeto abrirá só para leitura. Use Baixar → ZIP para exportar alterações.');
+      if (opts.linkNow) {
+        // permissão nativa de escrita (alert do browser)
+        if (h.queryPermission && await h.queryPermission({ mode: 'readwrite' }) !== 'granted') {
+          if (h.requestPermission && await h.requestPermission({ mode: 'readwrite' }) !== 'granted') {
+            showToast('err', 'Sem permissão de escrita',
+              'O projeto abrirá sem auto-sync. Use o botão Não Salvo → Sincronizar para tentar de novo.');
+            const f0 = await h.getFile();
+            await openProjectBlob(f0, h, { offerSync: true, linkNow: false });
+            return;
+          }
         }
       }
       const f = await h.getFile();
-      await openProjectBlob(f, h);
+      await openProjectBlob(f, h, {
+        linkNow: !!opts.linkNow,
+        offerSync: !opts.linkNow,
+      });
     } catch (e) {
       console.error('[abrir projeto] FSA', e);
       showToast('err', 'Não foi possível abrir o arquivo', (e && e.message) || String(e));
@@ -4430,8 +4488,74 @@ async function pickProjectFile() {
       'Recarregue a página e tente Abrir .zip de novo.');
     return;
   }
+  input.dataset.linkNow = opts.linkNow ? '1' : '';
   input.value = '';
   input.click();
+}
+
+// Ativa auto-sync com o handle pendente (pede permissão nativa de escrita).
+async function enableProjectSync(h = pendingLinkHandle) {
+  if (!h) {
+    // sem handle (abriu via <input>): precisa escolher de novo com FSA
+    closeSyncOfferModal();
+    await pickProjectFile({ linkNow: true });
+    return false;
+  }
+  try {
+    if (h.queryPermission && await h.queryPermission({ mode: 'readwrite' }) !== 'granted') {
+      // alert nativo do browser
+      const perm = h.requestPermission
+        ? await h.requestPermission({ mode: 'readwrite' })
+        : 'denied';
+      if (perm !== 'granted') {
+        showToast('err', 'Permissão recusada',
+          'Sem escrita no arquivo não há auto-sync. Pode sincronizar depois pelo botão Não Salvo.');
+        return false;
+      }
+    }
+    const f = await h.getFile();
+    fileHandle = h;
+    pendingLinkHandle = null;
+    idb.set('fh', h);
+    const label = h.name || state.doc.source?.label || f.name;
+    const format = projectFormatFromName(label) || 'pdgm';
+    state.doc.source = { kind: 'file', label, format };
+    linkedMtime = f.lastModified;
+    lastProjectReadAt = Date.now();
+    lastProjectPollAt = lastProjectReadAt;
+    lastUiChangeAt = linkedMtime;
+    projectDirty = false;
+    startProjectWatch();
+    closeSyncOfferModal();
+    renderSourceChip();
+    updateSaveSourceBtn();
+    showToast('ok', 'Sincronia ativa', label + ' · autosave no disco');
+    return true;
+  } catch (e) {
+    console.error('[sync]', e);
+    showToast('err', 'Não foi possível sincronizar', (e && e.message) || String(e));
+    return false;
+  }
+}
+
+function openSyncOfferModal() {
+  const m = document.getElementById('syncOfferModal');
+  if (!m) return;
+  m.hidden = false;
+  // ícones nos dois botões (uma vez)
+  const yes = document.getElementById('somSync');
+  const no = document.getElementById('somSkip');
+  if (yes && !yes.querySelector('svg')) {
+    yes.insertAdjacentHTML('afterbegin', uiIco('sync', 18, 'outline'));
+  }
+  if (no && !no.querySelector('svg')) {
+    // document / hand-off: utilizador gere o ficheiro sozinho
+    no.insertAdjacentHTML('afterbegin', uiIco('document', 18, 'outline'));
+  }
+}
+function closeSyncOfferModal() {
+  const m = document.getElementById('syncOfferModal');
+  if (m) m.hidden = true;
 }
 
 // t2.1: Google Docs saiu (import + sincronização agora só por arquivo local). O ramo
@@ -4490,6 +4614,7 @@ async function saveProjectToHandle({ quiet = false } = {}) {
   }
   if (projectWriting) return;
   projectWriting = true;
+  updateSaveSourceBtn();
   try {
     if (await fileHandle.queryPermission({ mode: 'readwrite' }) !== 'granted'
       && await fileHandle.requestPermission({ mode: 'readwrite' }) !== 'granted') {
@@ -4507,10 +4632,15 @@ async function saveProjectToHandle({ quiet = false } = {}) {
     await w.close();
     const f = await fileHandle.getFile();
     linkedMtime = f.lastModified;
+    lastProjectWriteAt = Date.now();
+    // UI e disco iguais → “No Diagramador” = mtime do arquivo
+    lastUiChangeAt = linkedMtime;
     projectDirty = false;
     if (!quiet) flashSaved();
+    else updateSaveSourceBtn();
   } finally {
     projectWriting = false;
+    updateSaveSourceBtn();
   }
 }
 
@@ -4528,6 +4658,10 @@ async function pollLinkedProject({ force = false } = {}) {
         && await fileHandle.requestPermission() !== 'granted') return;
     }
     const f = await fileHandle.getFile();
+    lastProjectPollAt = Date.now();
+    // se o painel do Salvar está aberto, refresca timestamps sem exigir reload
+    const wrapOpen = document.getElementById('saveSourceWrap');
+    if (wrapOpen && !wrapOpen.hidden && wrapOpen.matches(':hover, :focus-within')) updateSaveSourceBtn();
     if (!force && !shouldReloadLinkedProject({
       localDirty: projectDirty,
       writing: projectWriting,
@@ -4551,6 +4685,9 @@ async function pollLinkedProject({ force = false } = {}) {
     } else {
       openDocFile(new TextDecoder().decode(buf), label, meta, linkOpts);
     }
+    lastProjectReadAt = Date.now();
+    lastProjectPollAt = lastProjectReadAt;
+    updateSaveSourceBtn();
     showToast('ok', force ? 'Projeto recarregado' : 'Atualizado do arquivo', label);
   } catch (e) {
     console.warn('[projeto] poll', e);
@@ -4559,43 +4696,312 @@ async function pollLinkedProject({ force = false } = {}) {
 }
 
 function flashSaved() {
-  const b = srcRow.querySelector('#btnSave');
+  const b = document.getElementById('btnSaveSource');
   if (!b) return;
-  const t = b.textContent; b.textContent = 'Salvo ✓'; b.disabled = true;
-  setTimeout(() => { b.textContent = t; b.disabled = false; }, 1500);
+  const lab = b.querySelector('.save-label');
+  if (lab) lab.textContent = 'Salvo ✓';
+  b.disabled = true;
+  setTimeout(() => { b.disabled = false; updateSaveSourceBtn(); }, 1200);
 }
 
-const srcRow = document.getElementById('srcRow');
-function renderSourceChip() {
-  const s = state.doc.source;
-  if (!s) { srcRow.hidden = true; return; }
-  srcRow.hidden = false;
-  const live = isProjectSource(s) && !!fileHandle;
-  const md = isMdSource(s);
-  let action = '';
-  if (s.kind === 'gdoc') {
-    action = `<button id="btnSync" class="primary" title="Reimportar o conteúdo do Google Docs">Sincronizar</button>`;
-  } else if (live) {
-    action = `<button id="btnSave" class="primary" title="Gravar agora no arquivo vinculado">Salvar</button>`
-      + `<button id="btnSync" title="Relê o arquivo do disco (útil se o MCP editou)">Recarregar</button>`;
-  } else if (md && fileHandle) {
-    action = `<button id="btnSave" class="primary" title="Salvar as alterações no arquivo original">Salvar no arquivo</button>`;
-  } else if (isProjectSource(s) && !fileHandle) {
-    action = `<span class="src-hint" title="Aberto sem permissão de escrita (Safari/Firefox ou seletor antigo). Use Baixar → ZIP.">só leitura</span>`;
+// Ícone de status no painel (check verde / alerta)
+function saveTipStatusIco(ok) {
+  return ok
+    ? uiIco('checkmark-circle', 14, 'solid')
+    : uiIco('alert-circle', 14, 'solid');
+}
+
+// “No Diagramador”: última mudança de conteúdo. Se UI ≡ disco, usa o MESMO mtime do arquivo
+// (não Date.now() da gravação — senão os dois timestamps nunca batem).
+function diagramadorSyncTs() {
+  if (!projectDirty && !projectWriting && linkedMtime) return linkedMtime;
+  return lastUiChangeAt || lastProjectWriteAt || lastProjectReadAt || 0;
+}
+
+function isProjectLinked() {
+  return !!(fileHandle && isProjectSource(state.doc?.source));
+}
+
+/** Ícone do botão Salvar: warning | check | spinner (mesmo tamanho 16px). */
+function setSaveSourceIcon(kind) {
+  const btn = document.getElementById('btnSaveSource');
+  if (!btn) return;
+  let ico = btn.querySelector('.save-ico');
+  if (!ico) {
+    ico = document.createElement('span');
+    ico.className = 'save-ico';
+    ico.setAttribute('aria-hidden', 'true');
+    btn.prepend(ico);
   }
-  const icon = live ? '🔗' : (s.kind === 'gdoc' ? '🌐' : '📄');
-  const hint = live ? ' · vinculado' : '';
-  srcRow.innerHTML = `<span class="src-label">${icon} ${escapeHtml(s.label || '')}${hint}</span>
-    ${action}
-    <button id="btnUnlink" title="Desvincular origem">✕</button>`;
-  const sync = srcRow.querySelector('#btnSync'); if (sync) sync.addEventListener('click', () => syncNow(true));
-  const savebtn = srcRow.querySelector('#btnSave'); if (savebtn) savebtn.addEventListener('click', saveToSource);
-  srcRow.querySelector('#btnUnlink').addEventListener('click', () => {
+  ico.className = 'save-ico' + (kind === 'warn' ? ' warn' : kind === 'ok' ? ' ok' : kind === 'spin' ? ' spin' : '');
+  if (kind === 'spin') {
+    ico.innerHTML = '<span class="save-spinner"></span>';
+  } else if (kind === 'ok') {
+    ico.innerHTML = uiIco('checkmark-circle', 16, 'solid');
+  } else if (kind === 'warn') {
+    ico.innerHTML = uiIco('warning', 16, 'solid');
+  } else {
+    ico.innerHTML = '';
+  }
+}
+
+// ── modal vincular projeto ──────────────────────────────────────────────────
+function openLinkProjectModal() {
+  const m = document.getElementById('linkProjectModal');
+  if (!m) return;
+  m.hidden = false;
+  // ícones nos botões (uma vez)
+  const dl = document.getElementById('lpmDownload');
+  const pk = document.getElementById('lpmPick');
+  if (dl && !dl.querySelector('svg')) {
+    dl.insertAdjacentHTML('afterbegin', uiIco('download', 18, 'outline'));
+  }
+  if (pk && !pk.querySelector('svg')) {
+    pk.insertAdjacentHTML('afterbegin', uiIco('folder-open', 18, 'outline'));
+  }
+}
+function closeLinkProjectModal() {
+  const m = document.getElementById('linkProjectModal');
+  if (m) m.hidden = true;
+}
+
+// Cria .pdgm.zip no disco (showSaveFilePicker) e já vincula o handle — um passo.
+async function downloadAndLinkProject() {
+  closeLinkProjectModal();
+  const blob = await serializeDocZip(state.doc);
+  const suggested = (state.doc.source?.label || 'diagramacao').replace(/\.[^.]+$/, '') + '.pdgm.zip';
+  if (window.showSaveFilePicker) {
+    try {
+      const h = await showSaveFilePicker({
+        suggestedName: suggested,
+        types: [{
+          description: 'Projeto Paradigma',
+          accept: { 'application/zip': ['.zip'] },
+        }],
+      });
+      if (h.queryPermission && await h.queryPermission({ mode: 'readwrite' }) !== 'granted') {
+        await h.requestPermission?.({ mode: 'readwrite' });
+      }
+      const w = await h.createWritable();
+      await w.write(blob);
+      await w.close();
+      const f = await h.getFile();
+      // aplica o doc atual com o handle (sem re-parse do zip — já é o state)
+      suppressProjectAutosave = true;
+      try {
+        fileHandle = h;
+        idb.set('fh', h);
+        state.doc.source = { kind: 'file', label: h.name || suggested, format: 'pdgm' };
+        linkedMtime = f.lastModified;
+        lastProjectWriteAt = Date.now();
+        lastProjectReadAt = lastProjectWriteAt;
+        lastProjectPollAt = lastProjectWriteAt;
+        lastUiChangeAt = linkedMtime;
+        projectDirty = false;
+        startProjectWatch();
+        renderSourceChip();
+        showToast('ok', 'Projeto vinculado', (h.name || suggested) + ' · autosave ativo');
+      } finally {
+        setTimeout(() => { suppressProjectAutosave = false; }, 400);
+      }
+      updateSaveSourceBtn();
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // cancelou
+      console.warn('[vincular] save picker', e);
+      // fallback: download clássico
+    }
+  }
+  // Safari/Firefox ou falha do picker: baixa o zip; usuário reabre com “Selecionar”
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = suggested;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast('ok', 'ZIP baixado',
+    'No Chrome/Edge use “Selecionar .zip local” no mesmo botão Salvar para ativar o auto-sync.');
+}
+
+// Projeto aberto na UI mas sem auto-sync (recusou modal ou “Agora não”)
+function isUnsyncedOpenProject() {
+  return !isProjectLinked() && !!(pendingLinkHandle || isProjectSource(state.doc?.source));
+}
+
+// Clique no Salvar do header:
+// - vinculado → grava
+// - aberto sem sync (“Não Salvo”) → modal de sincronia
+// - em branco → modal vincular/criar zip
+async function onSaveSourceClick() {
+  if (isProjectLinked()) {
+    try { await saveProjectToHandle({ quiet: false }); }
+    catch (e) { alert('Não foi possível salvar no arquivo: ' + (e.message || e)); }
+    return;
+  }
+  if (fileHandle && isMdSource()) {
+    try { await saveToSource(); }
+    catch (e) { alert('Não foi possível salvar no arquivo: ' + (e.message || e)); }
+    return;
+  }
+  if (isUnsyncedOpenProject()) {
+    openSyncOfferModal();
+    return;
+  }
+  openLinkProjectModal();
+}
+
+// Salvar no header: sempre visível.
+// warning + “Não Salvo” se projeto aberto sem sync; check se sync; spinner ao gravar.
+function updateSaveSourceBtn() {
+  const wrap = document.getElementById('saveSourceWrap');
+  const btn = document.getElementById('btnSaveSource');
+  const tip = document.getElementById('btnSaveSourceTip');
+  if (!wrap || !btn || !tip) return;
+
+  let lab = btn.querySelector('.save-label');
+  if (!lab) {
+    lab = document.createElement('span');
+    lab.className = 'save-label';
+    btn.appendChild(lab);
+  }
+  btn.removeAttribute('title');
+
+  const linked = isProjectLinked();
+  const unsynced = isUnsyncedOpenProject();
+  wrap.dataset.linked = linked ? '1' : (unsynced ? 'pending' : '0');
+
+  if (!linked && unsynced) {
+    setSaveSourceIcon('warn');
+    lab.textContent = 'Não Salvo';
+    btn.classList.remove('primary');
+    btn.classList.add('save-outline');
+    btn.setAttribute('aria-label', 'Projeto sem auto-sync — clique ou use o menu para sincronizar');
+    const syncIco = uiIco('sync', 14, 'outline');
+    const name = state.doc.source?.label || 'arquivo';
+    tip.innerHTML = `
+      <div class="save-tip-card">
+        <p class="save-tip-lead">O projeto <strong>${escapeHtml(name)}</strong> está só na interface — alterações <strong>não</strong> são gravadas automaticamente no disco.</p>
+        <hr class="save-tip-sep">
+        <div class="save-tip-actions">
+          <button type="button" data-save-act="enable-sync">${syncIco}<span>Sincronizar</span></button>
+        </div>
+      </div>`;
+    tip.querySelector('[data-save-act="enable-sync"]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      enableProjectSync().catch((err) => console.error(err));
+    });
+    return;
+  }
+
+  if (!linked) {
+    setSaveSourceIcon('warn');
+    lab.textContent = 'Salvar';
+    btn.classList.add('primary');
+    btn.classList.remove('save-outline');
+    btn.setAttribute('aria-label', 'Vincular arquivo .pdgm.zip para auto-sync');
+    tip.innerHTML = '';
+    return;
+  }
+
+  btn.classList.remove('save-outline');
+  const synced = !projectDirty && !projectWriting;
+  if (projectWriting) {
+    setSaveSourceIcon('spin');
+    lab.textContent = 'Salvando…';
+    btn.classList.add('primary');
+    btn.setAttribute('aria-label', 'Gravando no disco');
+  } else if (synced) {
+    setSaveSourceIcon('ok');
+    lab.textContent = 'Salvo';
+    btn.classList.remove('primary');
+    btn.setAttribute('aria-label', 'Arquivo em sincronia com a UI');
+  } else {
+    setSaveSourceIcon('warn');
+    lab.textContent = 'Salvar';
+    btn.classList.add('primary');
+    btn.setAttribute('aria-label', 'Salvar no arquivo do disco');
+  }
+
+  const statusLine = projectWriting
+    ? 'Gravando no disco…'
+    : (synced ? 'UI e arquivo no disco estão iguais.' : 'Há alterações locais ainda não gravadas.');
+  const statusOk = synced && !projectWriting;
+  const refreshIco = uiIco('refresh', 14, 'outline');
+  const unlinkIco = uiIco('unlink', 14, 'outline');
+
+  tip.innerHTML = `
+    <div class="save-tip-card">
+      <p class="save-tip-lead">A interface está vinculada à versão do arquivo zip no seu disco. Mudanças serão salvas automaticamente.</p>
+      <hr class="save-tip-sep">
+      <ul class="save-tip-status">
+        <li class="${statusOk ? 'ok' : 'warn'}">${saveTipStatusIco(statusOk)}<span class="st-txt">${escapeHtml(statusLine)}</span></li>
+        <li class="ok">${saveTipStatusIco(true)}<span class="st-txt">No disco: ${escapeHtml(formatProjectTs(linkedMtime))}</span></li>
+        <li class="ok">${saveTipStatusIco(true)}<span class="st-txt">No Diagramador: ${escapeHtml(formatProjectTs(diagramadorSyncTs()))}</span></li>
+      </ul>
+      <div class="save-tip-actions">
+        <button type="button" data-save-act="reload">${refreshIco}<span>Recarregar</span></button>
+        <button type="button" data-save-act="unlink">${unlinkIco}<span>Desvincular</span></button>
+      </div>
+    </div>`;
+
+  tip.querySelector('[data-save-act="reload"]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    syncNow(true);
+  });
+  tip.querySelector('[data-save-act="unlink"]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     state.doc.source = null;
     clearFileLink();
     save();
     renderSourceChip();
   });
+}
+
+const srcRow = document.getElementById('srcRow');
+function renderSourceChip() {
+  const s = state.doc.source;
+  if (!s) {
+    srcRow.hidden = true;
+    updateSaveSourceBtn();
+    return;
+  }
+  srcRow.hidden = false;
+  const live = isProjectSource(s) && !!fileHandle;
+  const name = s.label || '';
+  const refreshIco = uiIco('refresh', 16, 'outline');
+  const unlinkIco = uiIco('unlink', 16, 'outline');
+  const syncIco = uiIco('sync', 16, 'outline');
+  let action = '';
+  if (s.kind === 'gdoc') {
+    action = `<button type="button" id="btnSync" class="primary" title="Reimportar o conteúdo do Google Docs">Sincronizar</button>`;
+  } else if (live) {
+    // mesmos controles do painel do Salvar — também na sidebar
+    action = `<button type="button" id="btnSync" class="iconbtn" title="Lê de novo o arquivo do disco e atualiza a tela" aria-label="Recarregar do arquivo">${refreshIco}</button>`
+      + `<button type="button" id="btnUnlink" class="iconbtn" title="Desvincula o arquivo: para o autosave; o documento continua na tela" aria-label="Desvincular arquivo">${unlinkIco}</button>`;
+  } else if (isProjectSource(s) && !fileHandle) {
+    // aberto sem auto-sync (“Não Salvo”) — só o nome + botão para ligar a sincronia
+    action = `<button type="button" id="btnEnableSync" class="iconbtn" title="Sincronizar com o arquivo no disco (auto-sync)" aria-label="Sincronizar com o arquivo">${syncIco}</button>`;
+  } else if (s.kind === 'file') {
+    action = `<button type="button" id="btnUnlink" class="iconbtn" title="Desvincula o arquivo: o documento continua na tela" aria-label="Desvincular arquivo">${unlinkIco}</button>`;
+  }
+  srcRow.innerHTML = `<span class="src-label">${escapeHtml(name)}</span>${action}`;
+  const lab = srcRow.querySelector('.src-label');
+  if (lab) lab.title = name;
+  const sync = srcRow.querySelector('#btnSync'); if (sync) sync.addEventListener('click', () => syncNow(true));
+  const enSync = srcRow.querySelector('#btnEnableSync');
+  if (enSync) enSync.addEventListener('click', () => {
+    enableProjectSync().catch((err) => console.error(err));
+  });
+  const un = srcRow.querySelector('#btnUnlink');
+  if (un) un.addEventListener('click', () => {
+    state.doc.source = null;
+    clearFileLink();
+    save();
+    renderSourceChip();
+  });
+  updateSaveSourceBtn();
 }
 
 // ─────────────────────────── UI: segment control (Configurações / Conteúdo) ─
@@ -4965,18 +5371,20 @@ document.getElementById('btnOpen').addEventListener('click', (e) => {
   e.preventDefault();
   pickProjectFile();
 });
-// #fileProject: único caminho de Abrir .zip — lê bytes e decide por extensão +
-// magic (PK..). Cobre "diagramacao.pdgm (9).zip" e .pdgm.json.
+// #fileProject: fallback sem FSA (Safari/Firefox) — sem handle → offerSync se não for linkNow
 document.getElementById('fileProject').addEventListener('change', (e) => {
   const f = e.target.files && e.target.files[0];
-  // zera antes do async pra o próximo clique no mesmo arquivo disparar change
+  const linkNow = e.target.dataset.linkNow === '1';
   e.target.value = '';
+  e.target.dataset.linkNow = '';
   if (!f) {
     showToast('err', 'Nenhum arquivo selecionado',
       'O seletor fechou sem um arquivo. Tente de novo em Abrir .zip.');
     return;
   }
-  openProjectBlob(f).catch((err) => {
+  // desvincula anterior só após escolha (input change = já escolheu)
+  clearFileLink();
+  openProjectBlob(f, null, { offerSync: !linkNow, linkNow: false }).catch((err) => {
     console.error('[abrir projeto] change handler', err);
     showToast('err', 'Não foi possível abrir o arquivo',
       (err && err.message) || String(err),
@@ -4996,15 +5404,22 @@ document.getElementById('imgfile').addEventListener('change', (e) => {
   e.target.value = '';
 });
 document.getElementById('btnNew').addEventListener('click', () => {
-  if (!confirm('Limpar o documento atual e desvincular a origem?')) return;
-  state.doc = seedDoc();
+  const linked = isProjectLinked();
+  const msg = linked
+    ? 'Começar um projeto em branco?\n\nO arquivo .zip atual será desvinculado (não será apagado nem sobrescrito). O novo documento fica sem auto-sync até você vincular outro arquivo.'
+    : 'Limpar o documento atual e começar em branco?';
+  if (!confirm(msg)) return;
+  // desvincula PRIMEIRO (cancela autosave pendente) — senão o timer grava o doc vazio no .zip
+  state.doc.source = null;
   clearFileLink();
   idb.del('doc');
+  state.doc = seedDoc();
   document.getElementById('footText').value = state.doc.footText;
   document.getElementById('headText').value = state.doc.headText || '';
   document.getElementById('firstPage').value = state.doc.firstPage;
   syncSpecialUI();
   setBlocks(state.doc.blocks);
+  updateSaveSourceBtn();
 });
 document.getElementById('footText').addEventListener('input', (e) => { state.doc.footText = e.target.value; render(); });
 document.getElementById('headText').addEventListener('input', (e) => { state.doc.headText = e.target.value; render(); });
@@ -5803,6 +6218,38 @@ function openDownloadMenu() {
 function closeDownloadMenu() { downloadMenu.hidden = true; }
 document.getElementById('btnPrint').addEventListener('click', () => {
   if (downloadMenu.hidden) openDownloadMenu(); else closeDownloadMenu();
+});
+document.getElementById('btnSaveSource')?.addEventListener('click', () => { onSaveSourceClick(); });
+// ao abrir o painel, atualiza checks/timestamps (poll grava lastProjectPollAt em background)
+document.getElementById('saveSourceWrap')?.addEventListener('mouseenter', () => {
+  if (isProjectLinked() || isUnsyncedOpenProject()) updateSaveSourceBtn();
+});
+// modal vincular projeto
+document.getElementById('linkProjectModal')?.addEventListener('click', (e) => {
+  if (e.target.closest('[data-lpm-close]')) closeLinkProjectModal();
+});
+document.getElementById('lpmDownload')?.addEventListener('click', () => {
+  downloadAndLinkProject().catch((e) => {
+    console.error('[vincular]', e);
+    showToast('err', 'Não foi possível criar o projeto', (e && e.message) || String(e));
+  });
+});
+document.getElementById('lpmPick')?.addEventListener('click', () => {
+  closeLinkProjectModal();
+  pickProjectFile({ linkNow: true });
+});
+document.getElementById('syncOfferModal')?.addEventListener('click', (e) => {
+  if (e.target.closest('[data-som-close]')) closeSyncOfferModal();
+});
+document.getElementById('somSync')?.addEventListener('click', () => {
+  enableProjectSync().catch((err) => console.error(err));
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const m = document.getElementById('linkProjectModal');
+  if (m && !m.hidden) { e.preventDefault(); closeLinkProjectModal(); return; }
+  const s = document.getElementById('syncOfferModal');
+  if (s && !s.hidden) { e.preventDefault(); closeSyncOfferModal(); }
 });
 document.addEventListener('mousedown', (e) => {                // fecha ao clicar fora (mesmo padrão do #addImgMenu)
   if (downloadMenu.hidden) return;

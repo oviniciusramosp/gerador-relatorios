@@ -72,6 +72,159 @@
   header nav { justify-self: end; display: flex; gap: .4rem; align-items: center; }
   header nav button:disabled { opacity: .38; cursor: default; }
   header nav button:disabled:hover { background: color-mix(in srgb, var(--lilac) 7%, transparent); }
+  /* painel do Salvar/Salvo — wrap sempre visível. Hover só mostra .save-tip
+     quando há vínculo (data-linked). Nested button no tip é inválido → tip irmão. */
+  .save-source-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+  #btnSaveSource {
+    display: inline-flex; align-items: center; gap: .4rem;
+  }
+  #btnSaveSource .save-ico {
+    display: grid; place-items: center;
+    width: 16px; height: 16px; flex: none;
+  }
+  #btnSaveSource .save-ico svg { width: 16px; height: 16px; display: block; }
+  #btnSaveSource .save-ico.warn { color: inherit; }
+  #btnSaveSource .save-ico.ok { color: var(--mint, #29E899); }
+  #btnSaveSource .save-ico.spin { color: var(--lilac); }
+  /* “Não Salvo”: outlined discreto (sem primary solid) */
+  #btnSaveSource.save-outline {
+    background: transparent;
+    border: 1px solid var(--hair-strong);
+    color: var(--muted);
+  }
+  #btnSaveSource.save-outline:hover {
+    color: var(--ink);
+    border-color: var(--lilac);
+    background: color-mix(in srgb, var(--lilac) 10%, transparent);
+  }
+  #btnSaveSource .save-spinner {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--lilac) 35%, transparent);
+    border-top-color: currentColor;
+    animation: save-spin .7s linear infinite;
+  }
+  @keyframes save-spin { to { transform: rotate(360deg); } }
+  /* tip colado em top:100% + padding-top = ponte de hover (sem gap que fecha o painel
+     ao ir do botão aos botões Recarregar/Desvincular). Visual no .save-tip-card. */
+  .save-source-wrap .save-tip {
+    position: absolute; top: 100%; right: 0; z-index: 60;
+    display: none;
+    width: 18.5rem; padding: 8px 0 0; /* ponte invisível sob o botão */
+    background: transparent; border: 0; box-shadow: none;
+  }
+  .save-source-wrap[data-linked="1"]:hover .save-tip,
+  .save-source-wrap[data-linked="1"]:focus-within .save-tip {
+    display: block;
+  }
+  .save-tip-card {
+    display: grid; gap: .55rem;
+    padding: .7rem .75rem; border-radius: 10px;
+    border: 1px solid var(--hair-strong);
+    background: color-mix(in srgb, var(--lilac) 12%, var(--ground));
+    color: var(--ink); font-size: .72rem; font-weight: 400; font-stretch: 85%;
+    line-height: 1.4; text-align: left;
+    box-shadow: 0 16px 40px -14px #000;
+  }
+  .save-tip-lead {
+    margin: 0; color: var(--muted); font-size: .7rem; line-height: 1.4;
+  }
+  .save-tip-sep {
+    height: 1px; margin: 0; border: 0;
+    background: var(--hair-strong);
+  }
+  .save-tip-status {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; gap: .35rem;
+  }
+  .save-tip-status li {
+    display: flex; align-items: flex-start; gap: .4rem;
+    margin: 0; color: var(--ink); font-size: .7rem; line-height: 1.35;
+  }
+  .save-tip-status li svg {
+    flex: none; width: 14px; height: 14px; margin-top: 1px; display: block;
+  }
+  .save-tip-status li.ok svg { color: var(--mint, #29E899); }
+  .save-tip-status li.warn svg { color: #E8B84A; }
+  .save-tip-status li .st-txt { min-width: 0; flex: 1; }
+  .save-tip-actions {
+    display: flex; gap: .35rem; flex-wrap: wrap;
+  }
+  .save-tip-actions button {
+    flex: 1 1 auto; min-width: 0;
+    display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+    padding: .35rem .5rem; font-size: .7rem; font-stretch: 85%;
+    border-radius: var(--ctrl-r, 9px);
+  }
+  .save-tip-actions button svg { width: 14px; height: 14px; flex: none; color: var(--lilac); }
+  .save-tip-actions button:hover svg { color: var(--ink); }
+
+  /* modais de projeto: vincular / oferecer sincronia ao abrir zip */
+  #linkProjectModal, #syncOfferModal { position: fixed; inset: 0; z-index: 80; }
+  #linkProjectModal[hidden], #syncOfferModal[hidden] { display: none; }
+  #linkProjectModal .lpm-backdrop, #syncOfferModal .lpm-backdrop {
+    position: absolute; inset: 0; background: rgba(0,0,0,.55);
+  }
+  #linkProjectModal .lpm-panel, #syncOfferModal .lpm-panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(420px, calc(100vw - 2rem));
+    display: grid; gap: .85rem;
+    padding: 1.1rem 1.15rem 1.15rem;
+    border: 1px solid var(--hair-strong); border-radius: 12px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+    box-shadow: 0 24px 60px -16px #000;
+  }
+  #linkProjectModal .lpm-head, #syncOfferModal .lpm-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem;
+  }
+  #linkProjectModal .lpm-head h2, #syncOfferModal .lpm-head h2 {
+    margin: 0; font-size: .95rem; font-weight: 600; letter-spacing: -.01em;
+  }
+  #linkProjectModal .lpm-close, #syncOfferModal .lpm-close {
+    flex: none; width: 1.75rem; height: 1.75rem; padding: 0;
+    display: grid; place-items: center; border: 0; border-radius: 6px;
+    background: transparent; color: var(--muted); cursor: pointer;
+  }
+  #linkProjectModal .lpm-close:hover, #syncOfferModal .lpm-close:hover {
+    color: var(--ink); background: color-mix(in srgb, var(--lilac) 14%, transparent);
+  }
+  #linkProjectModal .lpm-body, #syncOfferModal .lpm-body {
+    margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5;
+  }
+  #linkProjectModal .lpm-actions, #syncOfferModal .lpm-actions {
+    display: grid; gap: .45rem;
+  }
+  #linkProjectModal .lpm-actions button, #syncOfferModal .lpm-actions button {
+    display: flex; align-items: center; gap: .55rem; width: 100%;
+    text-align: left; padding: .55rem .7rem;
+  }
+  #linkProjectModal .lpm-actions button svg, #syncOfferModal .lpm-actions button svg {
+    width: 18px; height: 18px; flex: none; color: var(--lilac);
+  }
+  #linkProjectModal .lpm-actions button.primary svg,
+  #syncOfferModal .lpm-actions button.primary svg { color: #fff; }
+  #linkProjectModal .lpm-actions .lpm-act-txt, #syncOfferModal .lpm-actions .lpm-act-txt {
+    display: grid; gap: .1rem; min-width: 0;
+  }
+  #linkProjectModal .lpm-actions .lpm-act-txt strong,
+  #syncOfferModal .lpm-actions .lpm-act-txt strong {
+    font-size: .82rem; font-weight: 600; color: inherit;
+  }
+  #linkProjectModal .lpm-actions .lpm-act-txt span,
+  #syncOfferModal .lpm-actions .lpm-act-txt span {
+    font-size: .7rem; color: var(--muted); font-stretch: 85%; line-height: 1.3;
+  }
+  #linkProjectModal .lpm-actions button.primary .lpm-act-txt span,
+  #syncOfferModal .lpm-actions button.primary .lpm-act-txt span {
+    color: color-mix(in srgb, #fff 72%, transparent);
+  }
+  /* painel hover "Não Salvo" também usa data-linked=pending */
+  .save-source-wrap[data-linked="pending"]:hover .save-tip,
+  .save-source-wrap[data-linked="pending"]:focus-within .save-tip {
+    display: block;
+  }
 
   /* flex: anima a largura do aside (slide) sem display:none — o painel interno
      fica com 320px fixo e o overflow:hidden recorta = slide in/out limpo. */
@@ -284,8 +437,9 @@
     background: color-mix(in srgb, var(--mint) 6%, transparent);
   }
   #srcRow[hidden] { display: none; }
+  /* nome longo: trunca no meio do chip; hover no title= mostra o nome completo */
   #srcRow .src-label {
-    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: .74rem; color: var(--muted);
   }
   #srcRow .src-hint {
@@ -293,7 +447,15 @@
     padding: .15rem .4rem; border-radius: 999px;
     background: color-mix(in srgb, var(--lilac) 12%, transparent);
   }
-  #srcRow button { padding: .3rem .55rem; font-size: .74rem; }
+  #srcRow button { flex: none; padding: .3rem .55rem; font-size: .74rem; }
+  /* refresh / unlink — só ícone, mesma caixa dos botões do header */
+  #srcRow button.iconbtn {
+    width: var(--ctrl-h, 2rem); height: var(--ctrl-h, 2rem); padding: 0;
+    display: grid; place-items: center; border-radius: var(--ctrl-r, 9px);
+    color: var(--muted);
+  }
+  #srcRow button.iconbtn svg { width: 16px; height: 16px; display: block; }
+  #srcRow button.iconbtn:hover { color: var(--ink); }
 
   /* ===================== palco / preview ===================== */
   .stage {
@@ -967,7 +1129,7 @@
     /* padding permanente do editor some no PDF */
     .page .idx-section { padding: 0; }
     .page.editing .col-right::after { display: none; }
-    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #chartModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
+    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #chartModal, #linkProjectModal, #syncOfferModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
     #linkedit { display: none !important; }
   }
 
@@ -1292,9 +1454,61 @@
   <nav>
     <button id="btnUndo" title="Desfazer (⌘Z)" disabled>↩︎</button>
     <button id="btnRedo" title="Refazer (⌘⇧Z)" disabled>↪︎</button>
+    <div class="save-source-wrap" id="saveSourceWrap" data-linked="0">
+      <button type="button" id="btnSaveSource" class="primary" aria-describedby="btnSaveSourceTip" aria-haspopup="true">
+        <span class="save-ico warn" aria-hidden="true"></span>
+        <span class="save-label">Salvar</span>
+      </button>
+      <div class="save-tip" id="btnSaveSourceTip" role="tooltip"></div>
+    </div>
     <button id="btnPrint" class="primary" title="Baixar o relatório (PDF ou o projeto editável em .zip)">Baixar</button>
   </nav>
 </header>
+<!-- modal: vincular .pdgm.zip para auto-sync (quando Salvar sem arquivo vinculado) -->
+<div id="linkProjectModal" hidden>
+  <div class="lpm-backdrop" data-lpm-close></div>
+  <div class="lpm-panel" role="dialog" aria-modal="true" aria-labelledby="lpmTitle">
+    <div class="lpm-head">
+      <h2 id="lpmTitle">Vincule um arquivo no disco</h2>
+      <button type="button" class="lpm-close" data-lpm-close aria-label="Fechar">✕</button>
+    </div>
+    <p class="lpm-body">
+      Para manter o auto-sync, o Diagramador precisa de um arquivo <strong>.pdgm.zip</strong> no seu computador.
+      Assim, alterações na UI e de ferramentas (MCP/agentes) passam pelo mesmo ficheiro — sem upload manual a cada vez.
+    </p>
+    <div class="lpm-actions">
+      <button type="button" class="primary" id="lpmDownload">
+        <span class="lpm-act-txt"><strong>Baixar e vincular .zip</strong><span>Cria o projeto no disco e liga o auto-sync (Chrome/Edge)</span></span>
+      </button>
+      <button type="button" id="lpmPick">
+        <span class="lpm-act-txt"><strong>Selecionar .zip local</strong><span>Escolha um .pdgm.zip que já existe no computador</span></span>
+      </button>
+    </div>
+  </div>
+</div>
+<!-- modal: após Abrir .zip — optar por sincronia (permissão nativa do browser) -->
+<div id="syncOfferModal" hidden>
+  <div class="lpm-backdrop" data-som-close></div>
+  <div class="lpm-panel" role="dialog" aria-modal="true" aria-labelledby="somTitle">
+    <div class="lpm-head">
+      <h2 id="somTitle">Manter sincronia com o arquivo?</h2>
+      <button type="button" class="lpm-close" data-som-close aria-label="Fechar">✕</button>
+    </div>
+    <p class="lpm-body">
+      O projeto foi carregado na interface. Se quiser, o Diagramador pode
+      <strong>gravar automaticamente</strong> neste <strong>.pdgm.zip</strong> no seu disco
+      (auto-sync). O navegador pedirá permissão de escrita.
+    </p>
+    <div class="lpm-actions">
+      <button type="button" class="primary" id="somSync">
+        <span class="lpm-act-txt"><strong>Sincronizar</strong><span>O Diagramador sincroniza meu arquivo local</span></span>
+      </button>
+      <button type="button" id="somSkip" data-som-close>
+        <span class="lpm-act-txt"><strong>Agora não</strong><span>Eu mesmo gerencio o arquivo local</span></span>
+      </button>
+    </div>
+  </div>
+</div>
 <!-- menu do botão "Baixar": PDF (gerado igual à visualização) ou ZIP (projeto editável,
      reabre pelo "Abrir .zip") — mesmo padrão de popover flutuante (position:fixed, JS
      posiciona) do #addImgMenu/#imgPanel/#coverPanel. -->
@@ -1320,7 +1534,7 @@
           <div id="srcRow" hidden></div>
           <div class="row3">
             <button type="button" id="btnNew">Em Branco</button>
-            <button type="button" id="btnOpen" title="Abrir e vincular um projeto (.pdgm.zip ou .pdgm.json). No Chrome, mantém o arquivo no disco com autosave.">Abrir .zip</button>
+            <button type="button" id="btnOpen" title="Abrir um projeto (.pdgm.zip ou .pdgm.json). Não sobrescreve o zip anterior; a sincronia é opcional.">Abrir .zip</button>
           </div>
           <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
           <!-- accept com extensões de 1 ponto (.zip/.json): cobre foo.pdgm.zip e
