@@ -973,6 +973,33 @@ function applyImgScaleStyles(img, b, colW) {
   }
 }
 
+// título/legenda: com capFit e scale < 100%, max-width = largura da imagem (+ mesmo alinhamento).
+function applyFigTextWidth(fig, b, colW) {
+  if (!fig) return;
+  const scale = imgScaleOf(b);
+  const fit = scale < 1 && !!b.capFit;
+  const w = colW * scale;
+  const center = imgAlignOf(b) === 'center';
+  for (const el of fig.querySelectorAll('.figtitle, figcaption')) {
+    if (fit) {
+      el.style.maxWidth = w + 'px';
+      el.style.marginLeft = center ? 'auto' : '0';
+      el.style.marginRight = center ? 'auto' : '0';
+    } else {
+      el.style.maxWidth = '';
+      el.style.marginLeft = '';
+      el.style.marginRight = '';
+    }
+  }
+}
+
+function applyFigureLayout(fig, b, colW) {
+  if (!fig) return;
+  const img = fig.querySelector('img');
+  if (img) applyImgScaleStyles(img, b, colW);
+  applyFigTextWidth(fig, b, colW);
+}
+
 function buildFigure(b, colW, editing) {
   const fig = document.createElement('figure');
   const place = placementOf(b);
@@ -990,7 +1017,6 @@ function buildFigure(b, colW, editing) {
   }
   const img = document.createElement('img');
   img.src = b.src; img.draggable = false;
-  applyImgScaleStyles(img, b, colW);
   img.style.borderRadius = (b.radius ?? 4) + 'px';
   fig.appendChild(img);
 
@@ -1001,6 +1027,7 @@ function buildFigure(b, colW, editing) {
     if (editing) { c.contentEditable = 'true'; c.spellcheck = true; c.lang = 'pt-BR'; }
     fig.appendChild(c);
   }
+  applyFigureLayout(fig, b, colW);
   return fig;
 }
 
@@ -1318,10 +1345,34 @@ function renderContentPage(pg, contentIdx, number) {
   return page;
 }
 
+// tipografia do Índice / Resumo: default = Parágrafo (typeStyleOf('p')); override em
+// state.doc.index.{fontSize,lineHeight} / {resumoFontSize,resumoLineHeight}.
+function indexTextStyle() {
+  const p = typeStyleOf('p');
+  const idx = state.doc.index || {};
+  return {
+    fontSize: idx.fontSize != null ? +idx.fontSize : p.fontSize,
+    lineHeight: idx.lineHeight != null ? +idx.lineHeight : p.lineHeight,
+  };
+}
+function resumoTextStyle() {
+  const p = typeStyleOf('p');
+  const idx = state.doc.index || {};
+  return {
+    fontSize: idx.resumoFontSize != null ? +idx.resumoFontSize : p.fontSize,
+    lineHeight: idx.resumoLineHeight != null ? +idx.resumoLineHeight : p.lineHeight,
+  };
+}
+// título sem conteúdo real (bloco H* vazio / só <br> / só espaços) — some do índice
+function isBlankHeading(b) {
+  return !stripHtml(b && b.html).replace(/\s+/g, ' ').trim();
+}
+
 // índice automático: 1 linha por título, numeração hierárquica, nº da página à direita.
 // Quais níveis ENTRAM é escolha do usuário (state.doc.index.levels) — mas o tocNum roda pra
 // TODOS os títulos e o filtro vem depois: assim desligar o H2 não renumera os H1 (o contador
 // hierárquico continua vendo o documento inteiro, que é o que o leitor espera).
+// H1–H4 vazios são ignorados (não contam na numeração nem na lista).
 function buildToc(content) {
   const rows = []; const c = [0, 0, 0, 0];   // um slot por nível h1..h4 (tocNum lê a profundidade daqui)
   const levels = state.doc.index.levels || { h1: true, h2: true };
@@ -1331,6 +1382,7 @@ function buildToc(content) {
       const b = f.b;
       const lvl = b.type === 'h1' ? 1 : b.type === 'h2' ? 2 : b.type === 'h3' ? 3 : b.type === 'h4' ? 4 : 0;
       if (!lvl) continue;
+      if (isBlankHeading(b)) continue; // placeholder vazio: não entra no índice
       // trilha C (t4): se o título já vem numerado ("1.2 - X"), usa o número lido
       // e remove o prefixo do texto; senão, contador hierárquico. tocNum muta c[].
       const { num, text } = tocNum(lvl, stripHtml(b.html), c);
@@ -1361,12 +1413,9 @@ function collectPreviewToc() {
   const rows = [];
   for (const b of state.doc.blocks) {
     if (b.type !== 'h1' && b.type !== 'h2') continue;
+    if (isBlankHeading(b)) continue; // igual ao índice da página: sem título vazio
     const text = stripHtml(b.html).replace(/\s+/g, ' ').trim();
-    rows.push({
-      id: b.id,
-      level: b.type === 'h1' ? 1 : 2,
-      text: text || (b.type === 'h1' ? 'Título' : 'Subtítulo'),
-    });
+    rows.push({ id: b.id, level: b.type === 'h1' ? 1 : 2, text });
   }
   return rows;
 }
@@ -1542,7 +1591,13 @@ function renderIndexPage(toc, contentStart, number) {
     else sec.style.width = COL_FULL + 'px';
     const h1 = document.createElement('div'); h1.className = 'idx-title'; h1.textContent = 'Índice';
     const list = document.createElement('div');
-    list.className = 'toc' + (idx.color === 'cinza' ? ' toc-cinza' : '');
+    list.className = 'toc'
+      + (idx.color === 'cinza' ? ' toc-cinza' : '')
+      + (idx.leaders ? ' toc-leaders' : '');
+    // tipografia: default = parágrafo; override via painel do Índice
+    const tocStyle = indexTextStyle();
+    list.style.fontSize = tocStyle.fontSize + 'px';
+    list.style.lineHeight = tocStyle.lineHeight + 'px';
     if (!toc.length) {
       const empty = document.createElement('div'); empty.className = 'toc-empty';
       const ligados = Object.keys(idx.levels || {}).filter(k => idx.levels[k]).map(k => k.toUpperCase());
@@ -1553,7 +1608,9 @@ function renderIndexPage(toc, contentStart, number) {
     }
     for (const r of toc) {
       const row = document.createElement('div'); row.className = 'toc-row lvl' + r.level;
+      // toc-dots: linha-guia entre título e página (visível só com .toc-leaders)
       row.innerHTML = `<span class="toc-label"><span class="toc-num">${r.num}</span><span class="toc-txt">${escapeHtml(r.text)}</span></span>`
+        + `<span class="toc-dots" aria-hidden="true"></span>`
         + `<span class="toc-pg">${String(contentStart + r.pageIdx).padStart(2, '0')}</span>`;
       list.appendChild(row);
     }
@@ -1571,6 +1628,10 @@ function renderIndexPage(toc, contentStart, number) {
     const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo';
     const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
     res.dataset.ph = 'Escreva o resumo…'; res.innerHTML = state.doc.index.resumo || '';
+    // tipografia: default = parágrafo; override via painel do Resumo
+    const resStyle = resumoTextStyle();
+    res.style.fontSize = resStyle.fontSize + 'px';
+    res.style.lineHeight = resStyle.lineHeight + 'px';
     if (editing) { res.contentEditable = 'true'; res.spellcheck = true; res.lang = 'pt-BR'; }
     sec.append(h2, res);
     wrap.appendChild(sec);
@@ -3149,7 +3210,13 @@ function openImgPanel() {
     <label class="field"><span class="field-row">Escala <span class="field-val"><span data-role="scalev">${scalePct}%</span><button type="button" class="resetbtn" data-a="scalereset" title="Redefinir para 100% (ocupa a coluna)">↺</button></span></span>
       <input type="range" data-a="scale" min="10" max="100" step="1" value="${scalePct}" data-snaps="10,25,50,75,100">
     </label>
-    <div class="field" data-role="imgalign-field">Alinhamento<div data-slot="imgalign"></div></div>
+    <div data-role="scale-opts">
+      <div class="field">Alinhamento<div data-slot="imgalign"></div></div>
+      <div class="swrow" title="Define a largura máxima do título e da legenda pela largura da imagem">
+        <span>Texto na largura da imagem</span>
+        <button type="button" class="sw" data-a="capfit" role="switch" aria-checked="${b.capFit ? 'true' : 'false'}"></button>
+      </div>
+    </div>
     <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
       <input type="range" data-a="radius" min="0" max="${RADIUS_SLIDER_MAX}" step="1" value="${Math.min(radius, RADIUS_SLIDER_MAX)}" data-snaps="0,4,8,12,16,24">
     </label>
@@ -3169,11 +3236,12 @@ function openImgPanel() {
       b.placement = v; if (v === 'right') { if (b.y == null) b.y = 0; } else delete b.anchor;
       render(); if (state.sel) openImgPanel();
     }));
-  // alinhamento só faz sentido com scale < 100% (imagem menor que a coluna)
-  const alignField = imgPanel.querySelector('[data-role="imgalign-field"]');
-  // estado inicial (instantâneo no 1º paint do nó; anima nas trocas do slider via paintScale)
-  setSidebarReveal(alignField, scalePct < 100);
+  // opções de scale < 100%: alinhamento + texto na largura da imagem (reveal ao soltar o thumb)
+  const scaleOpts = imgPanel.querySelector('[data-role="scale-opts"]');
+  // estado inicial (instantâneo no 1º paint do nó; anima no `change` do slider)
+  setSidebarReveal(scaleOpts, scalePct < 100);
   const alignSlot = imgPanel.querySelector('[data-slot="imgalign"]');
+  const liveFig = () => pagesEl.querySelector(`figure[data-id="${b.id}"]`);
   const mountAlignSeg = () => {
     if (!alignSlot) return;
     alignSlot.replaceChildren(widthSeg(imgAlignOf(b), [
@@ -3182,8 +3250,7 @@ function openImgPanel() {
     ], (v) => {
       b.imgAlign = v === 'center' ? 'center' : 'left';
       if (b.imgAlign === 'left') delete b.imgAlign; // default = esquerda; não polui o JSON
-      const img = pagesEl.querySelector(`figure[data-id="${b.id}"] img`);
-      if (img) applyImgScaleStyles(img, b, figColW);
+      applyFigureLayout(liveFig(), b, figColW);
       save(); scheduleCommit();
       mountAlignSeg(); // re-marca o segment sem rebuild do painel (preserva a transição do reveal)
     }));
@@ -3213,8 +3280,7 @@ function openImgPanel() {
     const n = Math.min(100, Math.max(10, Math.round(+pct) || 100));
     b.scale = n;
     if (n >= 100) delete b.scale; // default = ocupa a coluna; não polui o JSON
-    const img = pagesEl.querySelector(`figure[data-id="${b.id}"] img`);
-    if (img) applyImgScaleStyles(img, b, figColW);
+    applyFigureLayout(liveFig(), b, figColW);
     // coluna direita: se a imagem cresceu de volta, re-clampa y pra não vazar da página
     if (placementOf(b) === 'right') {
       const wrap = pagesEl.querySelector(`.rimg[data-id="${b.id}"]`);
@@ -3226,7 +3292,7 @@ function openImgPanel() {
     if (scalev) scalev.textContent = n + '%';
     const range = imgPanel.querySelector('input[data-a="scale"]');
     if (range && document.activeElement !== range) range.value = String(n);
-    // reveal do alinhamento só no soltar do thumb (`change`) / reset — não durante o arraste
+    // reveal das opções de scale só no soltar do thumb (`change`) / reset — não durante o arraste
     save(); scheduleCommit();
   };
   // label envolve o range: sem preventDefault o clique no número roubaria o foco pro slider
@@ -3272,9 +3338,21 @@ function openImgPanel() {
         paintScale(a === 'scalereset' ? 100 : +el.value);
         // reset não dispara `change` do range — reveal + re-pagina se a altura no fluxo mudou
         if (a === 'scalereset') {
-          setSidebarReveal(alignField, false);
+          setSidebarReveal(scaleOpts, false);
           if (placementOf(b) !== 'right') { render(); if (state.sel) openImgPanel(); }
         }
+        return;
+      }
+      // switcher: título/legenda com max-width = largura da imagem (só relevante com scale < 100%)
+      if (a === 'capfit') {
+        const on = el.getAttribute('aria-checked') !== 'true';
+        el.setAttribute('aria-checked', String(on));
+        if (on) b.capFit = true; else delete b.capFit;
+        applyFigureLayout(liveFig(), b, figColW);
+        save(); scheduleCommit();
+        // reflow do texto pode mudar a altura no fluxo
+        if (placementOf(b) !== 'right') render();
+        positionImgPanel();
         return;
       }
       // reabre o editor com o spec guardado; o import de volta troca a arte deste mesmo bloco
@@ -3288,12 +3366,12 @@ function openImgPanel() {
       render(); if (state.sel) openImgPanel();
     });
   });
-  // soltar o thumb: revela/esconde alinhamento + re-pagina se a altura no fluxo mudou
+  // soltar o thumb: revela/esconde opções de scale + re-pagina se a altura no fluxo mudou
   const scaleRange = imgPanel.querySelector('input[data-a="scale"]');
   if (scaleRange) {
     scaleRange.addEventListener('change', () => {
       // mesma transição de altura+opacity da sidebar — só no soltar (não no `input` do arraste)
-      setSidebarReveal(alignField, imgScalePct(b) < 100);
+      setSidebarReveal(scaleOpts, imgScalePct(b) < 100);
       // re-pagina sem openImgPanel: rebuild do painel mataria o reveal no meio
       if (placementOf(b) !== 'right') render();
       positionImgPanel();
@@ -3745,6 +3823,10 @@ function openIdxPanel() {
   }
   const idx = state.doc.index;
   const lv = idx.levels || {};
+  const pDef = typeStyleOf('p');
+  // valores efetivos (override do índice OU default do parágrafo)
+  const fs = idx.fontSize != null ? +idx.fontSize : pDef.fontSize;
+  const lh = idx.lineHeight != null ? +idx.lineHeight : pDef.lineHeight;
   idxPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Índice</div>
     <div class="titlelvls" style="padding-left:0;margin:0;border:0">
@@ -3759,7 +3841,14 @@ function openIdxPanel() {
         <option value="cinza"${idx.color === 'cinza' ? ' selected' : ''}>Cinza</option>
       </select>
     </label>
-    <div class="field">Largura<div data-slot="w"></div></div>`;
+    <div class="field">Largura<div data-slot="w"></div></div>
+    <div class="swrow"><span>Linha até a página</span><button type="button" class="sw" data-a="leaders" role="switch" aria-checked="${idx.leaders ? 'true' : 'false'}"></button></div>
+    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fs}px</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para o Parágrafo (${pDef.fontSize}px)">↺</button></span></span>
+      <input type="range" data-a="fontSize" min="8" max="48" step="1" value="${fs}" data-snaps="8,10,12,16,20,24">
+    </label>
+    <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lineHeightv">${lh}px</span><button type="button" class="resetbtn" data-r="lineHeight" title="Redefinir para o Parágrafo (${pDef.lineHeight}px)">↺</button></span></span>
+      <input type="range" data-a="lineHeight" min="8" max="56" step="1" value="${lh}" data-snaps="12,14,17,21,26,31">
+    </label>`;
   idxPanel.querySelectorAll('.sw[data-i]').forEach(sw => sw.addEventListener('click', () => {
     const levels = (state.doc.index.levels ||= { h1: true, h2: true });
     const k = sw.dataset.i;
@@ -3772,10 +3861,52 @@ function openIdxPanel() {
     syncSpecialUI();
     render();
   });
+  // linha-guia entre título e nº da página (leaders)
+  idxPanel.querySelector('.sw[data-a="leaders"]').addEventListener('click', (e) => {
+    const sw = e.currentTarget;
+    const on = sw.getAttribute('aria-checked') !== 'true';
+    sw.setAttribute('aria-checked', String(on));
+    if (on) state.doc.index.leaders = true; else delete state.doc.index.leaders;
+    // ao vivo: só troca a classe no .toc (sem rebuild do painel)
+    pagesEl.querySelectorAll('.toc').forEach(list => list.classList.toggle('toc-leaders', on));
+    save(); scheduleCommit();
+  });
   idxPanel.querySelector('[data-slot="w"]').replaceChildren(widthSeg(idx.width || 'curto', [
     { val: 'curto', label: 'Curto', icon: COL_ICON.left },
     { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
   ], (v) => { state.doc.index.width = v; syncSpecialUI(); render(); }));
+  // tipografia ao vivo (sem re-render: rebuild do painel mataria o arraste do slider)
+  const paintIdxType = () => {
+    const st = indexTextStyle();
+    pagesEl.querySelectorAll('.toc').forEach(list => {
+      list.style.fontSize = st.fontSize + 'px';
+      list.style.lineHeight = st.lineHeight + 'px';
+    });
+    save(); scheduleCommit();
+  };
+  const bindIdxType = (field, pKey) => {
+    const range = idxPanel.querySelector(`input[data-a="${field}"]`);
+    const disp = idxPanel.querySelector(`[data-role="${field}v"]`);
+    const reset = idxPanel.querySelector(`.resetbtn[data-r="${field}"]`);
+    if (range) range.addEventListener('input', () => {
+      state.doc.index[field] = Math.round(+range.value);
+      if (disp) disp.textContent = state.doc.index[field] + 'px';
+      paintIdxType();
+    });
+    if (reset) {
+      reset.addEventListener('mousedown', (e) => e.preventDefault());
+      reset.addEventListener('click', () => {
+        delete state.doc.index[field];
+        const d = typeStyleOf('p')[pKey];
+        if (range) range.value = d;
+        if (disp) disp.textContent = d + 'px';
+        paintIdxType();
+      });
+    }
+  };
+  bindIdxType('fontSize', 'fontSize');
+  bindIdxType('lineHeight', 'lineHeight');
+  enhanceAll(idxPanel);
   idxPanel.hidden = false;
   positionIdxPanel();
 }
@@ -3799,13 +3930,57 @@ function openResumoPanel() {
     resumoPanel.id = 'resumoPanel';
     document.body.appendChild(resumoPanel);
   }
+  const idx = state.doc.index;
+  const pDef = typeStyleOf('p');
+  const fs = idx.resumoFontSize != null ? +idx.resumoFontSize : pDef.fontSize;
+  const lh = idx.resumoLineHeight != null ? +idx.resumoLineHeight : pDef.lineHeight;
   resumoPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Resumo</div>
-    <div class="field">Largura do resumo<div data-slot="w"></div></div>`;
-  resumoPanel.querySelector('[data-slot="w"]').replaceChildren(widthSeg(state.doc.index.resumoWidth || 'full', [
+    <div class="field">Largura do resumo<div data-slot="w"></div></div>
+    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fs}px</span><button type="button" class="resetbtn" data-r="resumoFontSize" title="Redefinir para o Parágrafo (${pDef.fontSize}px)">↺</button></span></span>
+      <input type="range" data-a="resumoFontSize" min="8" max="48" step="1" value="${fs}" data-snaps="8,10,12,16,20,24">
+    </label>
+    <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lineHeightv">${lh}px</span><button type="button" class="resetbtn" data-r="resumoLineHeight" title="Redefinir para o Parágrafo (${pDef.lineHeight}px)">↺</button></span></span>
+      <input type="range" data-a="resumoLineHeight" min="8" max="56" step="1" value="${lh}" data-snaps="12,14,17,21,26,31">
+    </label>`;
+  resumoPanel.querySelector('[data-slot="w"]').replaceChildren(widthSeg(idx.resumoWidth || 'full', [
     { val: 'left', label: 'Coluna Esquerda', icon: COL_ICON.left },
     { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
   ], (v) => { state.doc.index.resumoWidth = v; syncSpecialUI(); render(); }));
+  // tipografia ao vivo (sem re-render: rebuild do painel mataria o arraste do slider)
+  const paintResumoType = () => {
+    const st = resumoTextStyle();
+    pagesEl.querySelectorAll('.idx-resumo').forEach(el => {
+      el.style.fontSize = st.fontSize + 'px';
+      el.style.lineHeight = st.lineHeight + 'px';
+    });
+    save(); scheduleCommit();
+  };
+  const bindResumoType = (field) => {
+    const range = resumoPanel.querySelector(`input[data-a="${field}"]`);
+    const role = field === 'resumoFontSize' ? 'fontSizev' : 'lineHeightv';
+    const pKey = field === 'resumoFontSize' ? 'fontSize' : 'lineHeight';
+    const disp = resumoPanel.querySelector(`[data-role="${role}"]`);
+    const reset = resumoPanel.querySelector(`.resetbtn[data-r="${field}"]`);
+    if (range) range.addEventListener('input', () => {
+      state.doc.index[field] = Math.round(+range.value);
+      if (disp) disp.textContent = state.doc.index[field] + 'px';
+      paintResumoType();
+    });
+    if (reset) {
+      reset.addEventListener('mousedown', (e) => e.preventDefault());
+      reset.addEventListener('click', () => {
+        delete state.doc.index[field];
+        const d = typeStyleOf('p')[pKey];
+        if (range) range.value = d;
+        if (disp) disp.textContent = d + 'px';
+        paintResumoType();
+      });
+    }
+  };
+  bindResumoType('resumoFontSize');
+  bindResumoType('resumoLineHeight');
+  enhanceAll(resumoPanel);
   resumoPanel.hidden = false;
   positionResumoPanel();
 }

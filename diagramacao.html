@@ -649,23 +649,36 @@
   /* ---------- página de índice (Índice + Resumo) ---------- */
   .page .idx-content { position: absolute; left: 48px; right: 48px; top: 88px; bottom: 88px; overflow: hidden; }
   .page .idx-title { font-weight: 700; font-size: 24px; line-height: 31px; color: #000; margin: 0 0 12px; letter-spacing: -0.01em; }
-  .page .idx-title + .toc { margin-bottom: 24px; }
-  .page .toc { display: grid; gap: 5px; margin-bottom: 24px; }
+  /* sem margin-bottom no .toc: o 24px antigo sobrava sob a lista (diferente do gap de
+     parágrafo = 14px entre blocos). Espaço Índice→Resumo fica no + .idx-section. */
+  .page .toc { display: grid; gap: 5px; margin: 0;
+    /* default = parágrafo (10/14); override via inline style no render (painel do Índice) */
+    font-size: 10px; line-height: 14px; }
   .page .toc-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
-    font-size: 9px; line-height: 12px; color: #4E4E4E; }
+    font-size: inherit; line-height: inherit; color: #4E4E4E; }
   .page .toc-row.lvl2 { padding-left: 14px; }
   .page .toc-row.lvl3 { padding-left: 28px; }
   .page .toc-row.lvl4 { padding-left: 42px; }
   .page .toc-row.lvl1 { color: #000; }
-  .page .toc-label { display: inline-flex; gap: 6px; min-width: 0; }
+  .page .toc-label { display: inline-flex; gap: 6px; min-width: 0; max-width: 100%; }
   .page .toc-num { color: #29E899; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
   .page .toc-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .page .toc-pg { color: #828080; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
-  .page .toc-empty { font-size: 9px; color: #9a9a9a; font-style: italic; }
+  /* linha-guia entre título e nº da página (opção do painel do Índice) */
+  .page .toc-dots {
+    display: none; flex: 1 1 auto; min-width: 10px; height: 0;
+    border-bottom: 1px solid #EBEBEB; /* cinza bem claro (mais suave que o divisor #D9D9D9) */
+    align-self: center; margin: 0 2px; pointer-events: none;
+  }
+  .page .toc.toc-leaders .toc-row { justify-content: flex-start; gap: 6px; }
+  .page .toc.toc-leaders .toc-label { flex: 0 1 auto; }
+  .page .toc.toc-leaders .toc-dots { display: block; }
+  .page .toc-empty { font-size: inherit; color: #9a9a9a; font-style: italic; }
   /* esquema "Cinza": número, título e página na mesma cor. Precisa citar .lvl1 e .toc-num/.toc-pg
      um a um — cada um crava a própria cor acima, e herança não passa por cima de cor declarada. */
   .page .toc-cinza .toc-row, .page .toc-cinza .toc-row.lvl1,
   .page .toc-cinza .toc-num, .page .toc-cinza .toc-pg { color: #A9A9A9; }
+  /* default = parágrafo; override via inline no render (painel do Resumo) */
   .page .idx-resumo { font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: justify; outline: none; }
   .page .idx-resumo p { margin: 0 0 8px; }
   /* seções Índice / Resumo: padding permanente = a borda de foco fica afastada do
@@ -676,7 +689,8 @@
     box-sizing: border-box;
   }
   .page.editing .idx-section { cursor: pointer; }
-  .page.editing .idx-section + .idx-section { margin-top: 8px; }
+  /* gap entre seções Índice e Resumo = 1 linha de parágrafo (mesmo gapBefore do miolo) */
+  .page .idx-section + .idx-section { margin-top: 14px; }
   .page.editing .idx-section:hover { background: color-mix(in srgb, #4E39FF 5%, transparent); }
   .page.editing .idx-section .idx-resumo { cursor: text; }
 
@@ -1284,6 +1298,13 @@
   }
   /* display:grid do .field vence o [hidden] da UA — mesmo bug da sidebar (logoopts/bgxform). */
   #imgPanel .field[hidden] { display: none; }
+  /* bloco de opções quando scale < 100% (alinhamento + switcher de texto) */
+  #imgPanel [data-role="scale-opts"] { display: grid; gap: .55rem; }
+  #imgPanel [data-role="scale-opts"][hidden] { display: none; }
+  #imgPanel [data-role="scale-opts"] .swrow {
+    font-size: .74rem; font-stretch: 85%; color: var(--muted); gap: .4rem;
+  }
+  #imgPanel [data-role="scale-opts"] .swrow > span { line-height: 1.25; min-width: 0; }
   #blockcol { margin-top: .5rem; }
   #blockcol[hidden] { display: none; }
   /* cadeado do bloco na coluna direita (sidebar Conteúdo) — mesmo .fieldbtn do painel de imagem */
@@ -1308,8 +1329,8 @@
      empurrado pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de
      baixo, como já era). (t4) botão de reset discreto colado ao lado do valor, no mesmo grupo.
      `aside` cobre o slider de tamanho do Logo da Paradigma na sidebar esquerda (capa/contracapa). */
-  #imgPanel .field-row, #tablePanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
-  #imgPanel .field-val, #tablePanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
+  #imgPanel .field-row, #tablePanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, #idxPanel .field-row, #resumoPanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #imgPanel .field-val, #tablePanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, #idxPanel .field-val, #resumoPanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
   /* valor em px digitável no lugar (Cantos raio): sem <input>, sem empurrar layout */
   #imgPanel .field-edit {
     cursor: text; outline: none; border-radius: 3px; min-width: 1.2ch;
@@ -1320,11 +1341,11 @@
     background: color-mix(in srgb, var(--violet) 12%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--violet) 45%, transparent);
   }
-  #imgPanel .resetbtn, #coverPanel .resetbtn, #logoPanel .resetbtn, #blockStylePanel .resetbtn, aside .resetbtn {
+  #imgPanel .resetbtn, #coverPanel .resetbtn, #logoPanel .resetbtn, #blockStylePanel .resetbtn, #idxPanel .resetbtn, #resumoPanel .resetbtn, aside .resetbtn {
     border: 0; background: transparent; padding: 0 .1rem; margin: 0;
     color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
   }
-  #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #logoPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover, aside .resetbtn:hover { color: var(--ink); }
+  #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #logoPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover, #idxPanel .resetbtn:hover, #resumoPanel .resetbtn:hover, aside .resetbtn:hover { color: var(--ink); }
   /* picker de símbolo da lista de pontos (menu ⋮) */
   #blockStylePanel .markerpick {
     display: flex; flex-wrap: wrap; gap: .3rem;
