@@ -80,7 +80,7 @@ por padrão:
 | Contrato | Regra |
 |---|---|
 | `.pdgm.json` / `.pdgm.zip` (`{ v, doc }`) | Campo novo = opcional + default no open (`seedDoc` / `normalizeOpenedDoc`). Não renomear/remover sem migração. |
-| Fixture legada | `fixtures/pdgm-v1-minimal.json` + `node test-pdgm-compat.mjs` — shape antigo (sem `resumoOn`, `reviewed`, `freePdf`…) ainda abre. |
+| Fixture legada | `fixtures/pdgm-v1-minimal.json` + `node test-pdgm-compat.mjs` — shape antigo (sem `resumoOn`, `reviewed`, `freePdf`…) ainda abre. A migração de defaults no open vive em **`doc-migrate.js`** (UI e teste importam o mesmo módulo). |
 | GitHub Pages | Feature que precisa de backend **degrada** (some UI), não quebra o fluxo estático. |
 | Clipboard → Figma | Metadata `#pdgm-timeline` e o plugin em `figma-plugin/` precisam continuar parseando. |
 | `/api/*` | Path e shape estáveis; erros legíveis. |

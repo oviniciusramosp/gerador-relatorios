@@ -5,21 +5,18 @@
  * 1. Arquivo antigo (sem resumoOn, reviewed, freePdf, ruleTop…) deixa de abrir.
  * 2. Campo novo opcional some no round-trip (serialização seletiva / hardcode).
  * 3. Envelope inválido lança em vez de devolver null (UI sem try/catch).
- *
- * A migração de defaults no open vive em diagramacao.js (normalizeOpenedDoc +
- * Object.assign(seedDoc(), raw)). Aqui recriamos SÓ as regras puras que o
- * contrato do arquivo exige — se o open real divergir, este teste e o load
- * precisam ser atualizados juntos (ver AGENTS.md → contratos).
+ * 4. Open real (normalizeOpenedDoc em doc-migrate.js) diverge do que a suite
+ *    “acha” que acontece — por isso o teste importa o MESMO módulo da UI.
  */
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { serializeDoc, deserializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';
+import {
+  RULE_W_DEFAULT, RULE_W_LEGACY, defaultLogo, normalizeOpenedDoc,
+} from './doc-migrate.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/pdgm-v1-minimal.json', import.meta.url));
-
-// Espessura legada pré-slider (diagramacao.js · RULE_W_LEGACY).
-const RULE_W_LEGACY = 1;
 
 /** Defaults de topo equivalentes ao seedDoc() (subset relevante ao arquivo). */
 function seedLike() {
@@ -29,8 +26,8 @@ function seedLike() {
     headText: '',
     firstPage: 1,
     source: null,
-    ruleTop: 0.5,
-    ruleBot: 0.5,
+    ruleTop: RULE_W_DEFAULT,
+    ruleBot: RULE_W_DEFAULT,
     headAlign: 'left',
     pnumAlign: 'left',
     footAlign: 'right',
@@ -52,33 +49,10 @@ function seedLike() {
   };
 }
 
-/** Espelha applyDoc + normalizeOpenedDoc nos pontos que o .pdgm antigo toca. */
+/** Espelha applyDoc: Object.assign(seed, raw) + normalizeOpenedDoc(doc, raw). */
 function openCompat(raw) {
   const doc = Object.assign(seedLike(), raw);
-  if (!Array.isArray(doc.reviewed)) doc.reviewed = [];
-  if (!doc.blockStyles || typeof doc.blockStyles !== 'object') doc.blockStyles = {};
-
-  // ruleTop/ruleBot ausentes no arquivo → visual legado 1px, não o default do seed (0.5)
-  if (!Object.prototype.hasOwnProperty.call(raw, 'ruleTop') || raw.ruleTop == null) {
-    doc.ruleTop = RULE_W_LEGACY;
-  }
-  if (!Object.prototype.hasOwnProperty.call(raw, 'ruleBot') || raw.ruleBot == null) {
-    doc.ruleBot = RULE_W_LEGACY;
-  }
-
-  doc.headAlign = doc.headAlign || 'left';
-  doc.pnumAlign = doc.pnumAlign || 'left';
-  doc.footAlign = doc.footAlign || 'right';
-  if (!Object.prototype.hasOwnProperty.call(raw, 'printMirror')) doc.printMirror = false;
-
-  if (doc.index) {
-    if (doc.index.resumoOn === undefined) doc.index.resumoOn = true;
-    if (!doc.index.levels) doc.index.levels = { h1: true, h2: true, h3: false, h4: false };
-    doc.index.color ||= 'padrao';
-    doc.index.width ||= 'curto';
-    doc.index.resumoWidth ||= 'full';
-  }
-  return doc;
+  return normalizeOpenedDoc(doc, raw);
 }
 
 // ── fixture no disco ─────────────────────────────────────────────────────────
@@ -102,8 +76,8 @@ assert.equal(deserializeDoc({}), null);
 assert.equal(deserializeDoc({ v: 1, doc: 'nope' }), null);
 assert.equal(deserializeDoc({ doc: { blocks: [] } }), null, 'sem v → null');
 
-// ── open com defaults (contrato do load na UI) ───────────────────────────────
-// deep-clone: openCompat muta nested (index.*) — não pode sujar o raw do arquivo
+// ── open com defaults (MESMO normalizeOpenedDoc da UI) ───────────────────────
+// deep-clone: normalize muta nested (index.*, cover.logo…) — não sujar o raw
 const opened = openCompat(JSON.parse(JSON.stringify(raw)));
 assert.equal(opened.blocks[0].html, 'Relatório legado', 'conteúdo do miolo não some');
 assert.equal(opened.blocks[1].html, 'Aberto em versões novas sem perder conteúdo.');
@@ -119,6 +93,24 @@ assert.equal(opened.footText, 'paradigma.education');
 assert.equal(opened.back.on, false, 'Object.assign preserva back.on do arquivo');
 assert.ok(opened.freePdf && opened.freePdf.mode === 'page', 'freePdf vem do seed quando ausente');
 assert.equal(raw.index.resumoOn, undefined, 'raw do arquivo permanece intocado após open');
+assert.ok(opened.cover.logo, 'capa sem logo ganha defaultLogo na migração');
+assert.deepEqual(opened.cover.logo, defaultLogo());
+
+// capa antiga: 1–2 itens type "p" (ou sem type) → title/subtitle
+const capaAntiga = openCompat({
+  blocks: [],
+  cover: {
+    on: true,
+    items: [
+      { id: 'c1', html: 'Título velho', y: 100 },
+      { id: 'c2', html: 'Subtítulo velho', y: 160 },
+    ],
+  },
+  back: { on: false, items: [] },
+  index: { on: false },
+});
+assert.equal(capaAntiga.cover.items[0].type, 'title');
+assert.equal(capaAntiga.cover.items[1].type, 'subtitle');
 
 // ── round-trip JSON preserva o que o usuário salvou ──────────────────────────
 const wire = serializeDoc(raw);
@@ -145,4 +137,4 @@ assert.equal(zipRes.ok, true, zipRes.detail || zipRes.title);
 assert.equal(zipRes.doc.blocks[0].html, 'Relatório legado');
 assert.match(zipRes.doc.index.resumo, /Resumo antigo/);
 
-console.log('test-pdgm-compat: fixture antiga abre, migra defaults e round-trip preserva extras');
+console.log('test-pdgm-compat: fixture + normalizeOpenedDoc real + round-trip ok');

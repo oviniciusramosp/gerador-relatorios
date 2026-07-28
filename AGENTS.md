@@ -140,6 +140,7 @@ interno pode refatorar se testes e migrator cobrirem o disco.
 | `graficos.js` / `chart.js` | Renderer + UI; núcleo puro em `chart.js` é o que se testa. |
 | `server.mjs` | Rotas de IA medidas (effort, instruções inline). Mexer sem remedir traz bug de timeout de volta — ver README. |
 | `doc-format.js` | Serialização genérica de propósito; não listar campos à mão. |
+| `doc-migrate.js` | Defaults ao **abrir** `.pdgm` (`normalizeOpenedDoc`). UI e testes importam o mesmo módulo — não reimplementar migração no teste. |
 
 **Não** criar pastas `src/` / renomear a suite “porque escala” sem ganho de
 contrato. Pasta cosméticas sem extração de funções = zero escalabilidade.

@@ -23,6 +23,11 @@ import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser p
 import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
 import { deserializeDoc, serializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
+import {
+  RULE_W_DEFAULT, RULE_W_LEGACY, RULE_W_STEP,
+  hasOwn, clampFootAlign, clampRuleW, defaultLogo, ensureCoverType,
+  migrateSpecialPages, normalizeOpenedDoc,
+} from './doc-migrate.js';  // defaults/migração ao abrir .pdgm (puro; compartilhado com test-pdgm-compat)
 import { projectFormatFromName, shouldReloadLinkedProject } from './project-link.js';
 import { registerIcons, findIcon, iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
 import { IONICONS_LIB, IONICONS_LIB_SOLID } from './ionicons-lib.js';  // outline + solid (charts / callout)
@@ -38,12 +43,7 @@ const CONTENT_TOP = 88, CONTENT_H = 666;          // [88 .. 754]
 // RULE_BOT_BOTTOM = base da linha inferior (com 1px default: top 802 → bottom 803).
 // Gap texto↔linha (cabeçalho e rodapé) = 4px: runhead bottom em 36, foot top em 807.
 const RULE_TOP_Y = 40, RULE_BOT_BOTTOM = 803, RULE_TEXT_GAP = 4;
-// espessura das linhas de moldura: hairline 0.25px … 8px.
-// Default NOVO = 0.5. Zips/sessões antigas sem o campo usavam 1px (CSS fixo) → RULE_W_LEGACY.
-const RULE_W_DEFAULT = 0.5, RULE_W_LEGACY = 1, RULE_W_MIN = 0.25, RULE_W_MAX = 8, RULE_W_STEP = 0.25;
-const hasOwn = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
-const FOOT_ALIGNS = new Set(['left', 'center', 'right']);
-const clampFootAlign = (a) => (FOOT_ALIGNS.has(a) ? a : 'left');
+// RULE_W_* / clampFootAlign / clampRuleW → doc-migrate.js (open de .pdgm + UI de espessura)
 /** espelha left↔right em páginas pares (contrapágina) quando printMirror está ligado */
 function resolveFootAlign(align, pageNumber) {
   const a = clampFootAlign(align);
@@ -286,13 +286,8 @@ const mkBlock = (type, html = '') => {
 const coverItem = (html, size, span, align, color = null, y = 0, type = 'p') => (
   { id: uid(), type, html, size, span, align, color, y }
 );
-// logo da Paradigma FIXO no cabeçalho/rodapé da capa/contracapa — NÃO é coverItem
-// arrastável: mora fora do fluxo de itens e do anti-sobreposição. Tingido via
-// currentColor (como nos gráficos), escalado por size. defaultLogo() serve o seed
-// E a migração de config antiga (LS salvo antes deste campo existir).
-// "Nome" (wordmark) vem ligado por padrão — capa/contracapa nascem com o logo já
-// selecionado; "Nenhum" continua uma escolha manual, não o estado inicial.
-const defaultLogo = () => ({ on: true, kind: 'nome', pos: 'header', align: 'left', color: '#FFFFFF', size: 1 });
+// logo da capa/contracapa: defaultLogo() em doc-migrate.js (seed + migração de
+// config antiga). "Nome" (wordmark) vem ligado por padrão; "Nenhum" é escolha manual.
 
 function seedDoc() {
   return {
@@ -1373,13 +1368,7 @@ function render(caret /* optional {id,offset,role} */) {
   scheduleCommit();
 }
 
-// espessura das linhas de moldura (cabeçalho/rodapé) — 0.25–8 px, default 0.5
-function clampRuleW(n) {
-  const v = +n;
-  if (!Number.isFinite(v)) return RULE_W_DEFAULT;
-  const stepped = Math.round(v / RULE_W_STEP) * RULE_W_STEP;
-  return Math.min(RULE_W_MAX, Math.max(RULE_W_MIN, stepped));
-}
+// clampRuleW → doc-migrate.js
 function ruleWidthOf(which) {
   const raw = which === 'bot' ? state.doc.ruleBot : state.doc.ruleTop;
   // null só em doc a meio caminho; default novo. Zips antigos passam por normalizeOpenedDoc.
@@ -1881,35 +1870,8 @@ const COVER_TYPE_SIZE = {
 };
 // tipos “de título” na capa: Enter cria parágrafo abaixo (igual H1–H4 no miolo)
 const COVER_HEAD_TYPES = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4']);
-// tipos válidos de cover-item (qualquer outro / ausente → 'p', depois migração de capa)
-const COVER_TYPES = new Set([
-  'title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'quote',
-  'li', 'ol', 'check', 'callout', 'image', 'table', 'divider',
-]);
-// type por item: só normaliza valor inválido/ausente. A promoção título/subtítulo é
-// por CAPA (migrateCoverTitleSubtitle) — importação antiga sem type ou com 1–2 "p".
-function ensureCoverType(it) {
-  if (!it) return 'p';
-  if (COVER_TYPES.has(it.type)) return it.type;
-  it.type = 'p';
-  return 'p';
-}
+// ensureCoverType / migrateCoverTitleSubtitle → doc-migrate.js
 function coverTypeOf(it) { return ensureCoverType(it); }
-// Importação antiga da CAPA (não contracapa): sem type title/subtitle ainda, e só 1 ou 2
-// itens "texto genérico" (type ausente ou 'p') → o 1º (menor Y) é Título e o 2º Subtítulo.
-// Capa moderna (já tem title/subtitle, ou 3+ parágrafos) não mexe.
-function migrateCoverTitleSubtitle(cov) {
-  if (!cov?.items?.length) return;
-  for (const it of cov.items) ensureCoverType(it);
-  if (cov.items.some(it => it.type === 'title' || it.type === 'subtitle')) return;
-  const plain = cov.items
-    .filter(it => it.type === 'p')
-    .slice()
-    .sort((a, b) => (a.y || 0) - (b.y || 0) || String(a.id || '').localeCompare(String(b.id || '')));
-  if (plain.length !== 1 && plain.length !== 2) return;
-  plain[0].type = 'title';
-  if (plain[1]) plain[1].type = 'subtitle';
-}
 // defs extras do menu "/" só na capa (ícone tipográfico leve, sem poluir a paleta do miolo)
 const COVER_SLASH_EXTRA = [
   { type: 'title', label: 'Título', icon: '<span style="font-size:14px;font-weight:800;line-height:1">T</span>' },
@@ -4606,64 +4568,7 @@ function looksLikeZip(buf) {
     && (u[2] === 0x03 || u[2] === 0x05 || u[2] === 0x07 || u[2] === 0x08);
 }
 
-// Migração de capa/contracapa (load + abrir .pdgm): Y livre, logo default, type de item.
-// Capa antiga sem type title/subtitle e com 1–2 "p" → 1º título, 2º subtítulo
-// (migrateCoverTitleSubtitle). Contracapa só normaliza type ausente → p.
-function migrateSpecialPages(doc) {
-  [doc.cover, doc.back].forEach(cov => {
-    if (!cov) return;
-    if (!cov.logo) cov.logo = defaultLogo();
-    if (!cov.items) return;
-    let yy = 40;
-    cov.items.forEach(it => {
-      if (typeof it.y !== 'number') { it.y = yy; yy += 60; }
-      ensureCoverType(it);
-    });
-  });
-  // só a CAPA (não a contracapa): par Título/Subtítulo do seed antigo
-  migrateCoverTitleSubtitle(doc.cover);
-}
-
-// Preenche defaults de campos NOVOS em docs antigos (zip/json salvos antes de
-// reviewed[], levels, resumoOn, blockStyles, ruleTop/headAlign…). Object.assign(seed, doc)
-// é shallow: doc.index inteiro substitui o seed — campos que o seed tinha e o arquivo
-// não somem sem esta normalização.
-//
-// `raw` = objeto vindo do arquivo (antes do merge com seed). Necessário porque o seed
-// injeta RULE_W_DEFAULT (0.5) em ruleTop/ruleBot ausentes; zips antigos sem o campo
-// devem reabrir com RULE_W_LEGACY (1px), que era o visual fixo pré-slider.
-function normalizeOpenedDoc(doc, raw = null) {
-  if (!Array.isArray(doc.reviewed)) doc.reviewed = [];
-  if (!doc.blockStyles || typeof doc.blockStyles !== 'object') doc.blockStyles = {};
-
-  // espessura cabeçalho/rodapé
-  if (raw) {
-    if (!hasOwn(raw, 'ruleTop') || raw.ruleTop == null) doc.ruleTop = RULE_W_LEGACY;
-    else doc.ruleTop = clampRuleW(raw.ruleTop);
-    if (!hasOwn(raw, 'ruleBot') || raw.ruleBot == null) doc.ruleBot = RULE_W_LEGACY;
-    else doc.ruleBot = clampRuleW(raw.ruleBot);
-  } else {
-    if (doc.ruleTop != null) doc.ruleTop = clampRuleW(doc.ruleTop);
-    if (doc.ruleBot != null) doc.ruleBot = clampRuleW(doc.ruleBot);
-  }
-
-  // posição do chrome: ausentes = layout histórico (cabeçalho esq, nº esq, site dir)
-  doc.headAlign = clampFootAlign((raw && hasOwn(raw, 'headAlign') ? raw.headAlign : doc.headAlign) || 'left');
-  doc.pnumAlign = clampFootAlign((raw && hasOwn(raw, 'pnumAlign') ? raw.pnumAlign : doc.pnumAlign) || 'left');
-  doc.footAlign = clampFootAlign((raw && hasOwn(raw, 'footAlign') ? raw.footAlign : doc.footAlign) || 'right');
-  if (raw && !hasOwn(raw, 'printMirror')) doc.printMirror = false;
-  else doc.printMirror = !!doc.printMirror;
-
-  if (doc.index) {
-    if (doc.index.resumoOn === undefined) doc.index.resumoOn = true;
-    if (!doc.index.levels) doc.index.levels = { h1: true, h2: true, h3: false, h4: false };
-    doc.index.color ||= 'padrao';
-    doc.index.width ||= 'curto';
-    doc.index.resumoWidth ||= 'full';
-  }
-  migrateSpecialPages(doc);
-  return doc;
-}
+// normalizeOpenedDoc / migrateSpecialPages → doc-migrate.js
 
 // aplica um doc COMPLETO (vindo de deserializeDoc) como o novo state.doc — igual
 // ao #btnNew (troca o documento inteiro + resincroniza a UI), mas preservando

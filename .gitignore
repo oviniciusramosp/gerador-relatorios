@@ -1,5 +1,6 @@
 .pdftmp/
-_ia/cache/
+# sessões de IA (input.png, fatias de timeline, cache) — nunca commitar
+_ia/
 node_modules/
 .DS_Store
 .claude/worktrees/
