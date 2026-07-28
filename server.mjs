@@ -573,7 +573,9 @@ async function handlePdf(req, res) {
         if (sz > 0 && stable >= 2) {                    // tamanho estável ~600ms → pronto
           clearInterval(iv); cp.kill('SIGKILL');
           readFile(pdfPath).then(resolve, reject);
-        } else if (waited >= 25000) {
+        } else if (waited >= 90000) {
+          // 90s: PDF Gratuito com dezenas de páginas + imagens embutidas demora mais
+          // que o miolo “leve” de 25s; sem isso o client caía no print Quartz (sem links).
           clearInterval(iv); cp.kill('SIGKILL');
           reject(new Error('Chrome não gerou o PDF a tempo' + (err ? ': ' + err.slice(0, 200) : '')));
         }

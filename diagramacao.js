@@ -34,6 +34,30 @@ registerIcons(IONICONS_LIB_SOLID, { style: 'solid' }); // filled (callout defaul
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
 const CONTENT_TOP = 88, CONTENT_H = 666;          // [88 .. 754]
+// moldura: linhas de topo/base (CSS .rule). RULE_TOP_Y = topo da linha superior;
+// RULE_BOT_BOTTOM = base da linha inferior (com 1px default: top 802 → bottom 803).
+// Gap texto↔linha (cabeçalho e rodapé) = 4px: runhead bottom em 36, foot top em 807.
+const RULE_TOP_Y = 40, RULE_BOT_BOTTOM = 803, RULE_TEXT_GAP = 4;
+// espessura das linhas de moldura: hairline 0.25px … 8px.
+// Default NOVO = 0.5. Zips/sessões antigas sem o campo usavam 1px (CSS fixo) → RULE_W_LEGACY.
+const RULE_W_DEFAULT = 0.5, RULE_W_LEGACY = 1, RULE_W_MIN = 0.25, RULE_W_MAX = 8, RULE_W_STEP = 0.25;
+const hasOwn = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
+const FOOT_ALIGNS = new Set(['left', 'center', 'right']);
+const clampFootAlign = (a) => (FOOT_ALIGNS.has(a) ? a : 'left');
+/** espelha left↔right em páginas pares (contrapágina) quando printMirror está ligado */
+function resolveFootAlign(align, pageNumber) {
+  const a = clampFootAlign(align);
+  if (!state.doc.printMirror || a === 'center') return a;
+  return (pageNumber % 2 === 0) ? (a === 'left' ? 'right' : 'left') : a;
+}
+function formatRulePx(n) {
+  const v = +n;
+  if (!Number.isFinite(v)) return RULE_W_DEFAULT + 'px';
+  // evita 0.25000001; inteiros sem casas
+  const r = Math.round(v / RULE_W_STEP) * RULE_W_STEP;
+  const s = Math.abs(r - Math.round(r)) < 1e-9 ? String(Math.round(r)) : String(r);
+  return s + 'px';
+}
 
 // seletor de coluna reutilizável (popover de Imagem, Capa e aba Conteúdo): SVGs de coluna
 const COL_ICON = {
@@ -274,6 +298,12 @@ function seedDoc() {
   return {
     blocks: [mkBlock('p', '')],
     footText: 'paradigma.education', headText: '', firstPage: 1, source: null,
+    // espessura (px) das linhas de moldura do cabeçalho e do rodapé
+    ruleTop: RULE_W_DEFAULT, ruleBot: RULE_W_DEFAULT,
+    // alinhamento do texto do cabeçalho, do nº e do texto do rodapé (left|center|right)
+    headAlign: 'left', pnumAlign: 'left', footAlign: 'right',
+    // Modo Impressão: espelha left↔right nas páginas pares (página / contrapágina)
+    printMirror: false,
     // estilo por tipo de bloco (menu ⋮ da paleta) — {} = tudo no padrão do app; ver
     // TYPE_STYLE_DEFAULTS/applyTypeStyle/gapBefore. Vive no state.doc (não no LS_KEY pequeno)
     // porque é adjacente ao miolo — mesmo caminho de idb.set('doc', ...) que já salva os
@@ -306,14 +336,50 @@ function seedDoc() {
     // (dump genérico do objeto). applyDoc = Object.assign(seedDoc(), doc) cobre
     // arquivos antigos sem o campo. Não entra no hist/undo (só blocks/foot/page).
     reviewed: [],
+    // teaser "PDF Gratuito": mode page|section + seleção + mensagem/CTA
+    freePdf: {
+      mode: 'page', // 'page' (padrão) | 'section' (por capítulo H1/H2)
+      // quebra de linha intencional (white-space: pre-line no overlay)
+      message: 'Se torne Paradigma Pro para \nter acesso ao relatório completo.',
+      link: 'https://paradigma.education',
+      cta: 'Tornar-se Pro',
+      locked: null,           // mode=page: índices de página (null = default freemium)
+      lockedSections: null,   // mode=section: ids de H1/H2 (null = default freemium)
+    },
   };
 }
 
+// defaults do teaser (docs antigos sem freePdf / campos parciais)
+const FREE_PDF_MSG_LEGACY = 'Se torne Paradigma Pro para ter acesso ao relatório completo.';
+function freePdfConfig() {
+  const d = seedDoc().freePdf;
+  const f = (state.doc && state.doc.freePdf) || {};
+  let message = (f.message != null && String(f.message)) || d.message;
+  if (message.trim() === FREE_PDF_MSG_LEGACY) message = d.message;
+  const mode = f.mode === 'section' ? 'section' : 'page';
+  return {
+    mode,
+    message,
+    link: (f.link != null && String(f.link)) || d.link,
+    cta: (f.cta != null && String(f.cta)) || d.cta,
+    locked: Array.isArray(f.locked) ? f.locked.map(n => +n).filter(n => Number.isFinite(n)) : null,
+    lockedSections: Array.isArray(f.lockedSections)
+      ? f.lockedSections.map(String).filter(Boolean)
+      : null,
+  };
+}
+function ensureFreePdf() {
+  if (!state.doc.freePdf || typeof state.doc.freePdf !== 'object') {
+    state.doc.freePdf = { ...seedDoc().freePdf };
+  }
+  return state.doc.freePdf;
+}
+
 // ── seções <details> da sidebar: default + leitura do estado persistido ─────
-// Por padrão só Documento e Cabeçalho & rodapé abertos; o resto fecha até o user abrir.
+// Por padrão só Documento, Cabeçalho e Rodapé abertos; o resto fecha até o user abrir.
 // Estado vive em cfg.sidebarSecs (mesmo LS_KEY do save) — sobrevive a reload.
 const SIDEBAR_SEC_DEFAULTS = {
-  documento: true, capa: false, index: false, back: false, header: true,
+  documento: true, capa: false, index: false, back: false, header: true, footer: true,
 };
 function readSidebarSecs() {
   const out = {};
@@ -341,6 +407,19 @@ function load() {
     if (cfg.footText != null) state.doc.footText = cfg.footText;
     if (cfg.headText != null) state.doc.headText = cfg.headText;
     if (cfg.firstPage != null) state.doc.firstPage = +cfg.firstPage || 0;
+    // espessura: valor salvo; se a sessão LS é antiga e não tem o campo → 1px legado
+    // (não o default novo 0.5). Sessão vazia mantém seed 0.5.
+    const hadLsSession = !!(cfg.footText != null || cfg.headText != null || cfg.cover
+      || cfg.back || cfg.index || hasOwn(cfg, 'ruleTop') || hasOwn(cfg, 'ruleBot'));
+    if (hasOwn(cfg, 'ruleTop') && cfg.ruleTop != null) state.doc.ruleTop = clampRuleW(cfg.ruleTop);
+    else if (hadLsSession) state.doc.ruleTop = RULE_W_LEGACY;
+    if (hasOwn(cfg, 'ruleBot') && cfg.ruleBot != null) state.doc.ruleBot = clampRuleW(cfg.ruleBot);
+    else if (hadLsSession) state.doc.ruleBot = RULE_W_LEGACY;
+    // aligns / modo impressão: ausentes = visual antigo (esq / esq / dir / off) = seed
+    if (cfg.headAlign != null) state.doc.headAlign = clampFootAlign(cfg.headAlign);
+    if (cfg.pnumAlign != null) state.doc.pnumAlign = clampFootAlign(cfg.pnumAlign);
+    if (cfg.footAlign != null) state.doc.footAlign = clampFootAlign(cfg.footAlign);
+    if (cfg.printMirror != null) state.doc.printMirror = !!cfg.printMirror;
     if (cfg.source) {
       state.doc.source = cfg.source;
       // sessões antigas sem format: infere do nome (.zip → pdgm, senão md)
@@ -375,6 +454,11 @@ function save() { clearTimeout(saveT); saveT = setTimeout(() => {
   idb.set('doc', state.doc);
   const cfg = {
     footText: state.doc.footText, headText: state.doc.headText, firstPage: state.doc.firstPage,
+    ruleTop: ruleWidthOf('top'), ruleBot: ruleWidthOf('bot'),
+    headAlign: clampFootAlign(state.doc.headAlign || 'left'),
+    pnumAlign: clampFootAlign(state.doc.pnumAlign),
+    footAlign: clampFootAlign(state.doc.footAlign || 'right'),
+    printMirror: !!state.doc.printMirror,
     source: state.doc.source || null, cover: state.doc.cover, back: state.doc.back, index: state.doc.index,
     // seções expandíveis da sidebar (Texto/Capa/…) — UI chrome, não documento
     sidebarSecs: readSidebarSecs(),
@@ -1284,24 +1368,73 @@ function render(caret /* optional {id,offset,role} */) {
     closeResumoPanel();
   }
   updatePreviewToc();
+  layoutCoverColAdds();
   save();
   scheduleCommit();
+}
+
+// espessura das linhas de moldura (cabeçalho/rodapé) — 0.25–8 px, default 0.5
+function clampRuleW(n) {
+  const v = +n;
+  if (!Number.isFinite(v)) return RULE_W_DEFAULT;
+  const stepped = Math.round(v / RULE_W_STEP) * RULE_W_STEP;
+  return Math.min(RULE_W_MAX, Math.max(RULE_W_MIN, stepped));
+}
+function ruleWidthOf(which) {
+  const raw = which === 'bot' ? state.doc.ruleBot : state.doc.ruleTop;
+  // null só em doc a meio caminho; default novo. Zips antigos passam por normalizeOpenedDoc.
+  return raw == null ? RULE_W_DEFAULT : clampRuleW(raw);
+}
+// aplica height (+ top da linha de base, âncora na borda externa) num .rule do DOM
+function styleRuleEl(el, which) {
+  if (!el) return;
+  const h = ruleWidthOf(which);
+  el.style.height = h + 'px';
+  if (which === 'top') {
+    el.style.top = RULE_TOP_Y + 'px';
+  } else {
+    // base fixa em RULE_BOT_BOTTOM: linha mais grossa cresce pra cima (não come o rodapé)
+    el.style.top = (RULE_BOT_BOTTOM - h) + 'px';
+  }
+}
+// ao vivo nos sliders da sidebar (sem re-render)
+function paintPageRules() {
+  pagesEl.querySelectorAll('.rule.top').forEach(el => styleRuleEl(el, 'top'));
+  pagesEl.querySelectorAll('.rule.bot').forEach(el => styleRuleEl(el, 'bot'));
 }
 
 // chrome comum das páginas do miolo/índice: molduras, cabeçalho corrido e rodapé
 function pageShell(number) {
   const page = document.createElement('div');
   page.className = 'page' + (editing ? ' editing' : '');
-  page.insertAdjacentHTML('beforeend', '<div class="rule top"></div><div class="rule bot"></div>');
+  const ruleTop = document.createElement('div'); ruleTop.className = 'rule top';
+  const ruleBot = document.createElement('div'); ruleBot.className = 'rule bot';
+  styleRuleEl(ruleTop, 'top');
+  styleRuleEl(ruleBot, 'bot');
+  page.append(ruleTop, ruleBot);
   if (state.doc.headText) {
-    const h = document.createElement('div'); h.className = 'runhead'; h.textContent = state.doc.headText;
+    const hAlign = resolveFootAlign(state.doc.headAlign || 'left', number);
+    const h = document.createElement('div');
+    h.className = 'runhead align-' + hAlign;
+    h.textContent = state.doc.headText;
     page.appendChild(h);
   }
   const foot = document.createElement('div'); foot.className = 'foot';
+  // 3 zonas (left/center/right): nº e texto caem na zona resolvida (espelho se Impressão)
+  const zones = { left: [], center: [], right: [] };
   const pnum = document.createElement('span'); pnum.className = 'pnum';
   pnum.textContent = String(number).padStart(2, '0');   // 2 dígitos; 3º a partir de 100
-  const site = document.createElement('span'); site.className = 'site'; site.textContent = state.doc.footText;
-  foot.append(pnum, site);
+  zones[resolveFootAlign(state.doc.pnumAlign || 'left', number)].push(pnum);
+  if (state.doc.footText) {
+    const site = document.createElement('span'); site.className = 'site'; site.textContent = state.doc.footText;
+    zones[resolveFootAlign(state.doc.footAlign || 'right', number)].push(site);
+  }
+  for (const side of ['left', 'center', 'right']) {
+    const z = document.createElement('div');
+    z.className = 'foot-zone ' + side;
+    for (const el of zones[side]) z.appendChild(el);
+    foot.appendChild(z);
+  }
   page.appendChild(foot);
   return page;
 }
@@ -1686,8 +1819,8 @@ function renderCoverPage(kind, cov) {
   }
   const area = document.createElement('div'); area.className = 'cover-area';
   cov.items.forEach(it => area.appendChild(buildCoverItem(kind, it)));   // absolutos: coluna (x) + y livre
-  // mesmo "+" do fim da coluna do miolo — adiciona bloco de texto (sem o + Texto da sidebar)
-  if (editing) {
+  // zona "+" só na capa/contracapa VAZIA (hover full-area). Com blocos: alça Notion + sidebar.
+  if (editing && !cov.items.length) {
     const add = document.createElement('div');
     add.className = 'col-add';
     add.dataset.cover = kind;
@@ -1698,6 +1831,9 @@ function renderCoverPage(kind, cov) {
   if (cov.logo && cov.logo.on) page.appendChild(buildCoverLogo(kind, cov.logo));   // faixa fixa topo/base
   return page;
 }
+
+// no-op legado: a zona col-add da capa só existe vazia (CSS top/bottom:0); sem layout por altura.
+function layoutCoverColAdds() {}
 
 const LOGO_BASE_H = 30;   // altura-base (px) do logo em size=1; o slider (40–260%) escala em cima
 // sel do logo na capa/contracapa: state.sel = 'logo:cover' | 'logo:back' (não colide com ids de cover-item)
@@ -2408,27 +2544,46 @@ function applyCoverItemType(it, type) {
   }
 }
 
-// capa/contracapa: "+" Notion (alça ou fim da área) → bloco novo + menu de tipos
-function insertCoverWithSlash(kind, afterId) {
-  const cov = kind === 'back' ? state.doc.back : state.doc.cover;
-  if (!cov) return;
-  clearIdxFocus();
-  state.activeId = null;
-  let y = 0;
+// última capa/contracapa clicada — paleta da aba Conteúdo sabe onde inserir sem seleção
+let lastCoverKind = null;
+function coverKindOf(cov) {
+  return cov === state.doc.back ? 'back' : 'cover';
+}
+// contexto da paleta: item/logo selecionado, ou última capa focada (sem bloco do miolo ativo)
+function activeCoverKind() {
+  if (state.sel) {
+    const f = findCoverItem(state.sel);
+    if (f) return coverKindOf(f.cov);
+    const lk = logoKindOfSel(state.sel);
+    if (lk) return lk;
+  }
+  if (!state.activeId && lastCoverKind) {
+    const cov = lastCoverKind === 'back' ? state.doc.back : state.doc.cover;
+    if (cov && cov.on) return lastCoverKind;
+  }
+  return null;
+}
+// Y do próximo item livre (abaixo do afterId ou do mais baixo da capa)
+function nextCoverY(cov, afterId) {
   if (afterId) {
     const f = findCoverItem(afterId);
     const node = pagesEl.querySelector(`.cover-item[data-cid="${afterId}"]`);
     const h = node ? node.offsetHeight : 24;
-    y = Math.min((f?.item.y || 0) + h + GAP_CV, COVER_AREA_H - 30);
-  } else if (cov.items.length) {
+    return Math.min((f?.item.y || 0) + h + GAP_CV, COVER_AREA_H - 30);
+  }
+  if (cov.items.length) {
     let maxBottom = 0;
     for (const it of cov.items) {
       const n = pagesEl.querySelector(`.cover-item[data-cid="${it.id}"]`);
       maxBottom = Math.max(maxBottom, (it.y || 0) + (n ? n.offsetHeight : 24));
     }
-    y = Math.min(maxBottom + GAP_CV, COVER_AREA_H - 30);
+    return Math.min(maxBottom + GAP_CV, COVER_AREA_H - 30);
   }
-  const it = coverItem('', 18, 'full', 'left', null, y, 'p');
+  return 0;
+}
+function pushCoverItem(kind, it, afterId) {
+  const cov = kind === 'back' ? state.doc.back : state.doc.cover;
+  if (!cov) return false;
   if (afterId) {
     const f = findCoverItem(afterId);
     if (f) f.list.splice(f.idx + 1, 0, it);
@@ -2436,6 +2591,17 @@ function insertCoverWithSlash(kind, afterId) {
   } else {
     cov.items.push(it);
   }
+  lastCoverKind = kind;
+  return true;
+}
+// capa/contracapa: "+" Notion (alça ou zona vazia) → parágrafo + menu de tipos
+function insertCoverWithSlash(kind, afterId) {
+  const cov = kind === 'back' ? state.doc.back : state.doc.cover;
+  if (!cov) return;
+  clearIdxFocus();
+  state.activeId = null;
+  const it = coverItem('', 18, 'full', 'left', null, nextCoverY(cov, afterId), 'p');
+  if (!pushCoverItem(kind, it, afterId)) return;
   state.sel = it.id;
   render();
   selectCoverItem(it.id);
@@ -2448,8 +2614,22 @@ function insertCoverWithSlash(kind, afterId) {
     }
   });
 }
-function coverKindOf(cov) {
-  return cov === state.doc.back ? 'back' : 'cover';
+// paleta / inserções tipadas na capa (sem abrir o slash)
+function insertCoverTyped(kind, type, afterId) {
+  if (!kind || type === 'pagebreak') return;
+  const cov = kind === 'back' ? state.doc.back : state.doc.cover;
+  if (!cov) return;
+  clearIdxFocus();
+  state.activeId = null;
+  const it = coverItem('', COVER_TYPE_SIZE[type] ?? 18, 'full', 'left', null, nextCoverY(cov, afterId), 'p');
+  if (!pushCoverItem(kind, it, afterId)) return;
+  state.sel = it.id;
+  // image: apply abre o picker sem render — precisa pintar o item novo antes
+  if (type === 'image') {
+    render();
+    selectCoverItem(it.id);
+  }
+  applyCoverItemType(it, type);
 }
 function duplicateCoverItem(id) {
   const f = findCoverItem(id); if (!f) return;
@@ -2495,6 +2675,7 @@ pagesEl.addEventListener('focusin', (e) => {
   if (!b) return;
   clearIdxFocus();
   state.activeId = b.id; syncTypeUI(b.type);
+  lastCoverKind = null;                    // miolo em foco → paleta não manda pra capa
   setSegment('conteudo');                  // clicar num bloco → aba Conteúdo
   // limpa seleção de imagem/divisor/quebra — o foco de texto é o estado ativo agora
   if (state.sel) {
@@ -2531,6 +2712,7 @@ function setImgSel(id) {
   clearIdxFocus();
   // bloco estrutural vira o "foco" do documento (borda roxa + alça + sidebar)
   state.activeId = id;
+  lastCoverKind = null;   // miolo ativo → paleta deixa de mirar capa/contracapa
   paintActiveBlock(id);
   showHandleAtFocused();
   syncTypeUI(b.type);
@@ -2561,6 +2743,10 @@ function setImgSel(id) {
 // clicar numa figura/divisor/item de capa / logo / seção Índice|Resumo / callout seleciona
 pagesEl.addEventListener('mousedown', (e) => {
   if (e.target.closest && e.target.closest('.rimg')) return;   // o pointerdown do drag cuida
+  // rastreia capa/contracapa vs miolo pra paleta da aba Conteúdo
+  const coverPage = e.target.closest && e.target.closest('.page[data-cover]');
+  if (coverPage) lastCoverKind = coverPage.dataset.cover;
+  else if (e.target.closest && e.target.closest('.page')) lastCoverKind = null;
   const idxSec = e.target.closest && e.target.closest('.idx-section');
   const coverLogo = e.target.closest && e.target.closest('.cover-logo-hit');
   const coverIt = e.target.closest && e.target.closest('.cover-item');
@@ -2812,6 +2998,7 @@ function selectBlockFromHandle(id) {
   const b = blockOf(id); if (!b) return;
   clearIdxFocus();
   state.activeId = id;
+  lastCoverKind = null;
   if (b.type === 'image' || b.type === 'divider' || b.type === 'pagebreak') {
     setImgSel(id);
   } else {
@@ -2890,6 +3077,7 @@ function coverPushPull(cov, item, deltaH) {
     const node = pagesEl.querySelector(`.cover-item[data-cid="${other.id}"]`);
     if (node) node.style.top = other.y + 'px';
   }
+  layoutCoverColAdds();
 }
 // bloco que a alça ancora quando nada está sob o mouse: o que está EM FOCO
 function focusedHandleTarget() {
@@ -3084,6 +3272,7 @@ document.addEventListener('pointermove', (e) => {
     }
     cdrag.item.y = Math.round(y);
     if (node) node.style.top = cdrag.item.y + 'px';
+    layoutCoverColAdds();
     return;
   }
   if (!bdrag) return;
@@ -3550,6 +3739,7 @@ pagesEl.addEventListener('input', (e) => {
         ? host
         : (coverEl.matches('[contenteditable=true]') ? coverEl : host);
       f.item.html = txt.innerHTML;
+      layoutCoverColAdds();   // altura do texto pode ter mudado → realinha a zona do "+"
       save(); scheduleCommit();
     }
     return;
@@ -3568,8 +3758,13 @@ function selectCoverItem(cid) {
   const el = pagesEl.querySelector(`.cover-item[data-cid="${cid}"]`);
   if (el) el.classList.add('cover-sel');
   openCoverPanel();
+  const f = findCoverItem(cid);
+  if (f) {
+    lastCoverKind = coverKindOf(f.cov);
+    syncTypeUI(coverTypeOf(f.item));   // paleta da aba Conteúdo reflete o tipo do item
+  }
   // tabela na capa: reusa o painel de tabela do miolo
-  if (findCoverItem(cid)?.item?.type === 'table') {
+  if (f?.item?.type === 'table') {
     tablePanelDismissed = false;
     updateTableBar();
   }
@@ -3584,6 +3779,7 @@ function selectCoverLogo(kind) {
   clearIdxFocus();
   state.sel = logoSelOf(kind);
   state.activeId = null;
+  lastCoverKind = kind;
   pagesEl.querySelectorAll('.imgsel,.divsel,.pbsel,.cover-sel,.active-block').forEach(el => {
     el.classList.remove('imgsel', 'divsel', 'pbsel', 'cover-sel', 'active-block');
   });
@@ -4141,6 +4337,17 @@ let pendingImgPlacement = null;
 // id do bloco que o painel pediu pra SUBSTITUIR (null = fluxo normal de inserir)
 let replaceImageId = null;
 function addImageViaPalette() {
+  const coverKind = activeCoverKind();
+  if (coverKind) {
+    const f = state.sel && findCoverItem(state.sel);
+    // item de imagem já selecionado → substitui; senão insere novo na capa
+    if (f && coverTypeOf(f.item) === 'image') {
+      applyCoverItemType(f.item, 'image');
+      return;
+    }
+    insertCoverTyped(coverKind, 'image', f ? f.item.id : null);
+    return;
+  }
   pendingImgPlacement = 'inline';
   replaceImageId = null;
   pendingCoverImageId = null;   // não roubar o picker da capa
@@ -4418,12 +4625,35 @@ function migrateSpecialPages(doc) {
 }
 
 // Preenche defaults de campos NOVOS em docs antigos (zip/json salvos antes de
-// reviewed[], levels, resumoOn, blockStyles…). Object.assign(seed, doc) é shallow:
-// doc.index inteiro substitui o seed — campos que o seed tinha e o arquivo não
-// somem sem esta normalização.
-function normalizeOpenedDoc(doc) {
+// reviewed[], levels, resumoOn, blockStyles, ruleTop/headAlign…). Object.assign(seed, doc)
+// é shallow: doc.index inteiro substitui o seed — campos que o seed tinha e o arquivo
+// não somem sem esta normalização.
+//
+// `raw` = objeto vindo do arquivo (antes do merge com seed). Necessário porque o seed
+// injeta RULE_W_DEFAULT (0.5) em ruleTop/ruleBot ausentes; zips antigos sem o campo
+// devem reabrir com RULE_W_LEGACY (1px), que era o visual fixo pré-slider.
+function normalizeOpenedDoc(doc, raw = null) {
   if (!Array.isArray(doc.reviewed)) doc.reviewed = [];
   if (!doc.blockStyles || typeof doc.blockStyles !== 'object') doc.blockStyles = {};
+
+  // espessura cabeçalho/rodapé
+  if (raw) {
+    if (!hasOwn(raw, 'ruleTop') || raw.ruleTop == null) doc.ruleTop = RULE_W_LEGACY;
+    else doc.ruleTop = clampRuleW(raw.ruleTop);
+    if (!hasOwn(raw, 'ruleBot') || raw.ruleBot == null) doc.ruleBot = RULE_W_LEGACY;
+    else doc.ruleBot = clampRuleW(raw.ruleBot);
+  } else {
+    if (doc.ruleTop != null) doc.ruleTop = clampRuleW(doc.ruleTop);
+    if (doc.ruleBot != null) doc.ruleBot = clampRuleW(doc.ruleBot);
+  }
+
+  // posição do chrome: ausentes = layout histórico (cabeçalho esq, nº esq, site dir)
+  doc.headAlign = clampFootAlign((raw && hasOwn(raw, 'headAlign') ? raw.headAlign : doc.headAlign) || 'left');
+  doc.pnumAlign = clampFootAlign((raw && hasOwn(raw, 'pnumAlign') ? raw.pnumAlign : doc.pnumAlign) || 'left');
+  doc.footAlign = clampFootAlign((raw && hasOwn(raw, 'footAlign') ? raw.footAlign : doc.footAlign) || 'right');
+  if (raw && !hasOwn(raw, 'printMirror')) doc.printMirror = false;
+  else doc.printMirror = !!doc.printMirror;
+
   if (doc.index) {
     if (doc.index.resumoOn === undefined) doc.index.resumoOn = true;
     if (!doc.index.levels) doc.index.levels = { h1: true, h2: true, h3: false, h4: false };
@@ -4476,11 +4706,15 @@ function applyDocFile(doc, opts = {}) {
 // mesma troca de documento SEM mexer na origem vinculada — usada pela restauração de
 // sessão no boot, que não pode derrubar o fileHandle de um .md linkado.
 function applyDoc(doc) {
-  state.doc = Object.assign(seedDoc(), doc);
-  normalizeOpenedDoc(state.doc);
+  const raw = (doc && typeof doc === 'object') ? doc : {};
+  state.doc = Object.assign(seedDoc(), raw);
+  // raw (arquivo) antes do seed: migra ruleTop/ruleBot ausentes → 1px legado, não 0.5
+  normalizeOpenedDoc(state.doc, raw);
   document.getElementById('footText').value = state.doc.footText;
   document.getElementById('headText').value = state.doc.headText || '';
   document.getElementById('firstPage').value = state.doc.firstPage;
+  syncRuleUI();
+  syncFootChromeUI();
   // troca de documento: aplica estado da sidebar sem animar cada switch
   const wasReady = sidebarRevealReady;
   sidebarRevealReady = false;
@@ -5608,7 +5842,30 @@ function setBlockPlacement(id, v) {
   render(keep && keep.id === id ? keep : { id, role: 'block', offset: 0 });
   syncColUI();
 }
+// tipos de capa que a paleta converte in-place (preserva html), espelhando TEXT_TYPES do miolo
+const COVER_EDIT_TYPES = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'quote', 'li', 'ol', 'check', 'callout']);
 function setActiveType(t) {
+  // capa/contracapa: paleta da aba Conteúdo age no item selecionado ou insere na capa focada
+  const coverKind = activeCoverKind();
+  if (coverKind) {
+    if (t === 'pagebreak') return;   // não existe na capa
+    const f = state.sel && findCoverItem(state.sel);
+    if (f && COVER_EDIT_TYPES.has(coverTypeOf(f.item)) && COVER_EDIT_TYPES.has(t)) {
+      const it = f.item;
+      it.type = t;
+      if (t === 'callout') ensureCalloutDefaults(it);
+      if (t === 'check' && it.checked == null) it.checked = false;
+      if (COVER_TYPE_SIZE[t] != null) it.size = COVER_TYPE_SIZE[t];
+      state.activeId = null;
+      render();
+      selectCoverItem(it.id);
+      syncTypeUI(t);
+      return;
+    }
+    // item estrutural selecionado, logo, ou capa vazia → insere depois (ou no fim)
+    insertCoverTyped(coverKind, t, f ? f.item.id : null);
+    return;
+  }
   const id = state.activeId;
   const b = id && blockOf(id);
   if (b && TEXT_TYPES.has(b.type)) {
@@ -5622,6 +5879,13 @@ function setActiveType(t) {
   else { const nb = mkBlock(t, ''); state.doc.blocks.push(nb); state.activeId = nb.id; render({ id: nb.id, role: 'block', offset: 0 }); syncTypeUI(t); }
 }
 function insertSeparatorButton(sepType) {
+  const coverKind = activeCoverKind();
+  if (coverKind) {
+    if (sepType === 'pagebreak') return;
+    const f = state.sel && findCoverItem(state.sel);
+    insertCoverTyped(coverKind, sepType, f ? f.item.id : null);
+    return;
+  }
   const id = state.activeId, host = id && pagesEl.querySelector(`[data-id="${id}"][contenteditable]`);
   const b = id && blockOf(id);
   if (host && b) breakAtCaret(host, b, sepType);
@@ -5632,6 +5896,12 @@ function insertSeparatorButton(sepType) {
 // um bloco novo LOGO DEPOIS dele (ou no fim, se não houver bloco ativo) e foca nele. `mkBlock`
 // com html vazio basta pra tabela — buildTableEl semeia b.rows sozinha no primeiro render.
 function insertBlockAfter(t) {
+  const coverKind = activeCoverKind();
+  if (coverKind) {
+    const f = state.sel && findCoverItem(state.sel);
+    insertCoverTyped(coverKind, t, f ? f.item.id : null);
+    return;
+  }
   const nb = mkBlock(t, '');
   const i = state.activeId ? idxOf(state.activeId) : -1;
   if (i >= 0) state.doc.blocks.splice(i + 1, 0, nb);
@@ -5705,6 +5975,8 @@ document.getElementById('btnNew').addEventListener('click', () => {
   document.getElementById('footText').value = state.doc.footText;
   document.getElementById('headText').value = state.doc.headText || '';
   document.getElementById('firstPage').value = state.doc.firstPage;
+  syncRuleUI();
+  syncFootChromeUI();
   syncSpecialUI();
   setBlocks(state.doc.blocks);
   updateSaveSourceBtn();
@@ -5712,6 +5984,76 @@ document.getElementById('btnNew').addEventListener('click', () => {
 document.getElementById('footText').addEventListener('input', (e) => { state.doc.footText = e.target.value; render(); });
 document.getElementById('headText').addEventListener('input', (e) => { state.doc.headText = e.target.value; render(); });
 document.getElementById('firstPage').addEventListener('input', (e) => { state.doc.firstPage = +e.target.value || 0; render(); });
+
+// espessura das linhas de moldura (cabeçalho / rodapé) — ao vivo, sem re-render
+function syncRuleUI() {
+  const t = ruleWidthOf('top'), b = ruleWidthOf('bot');
+  const rt = document.getElementById('ruleTop'), rb = document.getElementById('ruleBot');
+  const rtv = document.getElementById('ruleTopv'), rbv = document.getElementById('ruleBotv');
+  if (rt) rt.value = String(t);
+  if (rb) rb.value = String(b);
+  if (rtv) rtv.textContent = formatRulePx(t);
+  if (rbv) rbv.textContent = formatRulePx(b);
+}
+function bindRuleSlider(which) {
+  const id = which === 'bot' ? 'ruleBot' : 'ruleTop';
+  const vid = which === 'bot' ? 'ruleBotv' : 'ruleTopv';
+  const rid = which === 'bot' ? 'ruleBotReset' : 'ruleTopReset';
+  const field = which === 'bot' ? 'ruleBot' : 'ruleTop';
+  const range = document.getElementById(id);
+  const disp = document.getElementById(vid);
+  const reset = document.getElementById(rid);
+  if (range) range.addEventListener('input', () => {
+    const n = clampRuleW(range.value);
+    // sempre persiste (não apaga no default): ausência no .zip = legado 1px, não 0.5
+    state.doc[field] = n;
+    if (disp) disp.textContent = formatRulePx(n);
+    paintPageRules();
+    save(); scheduleCommit();
+  });
+  if (reset) {
+    reset.addEventListener('mousedown', (e) => e.preventDefault());
+    reset.addEventListener('click', () => {
+      state.doc[field] = RULE_W_DEFAULT;
+      if (range) range.value = String(RULE_W_DEFAULT);
+      if (disp) disp.textContent = formatRulePx(RULE_W_DEFAULT);
+      paintPageRules();
+      save(); scheduleCommit();
+    });
+  }
+}
+bindRuleSlider('top');
+bindRuleSlider('bot');
+
+// alinhamento do cabeçalho/nº/texto do rodapé + switcher Modo Impressão
+function syncFootChromeUI() {
+  const headSlot = document.querySelector('[data-slot="headalign"]');
+  if (headSlot) headSlot.replaceChildren(widthSeg(clampFootAlign(state.doc.headAlign || 'left'), [
+    { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+    { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+    { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+  ], (v) => { state.doc.headAlign = v; syncFootChromeUI(); render(); }));
+  const pnumSlot = document.querySelector('[data-slot="pnumalign"]');
+  if (pnumSlot) pnumSlot.replaceChildren(widthSeg(clampFootAlign(state.doc.pnumAlign || 'left'), [
+    { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+    { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+    { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+  ], (v) => { state.doc.pnumAlign = v; syncFootChromeUI(); render(); }));
+  const footSlot = document.querySelector('[data-slot="footalign"]');
+  if (footSlot) footSlot.replaceChildren(widthSeg(clampFootAlign(state.doc.footAlign || 'right'), [
+    { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+    { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+    { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+  ], (v) => { state.doc.footAlign = v; syncFootChromeUI(); render(); }));
+  const pm = document.getElementById('printMirror');
+  if (pm) pm.setAttribute('aria-checked', String(!!state.doc.printMirror));
+}
+document.getElementById('printMirror')?.addEventListener('click', () => {
+  state.doc.printMirror = !state.doc.printMirror;
+  const pm = document.getElementById('printMirror');
+  if (pm) pm.setAttribute('aria-checked', String(!!state.doc.printMirror));
+  render();
+});
 
 // ── páginas especiais: switches + controles de capa/contracapa ──
 const specialObj = (key) => key === 'cover' ? state.doc.cover : key === 'back' ? state.doc.back : state.doc.index;
@@ -6023,6 +6365,7 @@ function applyCoverLogoLive(kind) {
   svg.setAttribute('height', +h.toFixed(1)); svg.setAttribute('width', +(h * (L.w / L.h)).toFixed(1));
 }
 // aplica posição + escala no .cover-bg (render e sliders ao vivo). Ver renderCoverPage.
+// Scale = valor do usuário. Sangria de 1px fica no CSS (.cover-bg), não no scale.
 function applyCoverBgStyles(bg, cov) {
   const x = cov.bgX ?? 50, y = cov.bgY ?? 50;
   const s = (cov.bgScale ?? 100) / 100;
@@ -6066,7 +6409,66 @@ document.querySelectorAll('select[data-idxopt]').forEach(s => s.addEventListener
 }));
 // t2.10: tooltip nativo (title=) no ícone "ⓘ" ao lado de "Índice + Resumo" — preventDefault
 // no click evita que a ativação do botão borbulhe pro <summary> e togglar o <details> junto.
-document.querySelector('.infoicon')?.addEventListener('click', (e) => e.preventDefault());
+// ⓘ em summary ou ao lado de switchers: não toggle details; tooltip fixed no body
+// (sidebar overflow:hidden/auto corta ::after absoluto — ver .info-tip-float).
+document.querySelectorAll('.infoicon').forEach(el => el.addEventListener('click', (e) => e.preventDefault()));
+(function bindInfoTips() {
+  let tip = null, active = null, hideT = 0;
+  const ensure = () => {
+    if (tip) return tip;
+    tip = document.createElement('div');
+    tip.className = 'info-tip-float';
+    tip.setAttribute('role', 'tooltip');
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    return tip;
+  };
+  const place = (btn) => {
+    const el = ensure();
+    const text = btn.getAttribute('data-tip') || '';
+    if (!text) { hide(); return; }
+    el.textContent = text;
+    el.hidden = false;
+    el.style.left = '0';
+    el.style.top = '0';
+    // medir depois de no DOM (width fixa via CSS max)
+    const br = btn.getBoundingClientRect();
+    const tw = el.offsetWidth;
+    const th = el.offsetHeight;
+    const gap = 6;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // prefere abaixo do ⓘ; se não cabe, acima
+    let top = br.bottom + gap;
+    if (top + th > vh - 8 && br.top - gap - th >= 8) top = br.top - gap - th;
+    // alinha à esquerda do botão; gruda na viewport se estourar
+    let left = br.left;
+    if (left + tw > vw - 8) left = Math.max(8, vw - 8 - tw);
+    if (left < 8) left = 8;
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    el.classList.add('is-on');
+    active = btn;
+  };
+  const hide = () => {
+    if (!tip) return;
+    tip.classList.remove('is-on');
+    tip.hidden = true;
+    active = null;
+  };
+  const scheduleHide = () => {
+    clearTimeout(hideT);
+    hideT = setTimeout(hide, 80);
+  };
+  document.querySelectorAll('.infoicon[data-tip]').forEach((btn) => {
+    btn.addEventListener('mouseenter', () => { clearTimeout(hideT); place(btn); });
+    btn.addEventListener('mouseleave', scheduleHide);
+    btn.addEventListener('focus', () => { clearTimeout(hideT); place(btn); });
+    btn.addEventListener('blur', scheduleHide);
+  });
+  window.addEventListener('scroll', () => { if (active) hide(); }, true);
+  window.addEventListener('resize', () => { if (active) hide(); });
+})();
 
 // ── expand/collapse animado dos <details> da sidebar + restore do estado ──
 // Intercepta o click no <summary> (preventDefault do toggle nativo) e anima a
@@ -6189,10 +6591,13 @@ function initSidebarDetails() {
 
   document.querySelectorAll('aside details[data-sec]').forEach(det => {
     const id = det.dataset.sec;
-    // migração: chave antiga "texto" → "documento"
+    // migração: chave antiga "texto" → "documento";
+    // "header" antigo era "Cabeçalho & rodapé" — se só ela existia, abre as duas novas
     let open;
     if (saved && Object.prototype.hasOwnProperty.call(saved, id)) open = !!saved[id];
     else if (id === 'documento' && saved && Object.prototype.hasOwnProperty.call(saved, 'texto')) open = !!saved.texto;
+    else if ((id === 'header' || id === 'footer') && saved && Object.prototype.hasOwnProperty.call(saved, 'header')
+      && !Object.prototype.hasOwnProperty.call(saved, 'footer')) open = !!saved.header;
     else open = !!SIDEBAR_SEC_DEFAULTS[id];
     det.open = open;
     det.classList.toggle('is-open', open);
@@ -6426,31 +6831,83 @@ function printFrame() {
 // usuário é vetorial, respeita @page/color-adjust, e funciona em qualquer host
 // estático (GitHub Pages não tem server). Popup foi descartado: bloqueador de
 // pop-up é permissão extra; iframe não depende de nada além do DOM local.
-async function printPdf() {
-  const btn = document.getElementById('btnPrint');
-  const label = btn.textContent; btn.disabled = true; btn.textContent = 'Gerando PDF…';
+// bodyHtml = markup das #pages (exportPagesHtml ou versão free-locked).
+//
+// Caminho preferido: POST /api/pdf (Chrome headless → Skia/PDF com /Link annotations).
+// window.print() no WebKit/Code Helper usa Quartz PDFContext e DESCARTA todos os
+// <a href> (PDF sem /Annots — o botão “Tornar-se Pro” vira texto morto). Relatórios
+// gerados no Chrome (Producer Skia) mantêm dezenas de URIs; os do Code Helper, zero.
+// Largura travada + spinner no lugar do texto (sem “Gerando PDF…” que estica o botão).
+function setBtnLoading(btn, on) {
+  if (!btn) return;
+  if (on) {
+    if (btn.dataset.loading === '1') return;
+    btn.dataset.loading = '1';
+    btn.dataset.prevHtml = btn.innerHTML;
+    // trava a largura atual antes de trocar o conteúdo (spinner é mais estreito)
+    btn.style.minWidth = Math.ceil(btn.getBoundingClientRect().width) + 'px';
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.classList.add('is-loading');
+    btn.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span>';
+  } else {
+    if (btn.dataset.loading !== '1') return;
+    btn.innerHTML = btn.dataset.prevHtml || 'Baixar';
+    btn.disabled = false;
+    btn.removeAttribute('aria-busy');
+    btn.classList.remove('is-loading');
+    btn.style.minWidth = '';
+    delete btn.dataset.loading;
+    delete btn.dataset.prevHtml;
+  }
+}
+async function printHtml(bodyHtml, { titleSuffix = '', busyBtn = null } = {}) {
+  // busyBtn explícito (modal PDF Gratuito) ou o Baixar do header
+  const busy = busyBtn || document.getElementById('btnPrint');
+  setBtnLoading(busy, true);
   try {
     const [css, fontFace] = await Promise.all([fetch('paradigma.css').then(r => r.text()), plexFontFace()]);
     const diagStyle = [...document.querySelectorAll('head style')].map(s => s.textContent).join('\n');
-    const fname = (state.doc.source?.label || 'relatorio').replace(/\.[^.]+$/, '');
+    const base = (state.doc.source?.label || 'relatorio').replace(/\.[^.]+$/, '');
+    const fname = base + (titleSuffix || '');
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <title>${escapeHtml(fname)}</title>
 <style>${fontFace}</style><style>${css}</style><style>${diagStyle}</style>
 <style>
   /* A4 real: as páginas são desenhadas em 595×842 "px" que representam pt (A4) →
      zoom 96/72 escala o design pra preencher a folha A4 exata, vetorial. */
-  @page { size: A4; margin: 0; }
+  /* size em pt = design 595×842 (1 design-px = 1pt). Evita o mismatch A4 real
+     (595.28×841.89pt) × zoom 1.333… que deixava ~0.4px de body branco na direita. */
+  @page { size: 595pt 842pt; margin: 0; }
   html, body { margin: 0; padding: 0; background: #fff; }
   header, aside, .stage { display: none !important; }
   #pages { display: block; transform: none !important; margin: 0 !important; }
-  .page { box-shadow: none !important; margin: 0 !important; zoom: 1.3333333; break-after: page; }
+  /* 96/72 = 4/3: design-pt → CSS px do print (página = 595pt×842pt). */
+  .page { box-shadow: none !important; margin: 0 !important; zoom: 1.3333333333333333; break-after: page; }
   .page:last-child { break-after: auto; }
+  /* capa: sangria fixa de 1px em cada margem (só isso). */
+  .page.cover-page { overflow: hidden !important; }
+  .page.cover-page .cover-bg {
+    position: absolute !important;
+    top: -1px !important;
+    left: -1px !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: calc(100% + 2px) !important;
+    height: calc(100% + 2px) !important;
+    background-size: cover !important;
+    background-repeat: no-repeat !important;
+  }
   /* o print do navegador some com fundo/cor por padrão (só sai marcando "gráficos
      de fundo" na caixa do usuário) — força sempre, cobre capa/contracapa (imagem
      de fundo), checklist/callout (preenchimento) e cor de texto/highlight */
   html, body, .page, .page * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-</style></head><body>${exportPagesHtml()}</body></html>`;
+</style></head><body>${bodyHtml}</body></html>`;
 
+    // 1) Chrome headless via server (links reais no PDF)
+    if (await tryDownloadPdfViaApi(html, fname + '.pdf')) return;
+
+    // 2) fallback: print nativo (Quartz/WebKit = sem annotations de link)
     const frame = printFrame();
     await new Promise((resolve) => { frame.onload = resolve; frame.srcdoc = html; });
     const w = frame.contentWindow, d = frame.contentDocument;
@@ -6466,8 +6923,787 @@ async function printPdf() {
   } catch (e) { alert('Falha ao gerar PDF: ' + (e.message || e)); }
   // sem callback confiável de "print terminou" (o diálogo do SO não devolve promise) →
   // reabilita o botão logo após chamar print(), não espera o usuário fechar o diálogo
-  finally { btn.disabled = false; btn.textContent = label; }
+  finally {
+    setBtnLoading(busy, false);
+  }
 }
+// POST /api/pdf → blob .pdf (Chrome --print-to-pdf). false se server/Chrome offline.
+async function tryDownloadPdfViaApi(html, downloadName) {
+  try {
+    const r = await fetch('/api/pdf', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ html }),
+    });
+    if (!r.ok) return false;
+    const blob = await r.blob();
+    if (!blob || blob.size < 64) return false;
+    const head = await blob.slice(0, 5).text();
+    if (head !== '%PDF-') return false;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = downloadName || 'relatorio.pdf';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function printPdf() {
+  return printHtml(exportPagesHtml());
+}
+
+// ── PDF Gratuito (teaser Pro): skeleton 1:1 (texto + mídia) + overlay ──
+// Texto/título/legenda → barras cinza. Imagem/gráfico → bloco cinza do mesmo tamanho.
+// filter:blur só no skeleton sólido (CSS) — barato no print, sem raster de foto.
+// Hosts de texto. NÃO usar só querySelectorAll no root: no modo título o
+// free-lock-body É o h1/p/fig e querySelectorAll não casa o próprio elemento.
+const FREE_SKEL_SEL = [
+  'h1.b', 'h2.b', 'h3.b', 'h4.b',
+  '.b.h1', '.b.h2', '.b.h3', '.b.h4',
+  '.b.p', 'p.b',
+  '.b.li', '.b.ol', '.b.quote', 'blockquote.b',
+  '.ck-txt', '.co-txt',
+  '.figtitle', 'figcaption',
+  '.idx-resumo', '.idx-title',
+  '.toc-txt', '.toc-num', '.toc-pg', '.toc-empty',
+  '.cover-item',
+  'td', 'th',
+].join(',');
+function freeSkelIsTextHost(el) {
+  if (!el || el.nodeType !== 1 || el.classList.contains('free-skel')) return false;
+  if (el.matches?.('img, svg, canvas, video, .free-skel-line, .free-skel-media, .rimg, .divider, .e-pbreak')) return false;
+  // envelopes: texto nos filhos (.figtitle / figcaption / .ck-txt …)
+  if (el.classList.contains('check') || el.classList.contains('callout')) return false;
+  if (el.classList.contains('fig') || el.classList.contains('tbl-wrap') || el.classList.contains('frag')) return false;
+  // título/legenda de figura (não têm .b)
+  if (el.classList.contains('figtitle') || el.tagName === 'FIGCAPTION') return true;
+  // qualquer .b de texto (h1–h4, p, li, ol, quote) — NÃO .fig.b (já filtrado acima)
+  if (el.classList.contains('b')) return true;
+  if (el.matches?.(FREE_SKEL_SEL)) return true;
+  if (/^H[1-4]$/.test(el.tagName)) return true;
+  return false;
+}
+// agrupa rects da mesma linha (getClientRects parte por span inline)
+function freeSkelMergeLineRects(rects) {
+  const rows = new Map();
+  for (const r of rects) {
+    const key = Math.round(r.top);
+    const cur = rows.get(key);
+    if (!cur) {
+      rows.set(key, { left: r.left, top: r.top, right: r.left + r.width, height: r.height });
+    } else {
+      cur.left = Math.min(cur.left, r.left);
+      cur.right = Math.max(cur.right, r.left + r.width);
+      cur.height = Math.max(cur.height, r.height);
+      cur.top = Math.min(cur.top, r.top);
+    }
+  }
+  return [...rows.values()]
+    .map(r => ({ left: r.left, top: r.top, width: r.right - r.left, height: r.height }))
+    .sort((a, b) => a.top - b.top || a.left - b.left);
+}
+// Substitui o texto do host por skeleton 1:1 (N barras = N linhas, larguras reais).
+function freeSkelHost(el) {
+  if (!el || el.classList.contains('free-skel')) return;
+  if (el.matches?.('img, svg, canvas, video')) return;
+  // envelope com mídia embutida: skeleton só nos filhos de texto (não no box inteiro)
+  if (el.querySelector?.('img, svg, canvas, .fig, video')) {
+    for (const k of el.querySelectorAll('*')) {
+      if (freeSkelIsTextHost(k) && !k.querySelector('img, svg, canvas')) freeSkelHost(k);
+    }
+    return;
+  }
+  const hostRect = el.getBoundingClientRect();
+  // offscreen ainda tem layout; se altura 0, tenta fallback por line-height do tipo
+  const cs = getComputedStyle(el);
+  const fs = parseFloat(cs.fontSize) || 10;
+  const lh = parseFloat(cs.lineHeight) || (fs * 1.3);
+
+  let rects = [];
+  try {
+    const doc = el.ownerDocument || document;
+    const range = doc.createRange();
+    range.selectNodeContents(el);
+    rects = [...range.getClientRects()].filter(r => r.width >= 1 && r.height >= 1);
+  } catch { /* fallback */ }
+  rects = freeSkelMergeLineRects(rects);
+
+  // fallback: N linhas pelo box do bloco (títulos altos usam lh do h1/h2)
+  if (!rects.length) {
+    const boxH = Math.max(hostRect.height, el.offsetHeight, lh);
+    const boxW = Math.max(hostRect.width, el.offsetWidth, el.clientWidth, 40);
+    const lines = Math.max(1, Math.round(boxH / lh) || 1);
+    const padL = parseFloat(cs.paddingLeft) || 0;
+    const padT = parseFloat(cs.paddingTop) || 0;
+    const baseLeft = (hostRect.width >= 1 ? hostRect.left : 0) + padL;
+    const baseTop = (hostRect.height >= 1 ? hostRect.top : 0) + padT;
+    const innerW = Math.max(12, (el.clientWidth || boxW) - padL);
+    for (let i = 0; i < lines; i++) {
+      const last = i === lines - 1 && lines > 1;
+      rects.push({
+        left: baseLeft,
+        top: baseTop + i * lh,
+        width: Math.max(16, innerW * (last ? 0.55 : 0.96)),
+        height: lh,
+      });
+    }
+  }
+
+  const fixedH = Math.max(el.offsetHeight, hostRect.height, lh);
+  const fixedW = Math.max(el.offsetWidth, hostRect.width, 0);
+  const originLeft = hostRect.width >= 1 ? hostRect.left : 0;
+  const originTop = hostRect.height >= 1 ? hostRect.top : 0;
+
+  el.classList.add('free-skel');
+  el.removeAttribute('contenteditable');
+  el.innerHTML = '';
+  el.style.position = 'relative';
+  el.style.height = fixedH + 'px';
+  el.style.minHeight = fixedH + 'px';
+  if (fixedW) el.style.width = fixedW + 'px';
+  el.style.overflow = 'hidden';
+  el.style.color = 'transparent';
+
+  for (const r of rects) {
+    const bar = document.createElement('span');
+    bar.className = 'free-skel-line';
+    bar.setAttribute('aria-hidden', 'true');
+    // títulos: barra um pouco mais grossa; corpo: ~58% da linha
+    const isHead = /^H[1-4]$/.test(el.tagName) || /\bh[1-4]\b/.test(el.className);
+    const ratio = isHead ? 0.72 : 0.58;
+    const barH = Math.max(isHead ? 6 : 3, Math.min(r.height * ratio, r.height - 1));
+    const yOff = (r.height - barH) / 2;
+    bar.style.left = Math.max(0, r.left - originLeft) + 'px';
+    bar.style.top = Math.max(0, r.top - originTop + yOff) + 'px';
+    bar.style.width = Math.max(isHead ? 24 : 8, r.width) + 'px';
+    bar.style.height = barH + 'px';
+    el.appendChild(bar);
+  }
+}
+// Troca todo texto bloqueado por skeleton — inclui root (h1/p) e figtitle/figcaption.
+function skeletonizeTextIn(root) {
+  if (!root) return;
+  const all = [];
+  if (freeSkelIsTextHost(root)) all.push(root);
+  try {
+    for (const el of root.querySelectorAll(FREE_SKEL_SEL)) {
+      if (freeSkelIsTextHost(el)) all.push(el);
+    }
+  } catch { /* ignore */ }
+  // varredura extra: título/legenda de figura e qualquer .b de texto
+  for (const el of root.querySelectorAll('.b, .ck-txt, .co-txt, .figtitle, figcaption, .cover-item, td, th, h1, h2, h3, h4')) {
+    if (freeSkelIsTextHost(el) && !all.includes(el)) all.push(el);
+  }
+  // se o root é .fig / .rimg, garante figtitle + figcaption (às vezes sem .b)
+  if (root.matches?.('figure.fig, .fig, .rimg') || root.classList?.contains('fig') || root.classList?.contains('rimg')) {
+    for (const el of root.querySelectorAll('.figtitle, figcaption')) {
+      if (!all.includes(el)) all.push(el);
+    }
+  }
+  const hosts = all.filter(el => !all.some(o => o !== el && el.contains(o)));
+  for (const el of hosts) freeSkelHost(el);
+}
+// Substitui img/svg por bloco cinza 1:1 (skeleton de mídia — sem JPEG, PDF leve).
+function freeSkelMediaEl(el) {
+  if (!el || el.classList?.contains('free-skel-media')) return;
+  const r = el.getBoundingClientRect();
+  const w = Math.max(8, el.offsetWidth || r.width || +el.getAttribute('width') || 120);
+  const h = Math.max(8, el.offsetHeight || r.height || +el.getAttribute('height') || 80);
+  const sk = document.createElement('div');
+  sk.className = 'free-skel-media';
+  sk.setAttribute('aria-hidden', 'true');
+  sk.style.width = w + 'px';
+  sk.style.height = h + 'px';
+  sk.style.maxWidth = '100%';
+  const br = (el.style && el.style.borderRadius) || getComputedStyle(el).borderRadius || '4px';
+  if (br && br !== '0px') sk.style.borderRadius = br;
+  el.replaceWith(sk);
+}
+function skeletonizeMediaIn(root) {
+  if (!root) return;
+  // imgs (foto, gráfico/timeline exportado como data:svg+xml em <img>)
+  for (const img of [...root.querySelectorAll('img')]) freeSkelMediaEl(img);
+  // SVG inline residual
+  for (const svg of [...root.querySelectorAll('svg')]) {
+    const r = svg.getBoundingClientRect();
+    const w = r.width || +svg.getAttribute('width') || 0;
+    const h = r.height || +svg.getAttribute('height') || 0;
+    if (w > 0 && h > 0 && w < 28 && h < 28) {
+      svg.style.opacity = '0.2';
+      continue; // ícone miúdo
+    }
+    freeSkelMediaEl(svg);
+  }
+  // fundo de capa SÓ se a capa estiver bloqueada.
+  // Nunca esqueleta capa livre — apagava a arte e a página saía branca no PDF.
+  for (const bg of root.querySelectorAll('.cover-bg')) {
+    if (!bg.closest('.free-lock-body, .free-locked')) continue;
+    bg.style.backgroundImage = 'none';
+    bg.style.backgroundColor = '#E8E8EC';
+    bg.style.opacity = '0.42';
+    bg.classList.add('free-skel-media');
+  }
+}
+// Pipeline completo de teaser num envelope bloqueado
+function freeLockSkeletonize(root) {
+  skeletonizeTextIn(root);
+  skeletonizeMediaIn(root);
+}
+function freePdfNormalizeUrl(raw) {
+  const s = (raw || '').trim();
+  if (!s) return 'https://paradigma.education';
+  return /^([a-z][a-z0-9+.-]*:|\/|#)/i.test(s) ? s : 'https://' + s;
+}
+// chrome da página (não embaralhar / não borrar): moldura, cabeçalho corrido, rodapé
+function isFreePdfChrome(el) {
+  if (!el || el.nodeType !== 1) return false;
+  return el.classList.contains('rule')
+    || el.classList.contains('runhead')
+    || el.classList.contains('foot');
+}
+// card do teaser (cadeado + msg + CTA) — reusado em modo página e modo título
+function buildFreeLockCard({ message, link, cta }) {
+  const href = freePdfNormalizeUrl(link);
+  const label = (cta && cta.trim()) || freePdfConfig().cta;
+  const card = document.createElement('div');
+  card.className = 'free-lock-card';
+  const ico = document.createElement('div');
+  ico.className = 'free-lock-ico';
+  ico.setAttribute('aria-hidden', 'true');
+  ico.innerHTML = uiIco('lock-closed', 36, 'solid');
+  const msg = document.createElement('p');
+  msg.className = 'free-lock-msg';
+  msg.textContent = (message != null && String(message)) || freePdfConfig().message;
+  const a = document.createElement('a');
+  a.className = 'free-lock-cta';
+  a.href = href;
+  a.setAttribute('href', href);
+  a.setAttribute('target', '_blank');
+  a.setAttribute('rel', 'noopener noreferrer');
+  a.title = href;
+  const lab = document.createElement('span');
+  lab.className = 'free-lock-cta-label';
+  lab.textContent = label;
+  a.appendChild(lab);
+  card.append(ico, msg, a);
+  return card;
+}
+// altura mínima do card (cadeado 36 + gaps + msg ~2 linhas + pill) — se o trecho
+// bloqueado for mais baixo, o overlay “só aparece na página seguinte” / fica cortado.
+const FREE_LOCK_CARD_MIN_H = 168;
+function appendFreeLockOverlay(pageEl, opts, { section = false, top, height } = {}) {
+  const overlay = document.createElement('div');
+  overlay.className = 'free-lock-overlay' + (section ? ' free-lock-overlay-section' : '');
+  if (section) {
+    if (top != null) overlay.style.top = Math.max(0, top) + 'px';
+    if (height != null) overlay.style.height = Math.max(FREE_LOCK_CARD_MIN_H, height) + 'px';
+  }
+  overlay.appendChild(buildFreeLockCard(opts));
+  pageEl.appendChild(overlay);
+  return overlay;
+}
+async function lockPageEl(pageEl, opts) {
+  pageEl.classList.add('free-locked');
+
+  // marca só o miolo (filhos diretos exceto chrome) — header/rodapé/moldura ficam nítidos
+  const targets = [...pageEl.children].filter(el => !isFreePdfChrome(el));
+  for (const el of targets) {
+    el.classList.add('free-lock-body');
+    freeLockSkeletonize(el); // texto + mídia em skeleton (layout já estável)
+  }
+  // capa bloqueada: skeletoniza o .cover-bg se ainda não entrou via targets
+  if (pageEl.classList.contains('cover-page') || pageEl.dataset.cover) {
+    const bg = pageEl.querySelector('.cover-bg');
+    if (bg && !bg.classList.contains('free-skel-media')) {
+      bg.classList.add('free-lock-body');
+      freeLockSkeletonize(bg);
+    }
+  }
+  appendFreeLockOverlay(pageEl, opts, { section: false });
+}
+
+// ── modo "Por Capítulo": seções H1/H2 (igual preview TOC) ─────────────────────
+// Lista H1/H2 do miolo na ordem do doc (reusa collectPreviewToc).
+function listFreePdfSections() {
+  return collectPreviewToc(); // [{ id, level, text }]
+}
+// Último H1/H2 em [0..idx] (inclusive) — “seção dona” do bloco no fluxo do doc.
+function freePdfHeadIdAtIndex(idx) {
+  const blocks = state.doc.blocks || [];
+  let head = null;
+  for (let j = 0; j <= idx && j < blocks.length; j++) {
+    const b = blocks[j];
+    if ((b.type === 'h1' || b.type === 'h2') && !isBlankHeading(b)) head = b.id;
+  }
+  return head;
+}
+// Gráficos right usam page/y livres — a posição no array NÃO é a seção visual.
+// Dono visual: bloco de fluxo (não-right) na mesma página com maior _top ≤ y da imagem;
+// se não houver, o último bloco de fluxo nas páginas anteriores.
+function freePdfOwningHeadForRightBlock(b) {
+  if (!b) return null;
+  if (b.anchor?.id) {
+    const ai = idxOf(b.anchor.id);
+    if (ai >= 0) return freePdfHeadIdAtIndex(ai);
+  }
+  const pageIdx = b.page | 0;
+  const y = b.y | 0;
+  let best = null;
+  let bestTop = -Infinity;
+  for (const s of state.doc.blocks || []) {
+    if (s.type === 'pagebreak' || placementOf(s) === 'right') continue;
+    if (s._page == null || s._top == null) continue;
+    if (s._page === pageIdx && s._top <= y + 12 && s._top >= bestTop) {
+      bestTop = s._top;
+      best = s;
+    }
+  }
+  if (!best) {
+    for (const s of state.doc.blocks || []) {
+      if (s.type === 'pagebreak' || placementOf(s) === 'right') continue;
+      if (s._page != null && s._page < pageIdx) best = s;
+      else if (s._page != null && s._page > pageIdx) break;
+    }
+  }
+  if (!best) {
+    // fallback: ordem do array (pior, mas evita null)
+    const i = idxOf(b.id);
+    return i >= 0 ? freePdfHeadIdAtIndex(i) : null;
+  }
+  const bi = idxOf(best.id);
+  return bi >= 0 ? freePdfHeadIdAtIndex(bi) : null;
+}
+// Expand: H1/H2 marcado → blocos de FLUXO (não-right) do título até o próximo H1/H2.
+// Imagens/gráficos right entram depois via freePdfOwningHeadForRightBlock (page+y).
+function expandLockedSectionIds(sectionIds) {
+  const lockedHeads = new Set((sectionIds || []).map(String));
+  const out = new Set();
+  if (!lockedHeads.size) return out;
+  const blocks = state.doc.blocks || [];
+  const heads = [];
+  blocks.forEach((b, i) => {
+    if (b.type !== 'h1' && b.type !== 'h2') return;
+    if (isBlankHeading(b)) return;
+    heads.push({ id: b.id, i });
+  });
+  for (let h = 0; h < heads.length; h++) {
+    if (!lockedHeads.has(heads[h].id)) continue;
+    const start = heads[h].i;
+    const end = h + 1 < heads.length ? heads[h + 1].i : blocks.length;
+    for (let i = start; i < end; i++) {
+      // right: ownership visual, não o índice no array (timeline sob 3.3 mas id “em” 1.x)
+      if (placementOf(blocks[i]) === 'right') continue;
+      out.add(blocks[i].id);
+    }
+  }
+  // Right: dono = seção visual (page+y / âncora), não a posição no array
+  for (const b of blocks) {
+    if (placementOf(b) !== 'right') continue;
+    const head = freePdfOwningHeadForRightBlock(b);
+    if (head && lockedHeads.has(head)) out.add(b.id);
+  }
+  return out;
+}
+// freemium seções: 1º título livre; demais bloqueados
+function defaultLockedSections(sections) {
+  if (!sections.length) return [];
+  return sections.slice(1).map(s => s.id);
+}
+// bbox dos els relativos à .page + altura mínima pro card do teaser caber na página
+function freeLockElsBBox(pageEl, els) {
+  const pr = pageEl.getBoundingClientRect();
+  let top = Infinity, bottom = -Infinity;
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (!r.width && !r.height) continue;
+    top = Math.min(top, r.top - pr.top);
+    bottom = Math.max(bottom, r.bottom - pr.top);
+  }
+  if (!Number.isFinite(top)) return null;
+  // miolo da página (CONTENT_TOP / CONTENT_H)
+  const minTop = CONTENT_TOP, maxBot = CONTENT_TOP + CONTENT_H;
+  top = Math.max(minTop, Math.min(top, maxBot - FREE_LOCK_CARD_MIN_H));
+  bottom = Math.min(maxBot, Math.max(bottom, top + FREE_LOCK_CARD_MIN_H));
+  let height = bottom - top;
+  // trecho curto (só o H2 no fim da página): expande o bloco do overlay p/ o card caber
+  if (height < FREE_LOCK_CARD_MIN_H) {
+    height = FREE_LOCK_CARD_MIN_H;
+    if (top + height > maxBot) top = Math.max(minTop, maxBot - height);
+  }
+  return { top, height };
+}
+// Coleta blocos da seção na página (id no range título→próximo título).
+// Gráfico/imagem right ENTRA se o id está no range OU âncora em bloco do range.
+// (Sem heurística de Y; sem exigir esquerda na mesma página — senão timeline
+// sozinha na direita sob um H1 bloqueado escapava do teaser.)
+function collectSectionLockedEls(pageEl, blockIds) {
+  const out = [];
+  const seen = new Set();
+  const add = (el) => {
+    if (!el || seen.has(el)) return;
+    // preferir envelope .rimg (figura + título + legenda)
+    const wrap = el.classList?.contains('rimg') ? el : (el.closest?.('.rimg') || el);
+    if (seen.has(wrap)) return;
+    seen.add(wrap);
+    if (wrap !== el) seen.add(el);
+    out.push(wrap);
+  };
+
+  pageEl.querySelectorAll('[data-id]').forEach((el) => {
+    const id = el.dataset.id;
+    if (id && blockIds.has(id)) add(el);
+  });
+
+  // âncora “travada no texto”: se o alvo está no range bloqueado
+  pageEl.querySelectorAll('.col-right > .rimg[data-id], .rimg[data-id]').forEach((el) => {
+    const id = el.dataset.id;
+    if (!id || seen.has(el)) return;
+    const b = blockOf(id);
+    if (b?.anchor?.id && blockIds.has(b.anchor.id)) add(el);
+  });
+
+  return out;
+}
+async function lockSectionBlocksOnPage(pageEl, lockedEls, opts) {
+  if (!lockedEls.length) return;
+  pageEl.classList.add('free-locked');
+  for (const el of lockedEls) {
+    el.classList.add('free-lock-body');
+    freeLockSkeletonize(el); // figtitle + figcaption + img/svg → skeleton
+  }
+  // se (quase) todo o miolo da página está bloqueado → overlay full; senão, recorte
+  const content = pageEl.querySelector('.content');
+  const allIds = content
+    ? [...content.querySelectorAll('[data-id]')].map(e => e.dataset.id).filter(Boolean)
+    : [];
+  const lockedIdSet = new Set(lockedEls.map(e => e.dataset.id).filter(Boolean));
+  const allLocked = allIds.length > 0 && allIds.every(id => lockedIdSet.has(id));
+  if (allLocked) {
+    appendFreeLockOverlay(pageEl, opts, { section: false });
+    return;
+  }
+  const box = freeLockElsBBox(pageEl, lockedEls);
+  if (!box) {
+    appendFreeLockOverlay(pageEl, opts, { section: false });
+    return;
+  }
+  appendFreeLockOverlay(pageEl, opts, { section: true, top: box.top, height: box.height });
+}
+async function applyFreePdfSectionLocks(pagesRoot, cfg) {
+  // paginate() já rodou em assemblePages → _page/_top e page/y dos rights estão frescos
+  const blockIds = expandLockedSectionIds(cfg.lockedSections || []);
+  if (!blockIds.size) return;
+  const opts = { message: cfg.message, link: cfg.link, cta: cfg.cta };
+  // só miolo (.content); capa/índice/contracapa não entram no modo título
+  for (const page of pagesRoot.querySelectorAll(':scope > .page')) {
+    if (page.classList.contains('cover-page') || page.dataset.cover) continue;
+    if (page.querySelector('.idx-content')) continue;
+    const lockedEls = collectSectionLockedEls(page, blockIds);
+    if (!lockedEls.length) continue;
+    await lockSectionBlocksOnPage(page, lockedEls, opts);
+  }
+}
+
+// lista de páginas na mesma ordem de assemblePages (só metadados)
+function listExportPages() {
+  const content = paginate();
+  const cov = state.doc.cover, bk = state.doc.back, idx = state.doc.index;
+  const idxPageOn = !!(idx && (idx.on || idx.resumoOn));
+  let n = state.doc.firstPage;
+  const out = [];
+  if (cov && cov.on) {
+    out.push({ index: out.length, kind: 'cover', label: 'Capa', number: n });
+    n++;
+  }
+  if (idxPageOn) {
+    out.push({ index: out.length, kind: 'index', label: 'Índice / Resumo', number: n });
+    n++;
+  }
+  content.forEach((_pg, ci) => {
+    out.push({
+      index: out.length,
+      kind: 'content',
+      label: `Página · ${String(n).padStart(2, '0')}`,
+      number: n,
+      contentIdx: ci,
+    });
+    n++;
+  });
+  if (bk && bk.on) {
+    out.push({ index: out.length, kind: 'back', label: 'Contracapa', number: n });
+  }
+  return out;
+}
+// freemium: capa + índice + 1ª do miolo livres; resto bloqueado
+function defaultLockedIndices(pages) {
+  const locked = [];
+  let freedFirstContent = false;
+  for (const p of pages) {
+    if (p.kind === 'cover' || p.kind === 'index') continue;
+    if (p.kind === 'content' && !freedFirstContent) {
+      freedFirstContent = true;
+      continue;
+    }
+    locked.push(p.index);
+  }
+  return locked;
+}
+async function applyFreePdfLocks(pagesRoot, cfg) {
+  const opts = { message: cfg.message, link: cfg.link, cta: cfg.cta };
+  if (cfg.mode === 'section') {
+    await applyFreePdfSectionLocks(pagesRoot, cfg);
+    return;
+  }
+  const pages = [...pagesRoot.querySelectorAll(':scope > .page')];
+  const lockedSet = new Set(cfg.locked || []);
+  for (let i = 0; i < pages.length; i++) {
+    if (!lockedSet.has(i)) continue;
+    await lockPageEl(pages[i], opts);
+  }
+}
+async function buildFreePdfHtml(cfg) {
+  const prev = editing; editing = false;
+  // id temporário: o editor já tem #pages no stage — não colidir durante o offscreen
+  const tmp = document.createElement('div'); tmp.id = 'pages-free-export';
+  assemblePages(tmp);
+  editing = prev;
+  // monta offscreen no documento atual pra getBoundingClientRect/SVG funcionar melhor
+  tmp.style.cssText = 'position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none;';
+  document.body.appendChild(tmp);
+  try {
+    // 1 frame de layout antes de medir bboxes (modo título)
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await applyFreePdfLocks(tmp, cfg);
+    tmp.id = 'pages';
+    tmp.removeAttribute('style');
+    return tmp.outerHTML;
+  } finally {
+    tmp.remove();
+  }
+}
+async function printFreePdf() {
+  const cfg = readFreePdfForm();
+  persistFreePdfForm(cfg);
+  const bodyHtml = await buildFreePdfHtml(cfg);
+  return printHtml(bodyHtml, {
+    titleSuffix: '-gratuito',
+    busyBtn: document.getElementById('fpmGenerate'),
+  });
+}
+
+// ── modal PDF Gratuito ───────────────────────────────────────────────────────
+function freePdfUiMode() {
+  const on = document.querySelector('#fpmMode button[aria-selected="true"]');
+  return on?.dataset.fpmMode === 'section' ? 'section' : 'page';
+}
+function setFreePdfUiMode(mode) {
+  const m = mode === 'section' ? 'section' : 'page';
+  document.querySelectorAll('#fpmMode button[data-fpm-mode]').forEach((b) => {
+    b.setAttribute('aria-selected', String(b.dataset.fpmMode === m));
+  });
+  const label = document.getElementById('fpmListLabel');
+  const hint = document.getElementById('fpmHint');
+  if (label) label.textContent = m === 'section' ? 'Capítulos (H1 / H2)' : 'Páginas';
+  if (hint) {
+    hint.textContent = m === 'section'
+      ? 'Marque os capítulos a bloquear: esconde o capítulo e todo o conteúdo até o próximo H1/H2.'
+      : 'Escolha quais páginas ficam legíveis e quais saem bloqueadas com o teaser Paradigma Pro.';
+  }
+  const cfg = freePdfConfig();
+  if (m === 'section') fillFreePdfSectionList(cfg.lockedSections);
+  else fillFreePdfPageList(cfg.locked);
+}
+function readFreePdfForm() {
+  const mode = freePdfUiMode();
+  const base = {
+    mode,
+    message: (document.getElementById('fpmMessage')?.value ?? freePdfConfig().message).trim()
+      || freePdfConfig().message,
+    link: freePdfNormalizeUrl(document.getElementById('fpmLink')?.value ?? freePdfConfig().link),
+    cta: (document.getElementById('fpmCta')?.value ?? freePdfConfig().cta).trim() || freePdfConfig().cta,
+    locked: freePdfConfig().locked,
+    lockedSections: freePdfConfig().lockedSections,
+  };
+  const host = document.getElementById('fpmPages');
+  if (mode === 'section') {
+    const locked = [];
+    host?.querySelectorAll('input[data-section]').forEach((inp) => {
+      if (inp.checked) locked.push(inp.dataset.section);
+    });
+    base.lockedSections = host?.children.length
+      ? locked
+      : (freePdfConfig().lockedSections ?? defaultLockedSections(listFreePdfSections()));
+  } else {
+    const locked = [];
+    host?.querySelectorAll('input[data-page]').forEach((inp) => {
+      if (inp.checked) locked.push(+inp.dataset.page);
+    });
+    const pages = listExportPages();
+    base.locked = host?.children.length
+      ? locked
+      : (freePdfConfig().locked ?? defaultLockedIndices(pages));
+  }
+  return base;
+}
+function persistFreePdfForm(cfg) {
+  const f = ensureFreePdf();
+  f.mode = cfg.mode === 'section' ? 'section' : 'page';
+  f.message = cfg.message;
+  f.link = cfg.link;
+  f.cta = cfg.cta;
+  if (cfg.mode === 'section') f.lockedSections = cfg.lockedSections;
+  else f.locked = cfg.locked;
+  save();
+}
+function appendFreePdfListRow(host, { key, kind, label, level, isLocked }) {
+  const row = document.createElement('label');
+  row.className = 'fpm-page';
+  row.dataset.locked = isLocked ? '1' : '0';
+  row.setAttribute('role', 'listitem');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  if (kind === 'page') cb.dataset.page = String(key);
+  else cb.dataset.section = String(key);
+  cb.checked = isLocked;
+  cb.addEventListener('change', () => {
+    row.dataset.locked = cb.checked ? '1' : '0';
+    const badge = row.querySelector('.fpm-pg-badge');
+    if (badge) badge.textContent = cb.checked ? 'Bloqueada' : 'Visível';
+    syncFreePdfToggleBtn();
+  });
+  const lab = document.createElement('span');
+  lab.className = 'fpm-pg-label' + (level === 2 ? ' lvl2' : '');
+  lab.textContent = label;
+  const badge = document.createElement('span');
+  badge.className = 'fpm-pg-badge';
+  badge.textContent = isLocked ? 'Bloqueada' : 'Visível';
+  row.append(cb, lab, badge);
+  host.appendChild(row);
+}
+function fillFreePdfPageList(lockedIndices) {
+  const host = document.getElementById('fpmPages');
+  if (!host) return;
+  const pages = listExportPages();
+  const locked = new Set(
+    lockedIndices != null ? lockedIndices : (freePdfConfig().locked ?? defaultLockedIndices(pages)),
+  );
+  host.replaceChildren();
+  if (!pages.length) {
+    const empty = document.createElement('div');
+    empty.className = 'fpm-page';
+    empty.style.cursor = 'default';
+    empty.textContent = 'Nenhuma página no documento.';
+    host.appendChild(empty);
+    syncFreePdfToggleBtn();
+    return;
+  }
+  for (const p of pages) {
+    appendFreePdfListRow(host, {
+      key: p.index,
+      kind: 'page',
+      label: p.label,
+      isLocked: locked.has(p.index),
+    });
+  }
+  syncFreePdfToggleBtn();
+}
+function fillFreePdfSectionList(lockedSectionIds) {
+  const host = document.getElementById('fpmPages');
+  if (!host) return;
+  const sections = listFreePdfSections();
+  const locked = new Set(
+    lockedSectionIds != null
+      ? lockedSectionIds.map(String)
+      : (freePdfConfig().lockedSections ?? defaultLockedSections(sections)).map(String),
+  );
+  host.replaceChildren();
+  if (!sections.length) {
+    const empty = document.createElement('div');
+    empty.className = 'fpm-page';
+    empty.style.cursor = 'default';
+    empty.textContent = 'Nenhum H1/H2 no miolo. Adicione capítulos para usar este modo.';
+    host.appendChild(empty);
+    syncFreePdfToggleBtn();
+    return;
+  }
+  for (const s of sections) {
+    appendFreePdfListRow(host, {
+      key: s.id,
+      kind: 'section',
+      label: s.text || '(sem título)',
+      level: s.level,
+      isLocked: locked.has(String(s.id)),
+    });
+  }
+  syncFreePdfToggleBtn();
+}
+// botão único: "Bloquear todas" ↔ "Liberar todas"
+function syncFreePdfToggleBtn() {
+  const btn = document.getElementById('fpmToggleAll');
+  if (!btn) return;
+  const boxes = [...document.querySelectorAll('#fpmPages input[data-page], #fpmPages input[data-section]')];
+  const allLocked = boxes.length > 0 && boxes.every(b => b.checked);
+  if (allLocked) {
+    btn.dataset.mode = 'unlock';
+    btn.textContent = 'Liberar todas';
+  } else {
+    btn.dataset.mode = 'lock';
+    btn.textContent = 'Bloquear todas';
+  }
+}
+function toggleFreePdfAll() {
+  const btn = document.getElementById('fpmToggleAll');
+  const lockAll = (btn?.dataset.mode || 'lock') === 'lock';
+  if (freePdfUiMode() === 'section') {
+    const sections = listFreePdfSections();
+    fillFreePdfSectionList(lockAll ? sections.map(s => s.id) : []);
+  } else {
+    const pages = listExportPages();
+    fillFreePdfPageList(lockAll ? pages.map(p => p.index) : []);
+  }
+  syncFreePdfToggleBtn();
+}
+function openFreePdfModal() {
+  const m = document.getElementById('freePdfModal');
+  if (!m) return;
+  const cfg = freePdfConfig();
+  const msg = document.getElementById('fpmMessage');
+  const link = document.getElementById('fpmLink');
+  const cta = document.getElementById('fpmCta');
+  if (msg) msg.value = cfg.message;
+  if (link) link.value = cfg.link;
+  if (cta) cta.value = cfg.cta;
+  setFreePdfUiMode(cfg.mode);
+  m.hidden = false;
+}
+function closeFreePdfModal() {
+  const m = document.getElementById('freePdfModal');
+  if (m) m.hidden = true;
+}
+function initFreePdfModal() {
+  const m = document.getElementById('freePdfModal');
+  if (!m || m.dataset.ready) return;
+  m.dataset.ready = '1';
+  m.addEventListener('click', (e) => {
+    if (e.target.closest('[data-fpm-close]')) closeFreePdfModal();
+  });
+  document.querySelectorAll('#fpmMode button[data-fpm-mode]').forEach((b) => {
+    b.addEventListener('click', () => setFreePdfUiMode(b.dataset.fpmMode));
+  });
+  document.getElementById('fpmToggleAll')?.addEventListener('click', () => toggleFreePdfAll());
+  document.getElementById('fpmGenerate')?.addEventListener('click', () => {
+    printFreePdf().then(() => closeFreePdfModal()).catch((e) => {
+      console.error('[pdf-gratuito]', e);
+      alert('Falha ao gerar PDF Gratuito: ' + (e.message || e));
+    });
+  });
+}
+initFreePdfModal();
 function downloadMd() {
   const blob = new Blob([toMarkdown()], { type: 'text/markdown' });
   const a = document.createElement('a');
@@ -6537,7 +7773,9 @@ document.addEventListener('keydown', (e) => {
   const m = document.getElementById('linkProjectModal');
   if (m && !m.hidden) { e.preventDefault(); closeLinkProjectModal(); return; }
   const s = document.getElementById('syncOfferModal');
-  if (s && !s.hidden) { e.preventDefault(); closeSyncOfferModal(); }
+  if (s && !s.hidden) { e.preventDefault(); closeSyncOfferModal(); return; }
+  const f = document.getElementById('freePdfModal');
+  if (f && !f.hidden) { e.preventDefault(); closeFreePdfModal(); }
 });
 document.addEventListener('mousedown', (e) => {                // fecha ao clicar fora (mesmo padrão do #addImgMenu)
   if (downloadMenu.hidden) return;
@@ -6545,6 +7783,10 @@ document.addEventListener('mousedown', (e) => {                // fecha ao clica
   closeDownloadMenu();
 }, true);
 downloadMenu.querySelector('[data-dl="pdf"]').addEventListener('click', () => { closeDownloadMenu(); printPdf(); });
+downloadMenu.querySelector('[data-dl="pdf-free"]')?.addEventListener('click', () => {
+  closeDownloadMenu();
+  openFreePdfModal();
+});
 downloadMenu.querySelector('[data-dl="zip"]').addEventListener('click', () => { closeDownloadMenu(); saveDocFile(); });
 addEventListener('resize', () => { if (state.zoom === 'fit') applyZoom(); });
 
@@ -6778,6 +8020,8 @@ state.activeId = state.doc.blocks[0]?.id;
 document.getElementById('footText').value = state.doc.footText;
 document.getElementById('headText').value = state.doc.headText || '';
 document.getElementById('firstPage').value = state.doc.firstPage;
+syncRuleUI();
+syncFootChromeUI();
 // handle restaurado do IDB + source do LS: reativa poll se for .pdgm vinculado
 idb.get('fh').then(async (h) => {
   if (!h) return;
