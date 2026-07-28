@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "doc": {
+    "blocks": [
+      { "id": "b1", "type": "h1", "html": "Relatório legado" },
+      { "id": "b2", "type": "p", "html": "Aberto em versões novas sem perder conteúdo." }
+    ],
+    "footText": "paradigma.education",
+    "headText": "",
+    "firstPage": 1,
+    "cover": { "on": true, "items": [] },
+    "back": { "on": false, "items": [] },
+    "index": {
+      "on": true,
+      "resumo": "<p>Resumo antigo (sem resumoOn / levels / width).</p>"
+    }
+  }
+}

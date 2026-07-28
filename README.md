@@ -56,6 +56,49 @@ com IA — o botão "Gráfico" do menu de Adicionar Imagem some sozinho quando
 não detecta backend (`GET /api/health` com timeout curto; ver
 `gateChartByBackend()` em `diagramacao.js`), sem quebrar o resto do app.
 
+## Testes
+
+Self-checks em Node puro (`node:assert`), sem framework e sem build:
+
+```bash
+node tools/run-tests.mjs          # suite inteira (mesmo comando do CI)
+node test-timeline.mjs            # um módulo
+```
+
+Arquivos: `test-*.mjs` na raiz (+ `paste-style.test.mjs`, nome legado). Cada
+teste documenta no cabeçalho **o que quebraria calado** sem ele (layout torto,
+escala errada, merge que perde evento — não só “lançou exceção”).
+
+CI: `.github/workflows/test.yml` roda `node tools/run-tests.mjs` em push/PR
+na `main`. Não substitui o deploy do Pages (continua “Deploy from a branch”).
+
+## Contratos e retrocompatibilidade
+
+O app é usado com projetos salvos e no Pages sem server. Mudanças **aditivas**
+por padrão:
+
+| Contrato | Regra |
+|---|---|
+| `.pdgm.json` / `.pdgm.zip` (`{ v, doc }`) | Campo novo = opcional + default no open (`seedDoc` / `normalizeOpenedDoc`). Não renomear/remover sem migração. |
+| Fixture legada | `fixtures/pdgm-v1-minimal.json` + `node test-pdgm-compat.mjs` — shape antigo (sem `resumoOn`, `reviewed`, `freePdf`…) ainda abre. |
+| GitHub Pages | Feature que precisa de backend **degrada** (some UI), não quebra o fluxo estático. |
+| Clipboard → Figma | Metadata `#pdgm-timeline` e o plugin em `figma-plugin/` precisam continuar parseando. |
+| `/api/*` | Path e shape estáveis; erros legíveis. |
+
+Serialização de projeto é **genérica de propósito** (`doc-format.js` dumpa o
+objeto inteiro) — sobrevive a campos novos sem lista hardcodeada. Detalhes e
+checklist de feature: **`AGENTS.md`**.
+
+## Agentes (Claude / Grok)
+
+Regras de commit, testes, nomenclatura e hotspots ficam em **`AGENTS.md`**
+(um arquivo só — não duplicar em `CLAUDE.md` / `CONTRIBUTING.md`). Resumo:
+
+- Commits com assunto = efeito/porquê e corpo com escopo + como testar.
+- Feature com lógica pura → `test-*.mjs` no mesmo PR.
+- Não commitar `_ia/input.*`, cache, `.pdftmp`.
+- Não introduzir bundler/framework de teste sem pedido explícito.
+
 ## Converter com IA — usa o CLI, não a API
 
 O botão **Converter com IA…** manda a imagem pro `server.mjs`, que roda o **CLI
