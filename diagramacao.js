@@ -15,7 +15,7 @@
  * parágrafos por linha via Range.getClientRects() quando precisar de fluxo denso.
  */
 
-import { openSwatchPop, parseColor } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
+import { openSwatchPop, parseColor, withAlpha } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
 import { enhanceAll } from './range-snap.js';  // snap points em ranges (sidebar + painéis dinâmicos)
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
@@ -25,14 +25,16 @@ import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" 
 import { deserializeDoc, serializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
 import {
   RULE_W_DEFAULT, RULE_W_LEGACY, RULE_W_STEP,
+  COL_L_DEFAULT, COL_L_MIN, COL_L_MAX, clampColL,
   hasOwn, clampFootAlign, clampRuleW, defaultLogo, ensureCoverType,
   migrateSpecialPages, normalizeOpenedDoc,
 } from './doc-migrate.js';  // defaults/migração ao abrir .pdgm (puro; compartilhado com test-pdgm-compat)
-import { projectFormatFromName, shouldReloadLinkedProject } from './project-link.js';
+import { projectFormatFromName, projectBaseName, shouldReloadLinkedProject } from './project-link.js';
 import { registerIcons, findIcon, iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
 import { IONICONS_LIB, IONICONS_LIB_SOLID } from './ionicons-lib.js';  // outline + solid (charts / callout)
 import { openIconPop, paintIconBtn } from './icon-pop.js';
 import { initFeedback, openFeedbackReport } from './feedback.js';
+import { initAppNav } from './app-nav.js';
 registerIcons(IONICONS_LIB);                          // outline (default do app)
 registerIcons(IONICONS_LIB_SOLID, { style: 'solid' }); // filled (callout default)
 
@@ -95,9 +97,21 @@ function widthSeg(cur, opts, onPick) {
   }
   return wrap;
 }
-const COL_L = 258, GAP = 24, COL_R = 217;
+// Geometria das colunas do MIOLO. Faixa total fixa (499 = 595 − 96 de margens laterais).
+// Gap fixo 24; o slider mexe só em colLeft — colRight = 499 − 24 − colLeft.
+// COL_L / COL_R = defaults históricos (capa e fallback); no miolo usar colL()/colR().
+const GAP = 24;
+const COL_FULL = 499;                            // largura das 2 colunas + gap
+const COL_L = COL_L_DEFAULT;                     // 258 — padrão / capa
+const COL_R = COL_FULL - GAP - COL_L;            // 217 — padrão / capa
 const TOC_SHORT_W = 345;   // largura do índice no modo "Curto" (o 'full' usa as 2 colunas)
-const COL_FULL = COL_L + GAP + COL_R;             // 499 — largura das 2 colunas
+
+/** Largura atual da coluna esquerda do miolo (px, clamped). */
+function colL() { return clampColL(state.doc?.colLeft); }
+/** Largura da coluna direita do miolo (complemento do gap + esquerda). */
+function colR() { return COL_FULL - GAP - colL(); }
+/** offset left da coluna direita (= colLeft + gap). */
+function colRightX() { return colL() + GAP; }
 
 // b.placement ('inline' | 'full' | 'right') vale pra QUALQUER bloco, não só imagem:
 // inline = coluna esquerda (fluxo), full = as duas colunas (fluxo), right = coluna
@@ -299,6 +313,12 @@ function seedDoc() {
     headAlign: 'left', pnumAlign: 'left', footAlign: 'right',
     // Modo Impressão: espelha left↔right nas páginas pares (página / contrapágina)
     printMirror: false,
+    // cor de fundo de TODAS as páginas do PDF (miolo, índice, capa, contracapa).
+    // default = papel branco; campo aditivo — docs antigos abrem brancos via seed.
+    pageBg: '#FFFFFF',
+    // largura (px) da coluna esquerda do miolo. Padrão 258; direita = 499−24−colLeft.
+    // Capa/contracapa usam sempre o grid fixo histórico (não herdam este valor).
+    colLeft: COL_L_DEFAULT,
     // estilo por tipo de bloco (menu ⋮ da paleta) — {} = tudo no padrão do app; ver
     // TYPE_STYLE_DEFAULTS/applyTypeStyle/gapBefore. Vive no state.doc (não no LS_KEY pequeno)
     // porque é adjacente ao miolo — mesmo caminho de idb.set('doc', ...) que já salva os
@@ -415,6 +435,11 @@ function load() {
     if (cfg.pnumAlign != null) state.doc.pnumAlign = clampFootAlign(cfg.pnumAlign);
     if (cfg.footAlign != null) state.doc.footAlign = clampFootAlign(cfg.footAlign);
     if (cfg.printMirror != null) state.doc.printMirror = !!cfg.printMirror;
+    if (cfg.pageBg != null) {
+      const p = parseColor(cfg.pageBg);
+      if (p) state.doc.pageBg = withAlpha(p.hex, p.alpha);
+    }
+    if (cfg.colLeft != null) state.doc.colLeft = clampColL(cfg.colLeft);
     if (cfg.source) {
       state.doc.source = cfg.source;
       // sessões antigas sem format: infere do nome (.zip → pdgm, senão md)
@@ -454,6 +479,8 @@ function save() { clearTimeout(saveT); saveT = setTimeout(() => {
     pnumAlign: clampFootAlign(state.doc.pnumAlign),
     footAlign: clampFootAlign(state.doc.footAlign || 'right'),
     printMirror: !!state.doc.printMirror,
+    pageBg: pageBgOf(),
+    colLeft: colL(),
     source: state.doc.source || null, cover: state.doc.cover, back: state.doc.back, index: state.doc.index,
     // seções expandíveis da sidebar (Texto/Capa/…) — UI chrome, não documento
     sidebarSecs: readSidebarSecs(),
@@ -524,11 +551,26 @@ const measurer = document.createElement('div');
 measurer.className = 'page';
 measurer.setAttribute('aria-hidden', 'true');
 measurer.style.cssText = 'position:absolute;left:-99999px;top:0;height:auto;overflow:visible;box-shadow:none;';
-measurer.innerHTML = `<div class="mcol l" style="width:${COL_L}px"></div>`
+measurer.innerHTML = `<div class="mcol l" style="width:${COL_L_DEFAULT}px"></div>`
   + `<div class="mcol f" style="width:${COL_FULL}px"></div>`;
 document.body.appendChild(measurer);
 const mL = measurer.querySelector('.mcol.l');
 const mF = measurer.querySelector('.mcol.f');
+
+// Coluna de prova (largura do miolo). A paginação empilha de verdade aqui e lê a altura
+// real do stack — somar measure()+gap diverge do layout (subpixel, full-width, etc.) e
+// deixava o último item pintado abaixo da guia da coluna.
+const trialCol = document.createElement('div');
+trialCol.style.width = COL_L_DEFAULT + 'px';
+measurer.appendChild(trialCol);
+
+/** Alinha medidores à colLeft atual — chamar antes de paginate/measure. */
+function syncMeasurerCols() {
+  const L = colL();
+  mL.style.width = L + 'px';
+  mF.style.width = COL_FULL + 'px';
+  trialCol.style.width = L + 'px';
+}
 
 function measure(b) {
   // mesmo `editing` do render (contenteditable/chrome). A toolbar da tabela é flutuante
@@ -544,13 +586,6 @@ function measure(b) {
   col.removeChild(el);
   return h;
 }
-
-// Coluna de prova (largura do miolo). A paginação empilha de verdade aqui e lê a altura
-// real do stack — somar measure()+gap diverge do layout (subpixel, full-width, etc.) e
-// deixava o último item pintado abaixo da guia da coluna.
-const trialCol = document.createElement('div');
-trialCol.style.width = COL_L + 'px';
-measurer.appendChild(trialCol);
 
 function trialClear() { trialCol.replaceChildren(); }
 function trialHeight() { return Math.ceil(trialCol.getBoundingClientRect().height); }
@@ -1022,9 +1057,19 @@ function updateTableBar() {
 
 // escala da imagem no popover: 10–100 (default 100 = ocupa a largura máxima da coluna).
 // Nunca > 100 — só permite reduzir, nunca esticar além da coluna.
+// Decimais com step 0.1 (digitáveis com "." ou "," via range-snap).
+const IMG_SCALE_STEP = 0.1;
 function imgScalePct(b) {
   const s = b.scale == null ? 100 : +b.scale;
-  return Math.min(100, Math.max(10, Number.isFinite(s) ? s : 100));
+  if (!Number.isFinite(s)) return 100;
+  // quantiza em 0.1 e limpa float dust (50.1000000001 → 50.1)
+  const q = Math.round(Math.min(100, Math.max(10, s)) / IMG_SCALE_STEP) * IMG_SCALE_STEP;
+  return +q.toFixed(1);
+}
+/** label do valor: 50 → "50"; 50.5 → "50.5" (sem zeros à toa). */
+function fmtImgScalePct(n) {
+  const q = imgScalePct({ scale: n });
+  return String(q);
 }
 function imgScaleOf(b) { return imgScalePct(b) / 100; }
 // alinhamento horizontal da imagem DENTRO da coluna quando scale < 100% (left|center).
@@ -1144,7 +1189,7 @@ function buildBlock(b, editing) {
 }
 function buildBlockEl(b, editing) {
   if (b.type === 'image') {
-    const colW = placementOf(b) === 'full' ? COL_FULL : COL_L;
+    const colW = placementOf(b) === 'full' ? COL_FULL : colL();
     return buildFigure(b, colW, editing);
   }
   if (b.type === 'divider') {
@@ -1206,6 +1251,7 @@ function numberLists() {
 const frag = (b, gap, clipTop = 0, clipH = null) => ({ b, gap, clipTop, clipH });
 
 function paginate() {
+  syncMeasurerCols();
   numberLists();
   const pages = [{ left: [], right: [] }];
   // qualquer bloco pode morar na coluna direita (antes só imagem); a quebra de página é
@@ -1392,10 +1438,46 @@ function paintPageRules() {
   pagesEl.querySelectorAll('.rule.bot').forEach(el => styleRuleEl(el, 'bot'));
 }
 
+// cor de fundo do PDF (todas as páginas). Hex opaco ou rgba com alpha; inválido → branco.
+const DEFAULT_PAGE_BG = '#FFFFFF';
+function pageBgOf() {
+  const p = parseColor(state.doc?.pageBg);
+  return p ? withAlpha(p.hex, p.alpha) : DEFAULT_PAGE_BG;
+}
+/** Aplica o fundo da página: com alpha, papel branco por baixo (editor = PDF). */
+function applyPageBg(pageEl) {
+  if (!pageEl) return;
+  const c = pageBgOf();
+  const p = parseColor(c);
+  if (p && p.alpha < 1) {
+    pageEl.style.backgroundImage = `linear-gradient(${c}, ${c}), linear-gradient(#fff, #fff)`;
+    pageEl.style.backgroundColor = '#fff';
+  } else {
+    pageEl.style.backgroundImage = '';
+    pageEl.style.backgroundColor = c;
+  }
+}
+/** Preview do colorfield com base branca sob alpha (mesma lógica do callout). */
+function paintPageBgChip(el, color) {
+  if (!el) return;
+  const c = color || DEFAULT_PAGE_BG;
+  const p = parseColor(c);
+  if (p && p.alpha < 1) {
+    el.style.background = '';
+    el.style.setProperty('--sp-ov', c);
+    el.classList.add('paper');
+  } else {
+    el.classList.remove('paper');
+    el.style.removeProperty('--sp-ov');
+    el.style.background = c;
+  }
+}
+
 // chrome comum das páginas do miolo/índice: molduras, cabeçalho corrido e rodapé
 function pageShell(number) {
   const page = document.createElement('div');
   page.className = 'page' + (editing ? ' editing' : '');
+  applyPageBg(page);
   const ruleTop = document.createElement('div'); ruleTop.className = 'rule top';
   const ruleBot = document.createElement('div'); ruleBot.className = 'rule bot';
   styleRuleEl(ruleTop, 'top');
@@ -1451,18 +1533,23 @@ function renderContentPage(pg, contentIdx, number) {
   const page = pageShell(number);
   page.dataset.page = contentIdx;                 // índice DENTRO do miolo (âncora de imagem da direita)
   const content = document.createElement('div'); content.className = 'content';
-  const colL = document.createElement('div'); colL.className = 'col-left';
-  const colR = document.createElement('div'); colR.className = 'col-right';
-  for (const f of pg.left) colL.appendChild(buildFrag(f));
+  const colLeftEl = document.createElement('div'); colLeftEl.className = 'col-left';
+  const colRightEl = document.createElement('div'); colRightEl.className = 'col-right';
+  // larguras do miolo vêm do doc (slider); CSS só tem o default 258/217
+  const L = colL(), R = colR(), rx = colRightX();
+  colLeftEl.style.width = L + 'px';
+  colRightEl.style.left = rx + 'px';
+  colRightEl.style.width = R + 'px';
+  for (const f of pg.left) colLeftEl.appendChild(buildFrag(f));
   // row "+" no fim da coluna esquerda (hover) — Notion: adiciona parágrafo e abre o menu "/"
   if (editing) {
     const add = document.createElement('div');
     add.className = 'col-add';
     add.innerHTML = '<button type="button" class="col-add-btn" title="Adicionar bloco">+</button>';
-    colL.appendChild(add);
+    colLeftEl.appendChild(add);
   }
-  for (const r of pg.right) colR.appendChild(buildRight(r));
-  content.append(colL, colR);
+  for (const r of pg.right) colRightEl.appendChild(buildRight(r));
+  content.append(colLeftEl, colRightEl);
   page.appendChild(content);
   return page;
 }
@@ -1745,7 +1832,7 @@ function renderIndexPage(toc, contentStart, number) {
     const sec = document.createElement('div');
     sec.className = 'idx-section' + (idxFocus === 'resumo' ? ' idx-sel' : '');
     sec.dataset.idx = 'resumo';
-    if (idx.resumoWidth === 'left') sec.style.width = COL_L + 'px';
+    if (idx.resumoWidth === 'left') sec.style.width = colL() + 'px';
     else sec.style.width = COL_FULL + 'px';
     const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo';
     const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
@@ -1796,6 +1883,7 @@ function renderCoverPage(kind, cov) {
   const page = document.createElement('div');
   page.className = 'page cover-page' + (editing ? ' editing' : '');
   page.dataset.cover = kind;
+  applyPageBg(page);   // cor de página sob a imagem de fundo (se houver)
   if (cov.bg) {
     const bg = document.createElement('div'); bg.className = 'cover-bg';
     bg.style.backgroundImage = `url("${cov.bg}")`;
@@ -1853,10 +1941,11 @@ function buildCoverLogo(kind, lg) {
   el.appendChild(hit);
   return el;
 }
-// larguras das colunas na capa (iguais às do miolo): esq 258 · dir 217 · gap 24 → x=282
+// larguras das colunas na capa: grid FIXO histórico (não segue o slider do miolo)
+// — capa/contracapa têm itens com y/span salvos no layout antigo (258/217).
 function coverColBox(span) {
-  if (span === 'left') return { left: 0, width: 258 };
-  if (span === 'right') return { left: 282, width: 217 };
+  if (span === 'left') return { left: 0, width: COL_L };
+  if (span === 'right') return { left: COL_L + GAP, width: COL_R };
   return { left: 0, width: COL_FULL };   // full = as duas colunas
 }
 // tipos de texto “simples” na capa (contenteditable no próprio .cover-item)
@@ -1974,8 +2063,9 @@ function buildRight(b) {
   // wrap.offsetHeight de verdade (pointermove), então o erro aqui só afeta o clamp inicial.
   const capLines = b.caption ? (b.caption.match(/<br\s*\/?>/gi) || []).length : 0;
   const titleLines = b.title ? (b.title.match(/<br\s*\/?>/gi) || []).length : 0;
+  const rightW = colR();
   const maxY = b.type === 'image'
-    ? CONTENT_H - imgHeight(b, COL_R) - (b.title != null ? 18 + titleLines * PARA_LH : 0) - (b.caption != null ? 22 + capLines * PARA_LH : 0)
+    ? CONTENT_H - imgHeight(b, rightW) - (b.title != null ? 18 + titleLines * PARA_LH : 0) - (b.caption != null ? 22 + capLines * PARA_LH : 0)
     : CONTENT_H;
   wrap.style.top = Math.min(Math.max(b.y | 0, 0), Math.max(0, maxY)) + 'px';
   // badge: solta = "↕ arraste" no hover; travada = cadeado + label + trilha só no foco
@@ -1993,7 +2083,7 @@ function buildRight(b) {
   } else {
     badge.textContent = '↕ arraste';
   }
-  wrap.appendChild(b.type === 'image' ? buildFigure(b, COL_R, editing) : buildBlock(b, editing));
+  wrap.appendChild(b.type === 'image' ? buildFigure(b, rightW, editing) : buildBlock(b, editing));
   wrap.appendChild(badge);
   return wrap;
 }
@@ -3343,8 +3433,9 @@ function openImgPanel() {
   // slider fica no range “fino” (0–24); valor > 24 vem digitar no número ao lado de px
   const RADIUS_SLIDER_MAX = 24;
   const scalePct = imgScalePct(b);
+  const scaleLabel = fmtImgScalePct(scalePct);
   // largura da coluna onde a imagem está (mesma regra de buildFigure/buildRight)
-  const figColW = placementOf(b) === 'full' ? COL_FULL : placementOf(b) === 'right' ? COL_R : COL_L;
+  const figColW = placementOf(b) === 'full' ? COL_FULL : placementOf(b) === 'right' ? colR() : colL();
   // travar exige um bloco do FLUXO que comece nesta página. Uma página que só mostra a
   // continuação de um parágrafo (bloco cortado) não tem âncora possível: o _top do bloco vive
   // na página onde ele começou, e ancorar ali jogaria a imagem de volta pra lá. Sem candidato,
@@ -3358,8 +3449,8 @@ function openImgPanel() {
     </div>
     <div class="field">Posição<div data-slot="col"></div></div>
     ${placementOf(b) === 'right' ? `<button type="button" class="fieldbtn" data-a="lock"${travavel ? '' : ' disabled title="Esta página não tem bloco de texto próprio para prender a imagem (só a continuação de um parágrafo que começa numa página anterior)."'}>${b.anchor ? UNLOCK_SVG : LOCK_SVG}<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span></button>` : ''}
-    <label class="field"><span class="field-row">Escala <span class="field-val"><span data-role="scalev">${scalePct}%</span><button type="button" class="resetbtn" data-a="scalereset" title="Redefinir para 100% (ocupa a coluna)">↺</button></span></span>
-      <input type="range" data-a="scale" min="10" max="100" step="1" value="${scalePct}" data-snaps="10,25,50,75,100">
+    <label class="field"><span class="field-row">Escala <span class="field-val"><span data-role="scalev">${scaleLabel}</span>%<button type="button" class="resetbtn" data-a="scalereset" title="Redefinir para 100% (ocupa a coluna)">↺</button></span></span>
+      <input type="range" data-a="scale" min="10" max="100" step="${IMG_SCALE_STEP}" value="${scalePct}" data-snaps="10,25,50,75,100">
     </label>
     <div data-role="scale-opts">
       <div class="field">Alinhamento<div data-slot="imgalign"></div></div>
@@ -3369,7 +3460,7 @@ function openImgPanel() {
       </div>
     </div>
     <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
-      <input type="range" data-a="radius" min="0" max="${RADIUS_SLIDER_MAX}" step="1" value="${Math.min(radius, RADIUS_SLIDER_MAX)}" data-snaps="0,4,8,12,16,24">
+      <input type="range" data-a="radius" min="0" max="${RADIUS_SLIDER_MAX}" step="1" value="${Math.min(radius, RADIUS_SLIDER_MAX)}" data-snaps="0,4,8,12,16,24" data-edit="off">
     </label>
     ${b.chart ? `<button type="button" class="fieldbtn" data-a="chart">${CREATE_ICO}<span>Editar dados</span></button>` : ''}
     <button type="button" class="fieldbtn" data-a="replace">${REPLACE_ICO}<span>Substituir</span></button>
@@ -3409,7 +3500,8 @@ function openImgPanel() {
   mountAlignSeg();
   // reset (t4) não pode roubar foco/seleção no mousedown — mesmo padrão do resto do app (ex. fmtbar)
   imgPanel.querySelectorAll('.resetbtn').forEach(btn => btn.addEventListener('mousedown', (e) => e.preventDefault()));
-  // valor em px: editável no lugar (sem <input> extra). Teto = metade da página (círculo perfeito).
+  // raio: digitável com max > max do slider (círculo perfeito até metade da página) — data-edit=off
+  // no range; o enhance genérico não cobre isso. Escala e demais usam range-snap (field-edit).
   const radv = imgPanel.querySelector('[data-role="radv"]');
   const scalev = imgPanel.querySelector('[data-role="scalev"]');
   const parseRadius = (raw) => {
@@ -3426,9 +3518,11 @@ function openImgPanel() {
     if (range) range.value = Math.min(n, RADIUS_SLIDER_MAX);
     save(); scheduleCommit();
   };
-  // escala ao vivo (sem re-render no arraste — igual radius); reflow da página no `change`.
+  // escala: no arraste só width/height (fluido); reflow/página no `change`
+  // (soltar o thumb OU fim do delay da digitação — ver range-snap data-edit-delay).
+  // aceita decimais (step 0.1); digitação com "." ou "," via range-snap.
   const paintScale = (pct) => {
-    const n = Math.min(100, Math.max(10, Math.round(+pct) || 100));
+    const n = imgScalePct({ scale: +pct || 100 });
     b.scale = n;
     if (n >= 100) delete b.scale; // default = ocupa a coluna; não polui o JSON
     applyFigureLayout(liveFig(), b, figColW);
@@ -3440,10 +3534,9 @@ function openImgPanel() {
         if ((b.y | 0) > maxY) { b.y = maxY; wrap.style.top = maxY + 'px'; }
       }
     }
-    if (scalev) scalev.textContent = n + '%';
+    if (scalev && document.activeElement !== scalev) scalev.textContent = fmtImgScalePct(n);
     const range = imgPanel.querySelector('input[data-a="scale"]');
     if (range && document.activeElement !== range) range.value = String(n);
-    // reveal das opções de scale só no soltar do thumb (`change`) / reset — não durante o arraste
     save(); scheduleCommit();
   };
   // label envolve o range: sem preventDefault o clique no número roubaria o foco pro slider
@@ -3487,10 +3580,11 @@ function openImgPanel() {
       }
       if (a === 'scale' || a === 'scalereset') {
         paintScale(a === 'scalereset' ? 100 : +el.value);
-        // reset não dispara `change` do range — reveal + re-pagina se a altura no fluxo mudou
+        // reset não dispara `change` do range — reflow/página na mão
         if (a === 'scalereset') {
           setSidebarReveal(scaleOpts, false);
-          if (placementOf(b) !== 'right') { render(); if (state.sel) openImgPanel(); }
+          render(); // fluxo: pode mudar de página; direita: reconstrói clamp de altura
+          if (state.sel) openImgPanel();
         }
         return;
       }
@@ -3517,14 +3611,16 @@ function openImgPanel() {
       render(); if (state.sel) openImgPanel();
     });
   });
-  // soltar o thumb: revela/esconde opções de scale + re-pagina se a altura no fluxo mudou
+  // soltar o thumb OU fim do delay da digitação: reveal + re-pagina (pode mudar de página)
   const scaleRange = imgPanel.querySelector('input[data-a="scale"]');
   if (scaleRange) {
     scaleRange.addEventListener('change', () => {
-      // mesma transição de altura+opacity da sidebar — só no soltar (não no `input` do arraste)
+      // mesma transição de altura+opacity da sidebar — só no commit (não no `input` do arraste)
       setSidebarReveal(scaleOpts, imgScalePct(b) < 100);
-      // re-pagina sem openImgPanel: rebuild do painel mataria o reveal no meio
-      if (placementOf(b) !== 'right') render();
+      // re-pagina sem openImgPanel: rebuild do painel mataria o reveal / o caret da digitação.
+      // Fluxo (inline/full): altura nova pode empurrar a imagem pra outra página.
+      // Direita: rebuild reclampa y com a altura nova.
+      render();
       positionImgPanel();
     });
   }
@@ -3891,7 +3987,7 @@ function openLogoPanel(kind) {
       <button type="button" class="colorfield" data-a="color" title="Escolher cor do logo" style="background:${lg.color || '#FFFFFF'}"></button>
     </label>
     <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${+(lg.size || 1).toFixed(2)}×</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir para 1×">↺</button></span></span>
-      <input type="range" data-a="size" min="40" max="260" value="${sizePct}" data-snaps="40,70,100,150,200,260">
+      <input type="range" data-a="size" min="40" max="260" value="${sizePct}" data-snaps="40,70,100,150,200,260" data-edit-scale="0.01">
     </label>`;
   // previews SVG do picker (mesmo do sidebar) + estado pressed
   const pick = logoPanel.querySelector('[data-lpick]');
@@ -4620,6 +4716,8 @@ function applyDoc(doc) {
   document.getElementById('firstPage').value = state.doc.firstPage;
   syncRuleUI();
   syncFootChromeUI();
+  syncPageBgUI();
+  syncColLeftUI();
   // troca de documento: aplica estado da sidebar sem animar cada switch
   const wasReady = sidebarRevealReady;
   sidebarRevealReady = false;
@@ -5196,7 +5294,7 @@ function closeLinkProjectModal() {
 async function downloadAndLinkProject() {
   closeLinkProjectModal();
   const blob = await serializeDocZip(state.doc);
-  const suggested = (state.doc.source?.label || 'diagramacao').replace(/\.[^.]+$/, '') + '.pdgm.zip';
+  const suggested = projectBaseName(state.doc.source?.label) + '.pdgm.zip';
   if (window.showSaveFilePicker) {
     try {
       const h = await showSaveFilePicker({
@@ -5561,7 +5659,7 @@ function openBlockStylePanel(type, anchorEl) {
     fields += `
     <label class="field">Cor do check <button type="button" class="colorfield" data-a="checkColor" style="background:${v('checkColor')}"></button></label>
     <label class="field"><span class="field-row">Opacidade do item marcado <span class="field-val"><span data-role="checkedOpacityv">${fmtPct(v('checkedOpacity'))}</span><button type="button" class="resetbtn" data-r="checkedOpacity" title="Redefinir para ${fmtPct(def.checkedOpacity)}">↺</button></span></span>
-      <input type="range" data-a="checkedOpacity" min="0" max="1" step="0.05" value="${v('checkedOpacity')}" data-snaps="0,0.25,0.5,0.55,0.75,1">
+      <input type="range" data-a="checkedOpacity" min="0" max="1" step="0.05" value="${v('checkedOpacity')}" data-snaps="0,0.25,0.5,0.55,0.75,1" data-edit-scale="100">
     </label>`;
   }
   if (type === 'quote') {
@@ -5882,6 +5980,8 @@ document.getElementById('btnNew').addEventListener('click', () => {
   document.getElementById('firstPage').value = state.doc.firstPage;
   syncRuleUI();
   syncFootChromeUI();
+  syncPageBgUI();
+  syncColLeftUI();
   syncSpecialUI();
   setBlocks(state.doc.blocks);
   updateSaveSourceBtn();
@@ -5958,6 +6058,53 @@ document.getElementById('printMirror')?.addEventListener('click', () => {
   const pm = document.getElementById('printMirror');
   if (pm) pm.setAttribute('aria-checked', String(!!state.doc.printMirror));
   render();
+});
+
+// cor de fundo global do PDF — swatch com opacidade, preview sobre papel
+function syncPageBgUI() {
+  paintPageBgChip(document.getElementById('pageBg'), pageBgOf());
+}
+document.getElementById('pageBg')?.addEventListener('click', () => {
+  const btn = document.getElementById('pageBg');
+  if (!btn) return;
+  openSwatchPop(btn, (color) => {
+    const p = parseColor(color);
+    state.doc.pageBg = p ? withAlpha(p.hex, p.alpha) : DEFAULT_PAGE_BG;
+    syncPageBgUI();
+    // pinta ao vivo sem re-paginar (miolo/capa intactos)
+    pagesEl.querySelectorAll('.page').forEach(applyPageBg);
+    save(); scheduleCommit();
+  }, pageBgOf(), { paper: true });   // opacity default on; paper = preview no branco
+});
+
+// largura da coluna esquerda do miolo (slider).
+// Track = COL_L_MIN…COL_L_MAX (160…360): min na extrema esquerda, max na direita.
+// Valor = px da coluna esquerda; a direita é o complemento (499 − 24 − colLeft).
+function formatColLeftLabel(n) {
+  return clampColL(n) + 'px';
+}
+function syncColLeftUI() {
+  const v = colL();
+  const range = document.getElementById('colLeft');
+  const disp = document.getElementById('colLeftv');
+  if (range) {
+    range.min = String(COL_L_MIN);
+    range.max = String(COL_L_MAX);
+    range.value = String(v);
+  }
+  if (disp) disp.textContent = formatColLeftLabel(v);
+}
+function setColLeft(n) {
+  state.doc.colLeft = clampColL(n);
+  syncColLeftUI();
+  render();   // re-mede e re-pagina (texto reflow muda altura)
+}
+document.getElementById('colLeft')?.addEventListener('input', (e) => {
+  setColLeft(e.target.value);
+});
+document.getElementById('colLeftReset')?.addEventListener('mousedown', (e) => e.preventDefault());
+document.getElementById('colLeftReset')?.addEventListener('click', () => {
+  setColLeft(COL_L_DEFAULT);
 });
 
 // ── páginas especiais: switches + controles de capa/contracapa ──
@@ -6773,7 +6920,7 @@ async function printHtml(bodyHtml, { titleSuffix = '', busyBtn = null } = {}) {
   try {
     const [css, fontFace] = await Promise.all([fetch('paradigma.css').then(r => r.text()), plexFontFace()]);
     const diagStyle = [...document.querySelectorAll('head style')].map(s => s.textContent).join('\n');
-    const base = (state.doc.source?.label || 'relatorio').replace(/\.[^.]+$/, '');
+    const base = projectBaseName(state.doc.source?.label, 'relatorio');
     const fname = base + (titleSuffix || '');
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <title>${escapeHtml(fname)}</title>
@@ -7613,7 +7760,7 @@ function downloadMd() {
   const blob = new Blob([toMarkdown()], { type: 'text/markdown' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (state.doc.source?.label || 'diagramacao').replace(/\.[^.]+$/, '') + '.md';
+  a.download = projectBaseName(state.doc.source?.label) + '.md';
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -7630,7 +7777,7 @@ async function saveDocFile() {
   const blob = await serializeDocZip(state.doc);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (state.doc.source?.label || 'diagramacao').replace(/\.[^.]+$/, '') + '.pdgm.zip';
+  a.download = projectBaseName(state.doc.source?.label) + '.pdgm.zip';
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -7916,6 +8063,7 @@ document.getElementById('btnUndo').addEventListener('mousedown', (e) => e.preven
 document.getElementById('btnRedo').addEventListener('mousedown', (e) => e.preventDefault());
 
 // ─────────────────────────── init ───────────────────────────────────────────
+initAppNav(); // título do header → menu entre ferramentas
 initFeedback(); // botão Reportar → issue no GitHub (prefill)
 enhanceAll();   // ticks + ímã nos range da sidebar (capa/contracapa)
 load();
@@ -7927,6 +8075,8 @@ document.getElementById('headText').value = state.doc.headText || '';
 document.getElementById('firstPage').value = state.doc.firstPage;
 syncRuleUI();
 syncFootChromeUI();
+syncPageBgUI();
+syncColLeftUI();
 // handle restaurado do IDB + source do LS: reativa poll se for .pdgm vinculado
 idb.get('fh').then(async (h) => {
   if (!h) return;

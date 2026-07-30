@@ -227,8 +227,9 @@ export function closeSwatchPop() {
       repeating-conic-gradient(#6b6b6b 0% 25%, #3a3a3a 0% 50%);
     background-size: auto, 8px 8px;
   }
-  /* base branca (papel) + cor com alpha por cima — preview fiel ao PDF */
-  .sp-swatch.paper, .swatch.paper {
+  /* base branca (papel) + cor com alpha por cima — preview fiel ao PDF
+     (.colorfield = botões grandes da sidebar; .swatch = chips pequenos) */
+  .sp-swatch.paper, .swatch.paper, .colorfield.paper {
     background-image: linear-gradient(var(--sp-ov, transparent), var(--sp-ov, transparent)),
       linear-gradient(#ffffff, #ffffff);
     background-color: #fff;

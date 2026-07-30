@@ -8,6 +8,7 @@ import { openSwatchPop } from './swatch.js';
 import { logoPickSvg } from './logos.js';
 import { enhanceAll } from './range-snap.js';
 import { initFeedback } from './feedback.js';
+import { initAppNav } from './app-nav.js';
 
 const $ = (id) => document.getElementById(id);
 const out = $('out');
@@ -534,6 +535,7 @@ function flash(msg, isError = false) {
 }
 
 // ── start ────────────────────────────────────────────────────────────────────
+initAppNav(); // título do header → menu entre ferramentas
 initFeedback(); // botão Reportar → issue no GitHub (prefill)
 enhanceAll();   // ticks + ímã nos range com data-snaps (não mexe em defaults)
 fillControls();

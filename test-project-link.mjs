@@ -1,11 +1,23 @@
 import assert from 'node:assert/strict';
-import { projectFormatFromName, shouldReloadLinkedProject } from './project-link.js';
+import { projectFormatFromName, projectBaseName, shouldReloadLinkedProject } from './project-link.js';
 import { serializeDocZip, loadDocZip, serializeDoc, deserializeDoc } from './doc-format.js';
 
 assert.equal(projectFormatFromName('relatorio.pdgm.zip'), 'pdgm');
 assert.equal(projectFormatFromName('diagramacao.pdgm (9).zip'), 'pdgm');
 assert.equal(projectFormatFromName('doc.pdgm.json'), 'pdgm-json');
 assert.equal(projectFormatFromName('notas.md'), null);
+
+// base p/ re-download: strip de .pdgm.zip (não só .zip) — senão vira .pdgm.pdgm.zip
+assert.equal(projectBaseName('diagramacao.pdgm.zip'), 'diagramacao');
+assert.equal(projectBaseName('diagramacao.pdgm.pdgm.zip'), 'diagramacao');
+assert.equal(projectBaseName('diagramacao.pdgm (9).zip'), 'diagramacao');
+assert.equal(projectBaseName('relatorio.final.pdgm.zip'), 'relatorio.final');
+assert.equal(projectBaseName('doc.pdgm.json'), 'doc');
+assert.equal(projectBaseName('notas.md'), 'notas');
+assert.equal(projectBaseName('foo.zip'), 'foo');
+assert.equal(projectBaseName(''), 'diagramacao');
+assert.equal(projectBaseName(null, 'relatorio'), 'relatorio');
+assert.equal(projectBaseName('diagramacao.pdgm.zip') + '.pdgm.zip', 'diagramacao.pdgm.zip');
 
 assert.equal(shouldReloadLinkedProject({
   localDirty: false, writing: false, diskMtime: 200, seenMtime: 100,

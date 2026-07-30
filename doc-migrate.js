@@ -15,7 +15,19 @@ export const RULE_W_MIN = 0.25;
 export const RULE_W_MAX = 8;
 export const RULE_W_STEP = 0.25;
 
+// largura da coluna ESQUERDA do miolo (px). Direita = 499 − 24 − colLeft.
+// Slider: COL_L_MIN…COL_L_MAX nas extremidades (160 ↔ 360). Padrão histórico = 258.
+export const COL_L_DEFAULT = 258;
+export const COL_L_MIN = 160;
+export const COL_L_MAX = 360;
+
 export const hasOwn = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
+
+export function clampColL(n) {
+  const v = Math.round(+n);
+  if (!Number.isFinite(v)) return COL_L_DEFAULT;
+  return Math.min(COL_L_MAX, Math.max(COL_L_MIN, v));
+}
 
 const FOOT_ALIGNS = new Set(['left', 'center', 'right']);
 export const clampFootAlign = (a) => (FOOT_ALIGNS.has(a) ? a : 'left');
@@ -105,6 +117,14 @@ export function normalizeOpenedDoc(doc, raw = null) {
   doc.footAlign = clampFootAlign((raw && hasOwn(raw, 'footAlign') ? raw.footAlign : doc.footAlign) || 'right');
   if (raw && !hasOwn(raw, 'printMirror')) doc.printMirror = false;
   else doc.printMirror = !!doc.printMirror;
+
+  // cor de fundo global das páginas (PDF). Ausente/vazio → branco (papel).
+  // Valor inválido fica pro paint path (parseColor); não engolir hex custom sem validar aqui.
+  if (doc.pageBg == null || doc.pageBg === '') doc.pageBg = '#FFFFFF';
+
+  // largura da coluna esquerda do miolo (px). Ausente → padrão 258.
+  if (raw && !hasOwn(raw, 'colLeft')) doc.colLeft = COL_L_DEFAULT;
+  else doc.colLeft = clampColL(doc.colLeft);
 
   if (doc.index) {
     if (doc.index.resumoOn === undefined) doc.index.resumoOn = true;

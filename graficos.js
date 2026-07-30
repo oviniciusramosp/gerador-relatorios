@@ -17,6 +17,7 @@ import { openSwatchPop } from './swatch.js';   // componente de cor compartilhad
 import { logoPickSvg } from './logos.js';      // SVG do logo pro picker (Fase 0.3, trilha B)
 import { enhanceAll } from './range-snap.js';  // snap points em todos os range com data-snaps
 import { initFeedback } from './feedback.js';
+import { initAppNav } from './app-nav.js';
 
 const $ = (id) => document.getElementById(id);
 const out = $('out');
@@ -2482,6 +2483,7 @@ if (btnSidebar && mainEl && sidebarEl) {
 }
 
 // ── start ────────────────────────────────────────────────────────────────────
+initAppNav(); // título do header → menu entre ferramentas
 initFeedback(); // botão Reportar → issue no GitHub (prefill)
 initSidebarDetails(); // chevron + expand animado + borda full-bleed
 enhanceAll();   // ticks + ímã nos range com data-snaps (não mexe em defaults)

@@ -77,6 +77,7 @@
   header nav #btnRedo {
     display: grid; place-items: center;
     width: var(--ctrl-h, 2rem); height: var(--ctrl-h, 2rem); padding: 0;
+    border-radius: var(--ctrl-r, 9px);
     color: var(--lilac);
   }
   header nav #btnUndo:hover:not(:disabled),
@@ -100,8 +101,17 @@
     position: relative;
     display: inline-flex;
   }
+  /* mesma caixa dos outros controles da topbar (zoom %, sidebar, undo…):
+     --ctrl-h / --ctrl-r — o button global usa só --r (6px) e padding solto */
+  #btnSaveSource,
+  #btnPrint {
+    height: var(--ctrl-h, 2rem); box-sizing: border-box;
+    padding: 0 var(--ctrl-pad-x, .6rem);
+    border-radius: var(--ctrl-r, 9px);
+    display: inline-flex; align-items: center; justify-content: center;
+  }
   #btnSaveSource {
-    display: inline-flex; align-items: center; gap: .4rem;
+    gap: .4rem;
   }
   #btnSaveSource .save-ico {
     display: grid; place-items: center;
@@ -1599,16 +1609,6 @@
      `aside` cobre o slider de tamanho do Logo da Paradigma na sidebar esquerda (capa/contracapa). */
   #imgPanel .field-row, #tablePanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, #idxPanel .field-row, #resumoPanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
   #imgPanel .field-val, #tablePanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, #idxPanel .field-val, #resumoPanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
-  /* valor em px digitável no lugar (Cantos raio): sem <input>, sem empurrar layout */
-  #imgPanel .field-edit {
-    cursor: text; outline: none; border-radius: 3px; min-width: 1.2ch;
-    font-variant-numeric: tabular-nums; padding: 0 1px; margin: 0 -1px;
-  }
-  #imgPanel .field-edit:hover { color: var(--ink); }
-  #imgPanel .field-edit:focus {
-    background: color-mix(in srgb, var(--violet) 12%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--violet) 45%, transparent);
-  }
   #imgPanel .resetbtn, #coverPanel .resetbtn, #logoPanel .resetbtn, #blockStylePanel .resetbtn, #idxPanel .resetbtn, #resumoPanel .resetbtn, aside .resetbtn {
     border: 0; background: transparent; padding: 0 .1rem; margin: 0;
     color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
@@ -1898,6 +1898,13 @@
           <!-- accept com extensões de 1 ponto (.zip/.json): cobre foo.pdgm.zip e
                "foo.pdgm (9).zip"; .pdgm.zip inteiro é inválido em vários browsers. -->
           <input type="file" id="fileProject" accept=".zip,.json,application/zip,application/x-zip-compressed,application/json" hidden>
+          <label class="field"><span class="field-row">Cor de fundo do PDF<button type="button" class="infoicon" data-tip="Aplica a cor de papel a todas as páginas (miolo, índice, capa e contracapa), com opacidade opcional. Imagem de fundo da capa/contracapa fica por cima." aria-label="Sobre a cor de fundo do PDF">ⓘ</button></span>
+            <button type="button" class="colorfield" id="pageBg" title="Cor de fundo de todas as páginas" aria-label="Cor de fundo do PDF" style="background:#FFFFFF"></button>
+          </label>
+          <label class="field"><span class="field-row"><span>Proporção das Colunas<button type="button" class="infoicon" data-tip="Quanto a coluna de texto (esquerda) ocupa no miolo. A da direita (imagens) usa o espaço que sobra. Capa e contracapa não mudam." aria-label="Sobre a proporção das colunas">ⓘ</button></span><span class="field-val"><span id="colLeftv">258px</span><button type="button" class="resetbtn" id="colLeftReset" title="Redefinir para o padrão (258px)">↺</button></span></span>
+            <!-- track = faixa útil 160…360 (min/max nas extremidades; default 258) -->
+            <input type="range" id="colLeft" min="160" max="360" step="1" value="258" data-snaps="160,200,258,300,360">
+          </label>
         </div>
       </details>
 
@@ -1927,7 +1934,7 @@
                 <button type="button" class="colorfield" data-logocolor="cover" title="Escolher cor do logo"></button>
               </label>
               <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-logosizev="cover"></span><button type="button" class="resetbtn" data-logosizereset="cover" title="Redefinir para 1×">↺</button></span></span>
-                <input type="range" data-logosize="cover" min="40" max="260" value="100" data-snaps="40,70,100,150,200,260">
+                <input type="range" data-logosize="cover" min="40" max="260" value="100" data-snaps="40,70,100,150,200,260" data-edit-scale="0.01">
               </label>
             </div>
             <div class="field"><span class="fieldtitle">Imagem de Fundo</span>
@@ -1946,7 +1953,7 @@
               </label>
             </div>
             <label class="field" data-bgxform="cover" hidden><span class="field-row">Escala da imagem <span class="field-val"><span data-bgscalev="cover"></span><button type="button" class="resetbtn" data-bgscalereset="cover" title="Redefinir para 1×">↺</button></span></span>
-              <input type="range" data-bgscale="cover" min="100" max="250" value="100" data-snaps="100,125,150,200,250">
+              <input type="range" data-bgscale="cover" min="100" max="250" value="100" data-snaps="100,125,150,200,250" data-edit-scale="0.01">
             </label>
           </div>
         </div>
@@ -2010,7 +2017,7 @@
                 <button type="button" class="colorfield" data-logocolor="back" title="Escolher cor do logo"></button>
               </label>
               <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-logosizev="back"></span><button type="button" class="resetbtn" data-logosizereset="back" title="Redefinir para 1×">↺</button></span></span>
-                <input type="range" data-logosize="back" min="40" max="260" value="100" data-snaps="40,70,100,150,200,260">
+                <input type="range" data-logosize="back" min="40" max="260" value="100" data-snaps="40,70,100,150,200,260" data-edit-scale="0.01">
               </label>
             </div>
             <div class="field"><span class="fieldtitle">Imagem de Fundo</span>
@@ -2029,7 +2036,7 @@
               </label>
             </div>
             <label class="field" data-bgxform="back" hidden><span class="field-row">Escala da imagem <span class="field-val"><span data-bgscalev="back"></span><button type="button" class="resetbtn" data-bgscalereset="back" title="Redefinir para 1×">↺</button></span></span>
-              <input type="range" data-bgscale="back" min="100" max="250" value="100" data-snaps="100,125,150,200,250">
+              <input type="range" data-bgscale="back" min="100" max="250" value="100" data-snaps="100,125,150,200,250" data-edit-scale="0.01">
             </label>
           </div>
         </div>

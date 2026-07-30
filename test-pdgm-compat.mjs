@@ -13,7 +13,8 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { serializeDoc, deserializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';
 import {
-  RULE_W_DEFAULT, RULE_W_LEGACY, defaultLogo, normalizeOpenedDoc,
+  RULE_W_DEFAULT, RULE_W_LEGACY, COL_L_DEFAULT, COL_L_MIN, COL_L_MAX,
+  clampColL, defaultLogo, normalizeOpenedDoc,
 } from './doc-migrate.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/pdgm-v1-minimal.json', import.meta.url));
@@ -32,6 +33,8 @@ function seedLike() {
     pnumAlign: 'left',
     footAlign: 'right',
     printMirror: false,
+    pageBg: '#FFFFFF',
+    colLeft: COL_L_DEFAULT,
     blockStyles: {},
     cover: { on: true, items: [] },
     back: { on: true, items: [] },
@@ -92,9 +95,23 @@ assert.equal(opened.ruleBot, RULE_W_LEGACY);
 assert.equal(opened.footText, 'paradigma.education');
 assert.equal(opened.back.on, false, 'Object.assign preserva back.on do arquivo');
 assert.ok(opened.freePdf && opened.freePdf.mode === 'page', 'freePdf vem do seed quando ausente');
+assert.equal(opened.pageBg, '#FFFFFF', 'pageBg default em doc antigo (papel branco)');
+assert.equal(opened.colLeft, COL_L_DEFAULT, 'colLeft default em doc antigo (258px)');
 assert.equal(raw.index.resumoOn, undefined, 'raw do arquivo permanece intocado após open');
 assert.ok(opened.cover.logo, 'capa sem logo ganha defaultLogo na migração');
 assert.deepEqual(opened.cover.logo, defaultLogo());
+
+// pageBg custom preservado no open (campo aditivo)
+const withPageBg = openCompat({ ...JSON.parse(JSON.stringify(raw)), pageBg: '#1A1A2E' });
+assert.equal(withPageBg.pageBg, '#1A1A2E', 'pageBg custom não some no open');
+assert.equal(withPageBg.blocks[0].html, 'Relatório legado');
+
+// colLeft custom + clamp
+const withCol = openCompat({ ...JSON.parse(JSON.stringify(raw)), colLeft: 300 });
+assert.equal(withCol.colLeft, 300, 'colLeft custom preservado');
+assert.equal(clampColL(50), COL_L_MIN, 'clampColL piso');
+assert.equal(clampColL(999), COL_L_MAX, 'clampColL teto');
+assert.equal(clampColL('x'), COL_L_DEFAULT, 'clampColL inválido → padrão');
 
 // capa antiga: 1–2 itens type "p" (ou sem type) → title/subtitle
 const capaAntiga = openCompat({
