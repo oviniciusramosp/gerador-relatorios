@@ -1035,12 +1035,15 @@ $('btnCsv').addEventListener('click', () => {
   flash('CSV baixado.');
 });
 
-// ── modo embutido (iframe da Diagramação): importa o SVG direto pro relatório ──
+// ── modo embutido (iframe do Diagramador / Stories): importa o SVG pro host ──
 // Botão primary na extrema direita do header (depois de Baixar, que é secundário).
-// A confirmação/banner fica na diagramação — ao importar ela fecha o modal.
+// A confirmação/banner fica no parent — ao importar ele fecha o modal.
+// ?into=story → label de Stories; default = Relatório (Diagramador).
 if (new URLSearchParams(location.search).has('embed')) {
+  const into = new URLSearchParams(location.search).get('into');
+  const importLabel = into === 'story' ? 'Importar para o Story' : 'Importar para o Relatório';
   const b = document.createElement('button');
-  b.id = 'btnImport'; b.className = 'primary'; b.textContent = 'Importar para o Relatório';
+  b.id = 'btnImport'; b.className = 'primary'; b.textContent = importLabel;
   document.querySelector('header nav').append(b);
   b.addEventListener('click', async () => {
     flash('Gerando SVG…');

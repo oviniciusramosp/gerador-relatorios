@@ -16,7 +16,7 @@
  */
 
 import { openSwatchPop, parseColor, withAlpha } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
-import { enhanceAll } from './range-snap.js';  // snap points em ranges (sidebar + painéis dinâmicos)
+import { enhanceAll, wireFieldEditKeys } from './range-snap.js';  // snap + digitação (Enter aplica, sem quebrar linha)
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
@@ -35,6 +35,8 @@ import { IONICONS_LIB, IONICONS_LIB_SOLID } from './ionicons-lib.js';  // outlin
 import { openIconPop, paintIconBtn } from './icon-pop.js';
 import { initFeedback, openFeedbackReport } from './feedback.js';
 import { initAppNav } from './app-nav.js';
+import { COL_ICON, ALIGN_ICON, POS_ICON, widthSeg } from './ui-segment.js';
+import { createBlockHandles, HANDLE_GEOM } from './ui-handles.js';
 registerIcons(IONICONS_LIB);                          // outline (default do app)
 registerIcons(IONICONS_LIB_SOLID, { style: 'solid' }); // filled (callout default)
 
@@ -61,42 +63,7 @@ function formatRulePx(n) {
   return s + 'px';
 }
 
-// seletor de coluna reutilizável (popover de Imagem, Capa e aba Conteúdo): SVGs de coluna
-const COL_ICON = {
-  left: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="4" width="4.5" height="8" fill="currentColor"/></svg>',
-  full: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="4" width="10" height="8" fill="currentColor"/></svg>',
-  right: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="8.5" y="4" width="4.5" height="8" fill="currentColor"/></svg>',
-};
-// ícones de alinhamento de TEXTO (barras tipo linha, não confundir com COL_ICON — aquele é
-// posição/largura de COLUNA). Usado no segment de Alinhamento do popover de Texto da capa.
-const ALIGN_ICON = {
-  left: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2" rx="1" fill="currentColor"/><rect x="2" y="7" width="7" height="2" rx="1" fill="currentColor"/><rect x="2" y="11" width="9" height="2" rx="1" fill="currentColor"/></svg>',
-  center: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2" rx="1" fill="currentColor"/><rect x="4.5" y="7" width="7" height="2" rx="1" fill="currentColor"/><rect x="3.5" y="11" width="9" height="2" rx="1" fill="currentColor"/></svg>',
-  right: '<svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="2" rx="1" fill="currentColor"/><rect x="7" y="7" width="7" height="2" rx="1" fill="currentColor"/><rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor"/></svg>',
-};
-// posição vertical do logo na capa/contracapa (header = topo, footer = base) — mesma
-// linguagem de COL_ICON (quadro + faixa preenchida), só que a faixa é horizontal.
-const POS_ICON = {
-  header: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="4" width="10" height="3" fill="currentColor"/></svg>',
-  footer: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="3" y="9" width="10" height="3" fill="currentColor"/></svg>',
-};
-// segment control (mesma pílula do Documento/Conteúdo) só com ÍCONE — visual do popover de
-// Imagem/Texto da capa, do miolo e da aba Conteúdo (Posição do bloco em foco). `opts` =
-// [{val,label,icon}, ...]; 3 opções usam .cols-3 (paradigma.css).
-function widthSeg(cur, opts, onPick) {
-  const wrap = document.createElement('div');
-  wrap.className = 'segment iconseg' + (opts.length >= 3 ? ' cols-3' : '');
-  wrap.setAttribute('role', 'tablist');
-  for (const { val, label, icon } of opts) {
-    const b = document.createElement('button'); b.type = 'button'; b.title = label;
-    b.innerHTML = icon;
-    b.setAttribute('aria-selected', String(cur === val));
-    b.addEventListener('mousedown', (e) => e.preventDefault());   // não rouba o caret do bloco em edição
-    b.onclick = () => onPick(val);
-    wrap.append(b);
-  }
-  return wrap;
-}
+// COL_ICON / ALIGN_ICON / POS_ICON / widthSeg → ui-segment.js (compartilhado com Stories)
 // Geometria das colunas do MIOLO. Faixa total fixa (499 = 595 − 96 de margens laterais).
 // Gap fixo 24; o slider mexe só em colLeft — colRight = 499 − 24 − colLeft.
 // COL_L / COL_R = defaults históricos (capa e fallback); no miolo usar colL()/colR().
@@ -2991,9 +2958,9 @@ function showSnapGuide(content, y) {
 // ── reordenar blocos (alça estilo Notion) + mover imagem entre as colunas ─────
 // geometria da gutter Notion: [+][dragger] | bloco — botões 16×16, alinhados ao meio do bloco
 // H_PAD 10 = 6+4 (dragger 4px mais à esquerda, longe das alças da tabela)
-// H_GAP 0 = sem vão entre o “+” e o dragger
-const H_BTN = 16, H_GAP = 0, H_PAD = 10;
-const H_GUTTER = H_BTN + H_GAP + H_BTN + H_PAD;
+// H_GAP 0 = sem vão entre o “+” e o dragger — canônico em ui-handles.HANDLE_GEOM
+const H_BTN = HANDLE_GEOM.H_BTN, H_GAP = HANDLE_GEOM.H_GAP, H_PAD = HANDLE_GEOM.H_PAD;
+const H_GUTTER = HANDLE_GEOM.H_GUTTER;
 // ícone de UI Ionicons (viewBox 512) em currentColor, centrado no botão
 const uiIco = (key, size = 12, style = 'outline') =>
   iconSvg(key, { x: 0, y: 0, w: size, h: size }, 'currentColor', 1.8, style, true)
@@ -3009,41 +2976,31 @@ const uiIco = (key, size = 12, style = 'outline') =>
 
 initPreviewToc();   // botão list-outline do índice flutuante (precisa de uiIco)
 
-const bhandle = document.createElement('div');
-bhandle.id = 'bhandle';
-// ion-icon name="reorder-three" → variante filled (sem sufixo -outline)
-bhandle.innerHTML = uiIco('reorder-three', 12, 'solid');
-bhandle.hidden = true; bhandle.title = 'Arrastar ou clicar para opções';
-document.body.appendChild(bhandle);
-// "+" Ionicons add-outline — mesma caixa do dragger
-const badd = document.createElement('button');
-badd.id = 'badd'; badd.type = 'button'; badd.hidden = true;
-badd.title = 'Adicionar bloco abaixo';
-badd.setAttribute('aria-label', 'Adicionar bloco abaixo');
-badd.innerHTML = uiIco('add', 12, 'outline');
-document.body.appendChild(badd);
-// menu do dragger: Duplicar / Remover — ícones oficiais Ionicons (outline, viewBox 512)
-// ion-icon name="trash-outline" → uiIco/menuIco('trash', …, 'outline')
+// alças Notion — DOM/ícones/menu de ui-handles.js (domain drag/add fica no app)
 const menuIco = (key) =>
   iconSvg(key, { x: 0, y: 0, w: 16, h: 16 }, 'currentColor', 1.8, 'outline', true)
     .replace(/ x="0" y="0"/, '');
-const bmenu = document.createElement('div');
-bmenu.id = 'bmenu'; bmenu.hidden = true;
-bmenu.innerHTML = `<button type="button" data-a="dup"><span class="ico">${menuIco('copy')}</span>Duplicar</button>`
-  + `<button type="button" data-a="del" class="danger"><span class="ico">${menuIco('trash')}</span>Remover</button>`;
-document.body.appendChild(bmenu);
+const blockHandles = createBlockHandles({
+  // app liga pointer/add (cover vs miolo); menu canônico
+  wireAdd: false,
+  wireHandle: false,
+  wireMenu: true,
+  onMenuAction({ action, id }) {
+    if (action === 'dup') duplicateBlock(id);
+    else if (action === 'del') deleteBlockById(id);
+  },
+});
+const bhandle = blockHandles.bhandle;
+const badd = blockHandles.badd;
+const bmenu = blockHandles.bmenu;
 let bmenuId = null;
-function closeBlockMenu() { bmenu.hidden = true; bmenuId = null; }
+function closeBlockMenu() {
+  blockHandles.closeMenu();
+  bmenuId = null;
+}
 function openBlockMenu(id, anchorEl) {
   bmenuId = id;
-  bmenu.hidden = false;
-  const r = (anchorEl || bhandle).getBoundingClientRect();
-  const mw = bmenu.offsetWidth || 160, mh = bmenu.offsetHeight || 72;
-  let x = r.right + 6;
-  if (x + mw > innerWidth - 8) x = Math.max(8, r.left - mw - 6);
-  let y = r.top;
-  if (y + mh > innerHeight - 8) y = Math.max(8, innerHeight - mh - 8);
-  bmenu.style.left = x + 'px'; bmenu.style.top = y + 'px';
+  blockHandles.openMenu(id, anchorEl);
 }
 // seleciona o bloco ao interagir com a alça (hover → click no gap não “perde” o alvo)
 function selectBlockFromHandle(id) {
@@ -3091,18 +3048,7 @@ function deleteBlockById(id) {
   closeImgPanel(); closeCoverPanel();
   render({ id: state.activeId, role: 'block', offset: 0 });
 }
-bmenu.addEventListener('mousedown', (e) => e.preventDefault()); // não rouba foco do miolo
-bmenu.addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-a]'); if (!btn || !bmenuId) return;
-  const id = bmenuId; closeBlockMenu();
-  if (btn.dataset.a === 'dup') duplicateBlock(id);
-  else if (btn.dataset.a === 'del') deleteBlockById(id);
-});
-document.addEventListener('pointerdown', (e) => {
-  if (bmenu.hidden) return;
-  if (e.target.closest && (e.target.closest('#bmenu') || e.target.closest('#bhandle'))) return;
-  closeBlockMenu();
-}, true);
+// menu listeners: createBlockHandles({ wireMenu: true })
 
 const dropLine = document.createElement('div');
 dropLine.id = 'dropline'; dropLine.hidden = true;
@@ -3500,8 +3446,8 @@ function openImgPanel() {
   mountAlignSeg();
   // reset (t4) não pode roubar foco/seleção no mousedown — mesmo padrão do resto do app (ex. fmtbar)
   imgPanel.querySelectorAll('.resetbtn').forEach(btn => btn.addEventListener('mousedown', (e) => e.preventDefault()));
-  // raio: digitável com max > max do slider (círculo perfeito até metade da página) — data-edit=off
-  // no range; o enhance genérico não cobre isso. Escala e demais usam range-snap (field-edit).
+  // raio: digitável com max > max do slider (círculo perfeito até metade da página) —
+  // data-edit=off no range; wireFieldEditKeys cobre clique/Enter/Escape (sem quebrar linha).
   const radv = imgPanel.querySelector('[data-role="radv"]');
   const scalev = imgPanel.querySelector('[data-role="scalev"]');
   const parseRadius = (raw) => {
@@ -3539,34 +3485,24 @@ function openImgPanel() {
     if (range && document.activeElement !== range) range.value = String(n);
     save(); scheduleCommit();
   };
-  // label envolve o range: sem preventDefault o clique no número roubaria o foco pro slider
-  radv.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    radv.focus();
-    const r = document.createRange();
-    r.selectNodeContents(radv);
-    const s = getSelection();
-    s.removeAllRanges();
-    s.addRange(r);
-  });
-  radv.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); radv.blur(); }
-    else if (e.key === 'Escape') {
-      e.preventDefault();
-      radv.textContent = String(b.radius ?? 4);
-      radv.blur();
-    }
-  });
-  radv.addEventListener('input', () => {
-    const n = parseRadius(radv.textContent);
-    if (n == null) return;
-    paintRadius(n, { syncText: false });
-  });
-  radv.addEventListener('blur', () => {
-    const n = parseRadius(radv.textContent);
-    paintRadius(n == null ? (b.radius ?? 4) : n, { syncText: true });
-    radv.textContent = String(b.radius ?? 4);
-  });
+  if (radv) {
+    wireFieldEditKeys(radv, {
+      onInput: (raw) => {
+        const n = parseRadius(raw);
+        if (n == null) return;
+        paintRadius(n, { syncText: false });
+      },
+      onCommit: (raw) => {
+        const n = parseRadius(raw);
+        paintRadius(n == null ? (b.radius ?? 4) : n, { syncText: true });
+        radv.textContent = String(b.radius ?? 4);
+      },
+      onCancel: () => {
+        radv.textContent = String(b.radius ?? 4);
+        paintRadius(b.radius ?? 4, { syncText: true });
+      },
+    });
+  }
   enhanceAll(imgPanel);
   positionImgPanel();
 
@@ -5558,6 +5494,16 @@ document.querySelectorAll('#blocktypes button[data-type]').forEach(btn => {
     if (t === 'pagebreak') return insertSeparatorButton('pagebreak');
     if (t === 'divider') return insertSeparatorButton('divider');
     if (t === 'image') return addImageViaPalette();
+    // gráfico: abre o modal (graficos.html embed), igual ao menu + da coluna direita
+    if (t === 'chart') {
+      const page = state.activeId
+        ? (blockOf(state.activeId)?.page | 0)
+        : (state.doc.blocks[state.doc.blocks.length - 1]?.page | 0);
+      chartTargetPage = page;
+      chartEditId = null;
+      openChartModal('chart');
+      return;
+    }
     // trilha G (bug): tabela é ESTRUTURAL — clicar com um parágrafo/título selecionado NÃO
     // pode converter (destruiria o texto). Sempre insere depois, igual imagem/divisor/quebra.
     if (t === 'table') return insertBlockAfter('table');
@@ -7869,15 +7815,23 @@ fmtbar.querySelectorAll('.colorbtn').forEach(btn => btn.addEventListener('click'
   if (!sel || !sel.rangeCount) return;
   const saved = sel.getRangeAt(0).cloneRange();
   const host = editableHostOfRange(saved);
+  const fromSel = colorsFromFmtSelection();
+  const current = btn.dataset.color
+    || (btn.dataset.cmd === 'hiliteColor' ? fromSel.back : fromSel.fore)
+    || undefined;
   openSwatchPop(btn, (hex) => {
     if (host) host.focus();
     const s = getSelection(); s.removeAllRanges(); s.addRange(saved);
     // foreColor sai como <font color>; hiliteColor como <span style="background-color">
     // — ambos disparam 'input' e sincronizam o bloco (mesmo caminho dos .markbtn).
-    const ok = document.execCommand(btn.dataset.cmd, false, hex);
-    if (btn.dataset.cmd === 'hiliteColor' && !ok) document.execCommand('backColor', false, hex);
+    const p = parseColor(hex);
+    const applyHex = p?.hex || hex;
+    const ok = document.execCommand(btn.dataset.cmd, false, applyHex);
+    if (btn.dataset.cmd === 'hiliteColor' && !ok) document.execCommand('backColor', false, applyHex);
+    if (btn.dataset.cmd === 'hiliteColor') paintFmtColorButtons({ back: hex });
+    else paintFmtColorButtons({ fore: hex });
     updateFmtbar();
-  });
+  }, current);
 }));
 
 // trilha A (t2): abre o mini-editor de URL (aplica createLink / edita / remove <a>)
@@ -7894,6 +7848,64 @@ function anchorInSelection(sel) {
   let n = sel && sel.anchorNode;
   while (n && n.nodeType === 3) n = n.parentNode;
   return (n && n.closest && n.closest('#pages [contenteditable] a')) || null;
+}
+
+/** Pinta os botões A (texto / highlight) com a cor atual. */
+function paintFmtColorButtons({ fore, back } = {}) {
+  const foreBtn = fmtbar.querySelector('.cb-fore');
+  const backBtn = fmtbar.querySelector('.cb-back');
+  if (foreBtn && fore) {
+    const p = parseColor(fore);
+    const hex = p?.hex || (typeof fore === 'string' ? fore : null);
+    if (hex) {
+      foreBtn.style.borderBottomColor = hex;
+      foreBtn.dataset.color = p ? withAlpha(p.hex, p.alpha) : hex;
+    }
+  }
+  if (backBtn && back) {
+    const p = parseColor(back);
+    if (p) {
+      const css = withAlpha(p.hex, p.alpha);
+      backBtn.style.background = css;
+      backBtn.dataset.color = css;
+    } else if (typeof back === 'string' && back && back !== 'false' && back !== 'transparent') {
+      backBtn.style.background = back;
+      backBtn.dataset.color = back;
+    }
+  }
+}
+
+/** Cores sob a seleção/caret. */
+function colorsFromFmtSelection() {
+  let fore = null;
+  let back = null;
+  try {
+    const v = document.queryCommandValue('foreColor');
+    if (v && v !== 'false') fore = v;
+  } catch { /* */ }
+  try {
+    const v = document.queryCommandValue('hiliteColor') || document.queryCommandValue('backColor');
+    if (v && v !== 'false' && v !== 'transparent') back = v;
+  } catch { /* */ }
+  const sel = getSelection();
+  if (sel?.anchorNode) {
+    let n = sel.anchorNode;
+    if (n.nodeType === 3) n = n.parentNode;
+    while (n && n !== pagesEl) {
+      if (n.nodeType === 1) {
+        const bg = n.style?.backgroundColor || n.style?.background;
+        if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') back = bg;
+        if (n.style?.color) { fore = n.style.color; break; }
+        if (n.tagName === 'FONT' && n.getAttribute('color')) {
+          fore = n.getAttribute('color');
+          break;
+        }
+      }
+      if (n.classList?.contains('b') || n.classList?.contains('page')) break;
+      n = n.parentNode;
+    }
+  }
+  return { fore, back };
 }
 
 function updateFmtbar() {
@@ -7913,6 +7925,7 @@ function updateFmtbar() {
     b.classList.toggle('on', document.queryCommandState(b.dataset.cmd)));
   // trilha A (t2): reflete se a seleção está sobre um link existente
   fmtbar.querySelector('.linkbtn').classList.toggle('on', !!anchorInSelection(sel));
+  paintFmtColorButtons(colorsFromFmtSelection());
   const blk = isMiolo ? blockOf(host.dataset.id) : null;
   // só troca o valor do <select> se o tipo do bloco estiver entre as opções (ex.: callout
   // não está na lista — mantém o dropdown como estava em vez de ficar num estado inválido)

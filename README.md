@@ -24,6 +24,20 @@ fonte, o export PNG e o **Converter com IA** dependem de `fetch` de mesma origem
 > (`python3 -m http.server 5280 --directory gerador-relatorios`). O botão
 > **Converter com IA** só funciona com o `server.mjs`, que roda o CLI do Claude.
 
+## UI compartilhada (anti-retrabalho)
+
+Tokens, shells e componentes de interface vivem em:
+
+| Recurso | Path |
+|---|---|
+| Contrato (LLM + humanos) | [`UI.md`](UI.md) |
+| Registry machine-readable | [`ui/registry.js`](ui/registry.js) |
+| Catálogo vivo (storybook estático) | [`ui/catalog.html`](ui/catalog.html) |
+| CSS / tokens | [`paradigma.css`](paradigma.css) |
+
+**Regra:** antes de criar UI, consulte o registry. Status `ready` → importar.
+Não reimplementar. Detalhes em `UI.md` e `AGENTS.md`.
+
 ## Deploy no GitHub Pages
 
 O app é **100% estático** — HTML + módulos ES, sem build. O `server.mjs` é

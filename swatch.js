@@ -2,10 +2,8 @@
  *
  *   openSwatchPop(anchor, pick, current, opts)
  *     anchor  — elemento que ancora o popover (o botão de cor)
- *     pick    — callback(cor) chamado ao escolher/ajustar opacidade; o popover fecha sozinho
- *               ao ESCOLHER uma cor (chip/nomeada/hex+Enter). Contrato retrocompatível: `cor`
- *               sai como "#RRGGBB" quando opacidade = 100% (igual sempre foi — nada quebra nos
- *               consumidores atuais) e como "rgba(r,g,b,a)" quando < 100%. Nunca outro formato.
+ *     pick    — callback(cor) ao vivo (chip/nomeada/HEX/opacidade). Contrato: `cor` sai como
+ *               "#RRGGBB" em 100% de opacidade e "rgba(r,g,b,a)" abaixo disso.
  *     current — cor atual (destaca o chip/nomeada certos). Aceita "#RRGGBB"/"#RGB" (opacidade
  *               assumida 100%) OU "rgba(r,g,b,a)"/"rgb(r,g,b)" de entrada — nesse caso o hex vira
  *               o destaque e o alpha inicializa o slider.
@@ -13,6 +11,10 @@
  *               próprio controle, ex. o watermark do gráfico).
  *               { paper:true } preview/HEX com base branca sob a cor com alpha (como o papel
  *               do PDF) em vez do xadrez — use no fundo do Callout. Default: opacity=true.
+ *
+ * Fluxo: clicar nomeada/complementar SELECIONA a cor (atualiza HEX + .on + preview) e aplica
+ * via pick com a opacidade atual do slider — NÃO fecha o popover, pra o slider modular a cor
+ * recém-escolhida. Fecha com Enter no HEX ou clique fora.
  *
  * Quatro seções: (1) cores nomeadas da marca, (2) complementares por tom, (3) HEX manual,
  * (4) opacidade (opcional). O CSS é injetado uma vez pelo próprio módulo — nenhum host precisa
@@ -89,20 +91,30 @@ export function openSwatchPop(anchor, pick, current, opts) {
   const showOpacity = !(opts && opts.opacity === false);
   const paperBase = !!(opts && opts.paper); // base branca sob alpha (papel do PDF)
   const parsed = parseColor(current);
-  const cur = parsed ? parsed.hex : null;
-  let alpha = parsed ? parsed.alpha : 1;   // 0..1 — só o slider de Opacidade muda isso depois
-  // escolher um chip/nomeada/hex aplica com a opacidade ATUAL do slider e fecha (comportamento
-  // de sempre); a opacidade em si é um eixo independente do matiz, por isso não reseta ao trocar de cor.
-  const choose = (hex) => { pick(withAlpha(hex, alpha)); closeSwatchPop(); };
+  // selectedHex = matiz em edição (muda ao clicar nomeada/complementar/HEX válido)
+  let selectedHex = parsed ? parsed.hex : null;
+  let alpha = parsed ? parsed.alpha : 1;   // 0..1 — só o slider de Opacidade muda isso
   swatchPop = document.createElement('div');
   swatchPop.className = 'swatch-pop' + (paperBase ? ' paper-base' : '');
 
   const section = (label) => { const h = document.createElement('div'); h.className = 'sp-label'; h.textContent = label; swatchPop.append(h); };
-  const chip = (hex) => {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'sp-chip'; b.style.background = hex;
-    if (cur === normHex(hex)) b.classList.add('on');
-    return b;
+
+  // refs preenchidos abaixo (selectColor precisa de inp/paintPreview/markOn)
+  let inp, paintPreview, markOn;
+
+  /** Seleciona matiz: atualiza HEX + .on + preview; aplica com alpha atual; NÃO fecha. */
+  const selectColor = (hex, { close = false } = {}) => {
+    const h = normHex(hex);
+    if (!h) return;
+    selectedHex = h;
+    if (inp) {
+      inp.value = h;
+      inp.classList.remove('bad');
+    }
+    markOn?.(h);
+    paintPreview?.();
+    pick(withAlpha(h, alpha));
+    if (close) closeSwatchPop();
   };
 
   section('Cores nomeadas');
@@ -110,11 +122,12 @@ export function openSwatchPop(anchor, pick, current, opts) {
   NAMED_COLORS.forEach(({ name, hex }) => {
     const row = document.createElement('button');
     row.type = 'button'; row.className = 'sp-namerow'; row.title = hex;
-    if (cur === normHex(hex)) row.classList.add('on');
+    row.dataset.hex = normHex(hex) || hex;
+    if (selectedHex === normHex(hex)) row.classList.add('on');
     const c = document.createElement('span'); c.className = 'sp-swatch'; c.style.background = hex;
     const t = document.createElement('span'); t.textContent = name;
     row.append(c, t);
-    row.onclick = () => choose(hex);
+    row.onclick = () => selectColor(hex);
     named.append(row);
   });
   swatchPop.append(named);
@@ -123,25 +136,37 @@ export function openSwatchPop(anchor, pick, current, opts) {
   const grid = document.createElement('div'); grid.className = 'sp-grid';
   SWATCH_FAMILIES.forEach(({ name, colors }) => {
     colors.forEach((hex, i) => {
-      const b = chip(hex);
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'sp-chip'; b.style.background = hex;
+      b.dataset.hex = normHex(hex) || hex;
       b.title = `${name} ${SWATCH_VARIANTS[i]} · ${hex}`;
-      b.onclick = () => choose(hex);
+      if (selectedHex === normHex(hex)) b.classList.add('on');
+      b.onclick = () => selectColor(hex);
       grid.append(b);
     });
   });
   swatchPop.append(grid);
 
+  markOn = (hex) => {
+    const h = normHex(hex);
+    swatchPop.querySelectorAll('.sp-namerow.on, .sp-chip.on').forEach((el) => el.classList.remove('on'));
+    if (!h) return;
+    swatchPop.querySelectorAll('.sp-namerow, .sp-chip').forEach((el) => {
+      if (normHex(el.dataset.hex) === h) el.classList.add('on');
+    });
+  };
+
   section('HEX');
   const row = document.createElement('div'); row.className = 'sp-hex';
-  const inp = document.createElement('input');
-  inp.type = 'text'; inp.placeholder = '#RRGGBB'; inp.value = cur || '';
+  inp = document.createElement('input');
+  inp.type = 'text'; inp.placeholder = '#RRGGBB'; inp.value = selectedHex || '';
   inp.spellcheck = false; inp.setAttribute('aria-label', 'Cor em HEX');
   const preview = document.createElement('span'); preview.className = 'sp-swatch';
   // pinta o preview com o hex do campo + a opacidade atual do slider.
   // <100%: xadrez (default) OU base branca (opts.paper) — no callout a base branca
   // mostra como a tinta a 10% fica no papel do PDF.
-  const paintPreview = () => {
-    const h = normHex(inp.value);
+  paintPreview = () => {
+    const h = normHex(inp.value) || selectedHex;
     preview.classList.remove('checker', 'paper');
     if (h && alpha < 1) {
       const r = parseInt(h.slice(1, 3), 16), g = parseInt(h.slice(3, 5), 16), b = parseInt(h.slice(5, 7), 16);
@@ -152,9 +177,24 @@ export function openSwatchPop(anchor, pick, current, opts) {
       preview.style.background = h || 'transparent';
     }
   };
-  const apply = () => { const h = normHex(inp.value); if (h) choose(h); else inp.classList.add('bad'); };
-  inp.oninput = () => { const h = normHex(inp.value); inp.classList.toggle('bad', inp.value.trim() !== '' && !h); paintPreview(); };
-  inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); } };
+  // Enter no HEX: confirma e fecha (atalho de “pronto”)
+  const commitHex = () => {
+    const h = normHex(inp.value);
+    if (h) selectColor(h, { close: true });
+    else inp.classList.add('bad');
+  };
+  inp.oninput = () => {
+    const h = normHex(inp.value);
+    inp.classList.toggle('bad', inp.value.trim() !== '' && !h);
+    if (h) {
+      selectedHex = h;
+      markOn(h);
+      // preview ao vivo enquanto digita; não fecha
+      pick(withAlpha(h, alpha));
+    }
+    paintPreview();
+  };
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commitHex(); } };
   paintPreview();
   row.append(preview, inp);
   swatchPop.append(row);
@@ -168,16 +208,16 @@ export function openSwatchPop(anchor, pick, current, opts) {
     slider.setAttribute('aria-label', 'Opacidade');
     slider.setAttribute('data-snaps', '0,10,25,50,75,100');
     const val = document.createElement('span'); val.className = 'sp-opval'; val.textContent = slider.value + '%';
-    // decisão: aplica em tempo real no 'input' (sem fechar o popover) — diferente de choose(),
-    // que aplica+fecha. Fechar a cada tick do slider tornaria o ajuste inutilizável; manter
-    // aberto deixa ver o preview mudando ao vivo, como um color picker moderno. Modula a cor
-    // ATUAL (`cur`), já que trocar de matiz aqui dentro (chip/nomeada/hex) fecha o popover.
+    // aplica em tempo real na cor SELECIONADA (selectedHex) — se o user clicou em
+    // Paradigma Aqua e depois arrasta o slider, o alpha modula aquele hex, não o initial.
     // enhanceRange usa capture: o ímã roda antes deste handler e o value já vem snappado.
     slider.oninput = () => {
       alpha = +slider.value / 100;
       val.textContent = slider.value + '%';
       paintPreview();
-      pick(withAlpha(cur || '#000000', alpha));
+      const h = normHex(inp.value) || selectedHex || '#000000';
+      selectedHex = normHex(h) || selectedHex;
+      pick(withAlpha(selectedHex || '#000000', alpha));
     };
     oprow.append(slider, val);
     swatchPop.append(oprow);

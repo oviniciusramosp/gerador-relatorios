@@ -337,6 +337,7 @@ function bindRangeEdit(input) {
   display.addEventListener('mousedown', (e) => {
     // <label> roubaria o foco pro range
     e.preventDefault();
+    e.stopPropagation();
     display.focus();
     selectAll(display);
   });
@@ -345,12 +346,25 @@ function bindRangeEdit(input) {
     valueOnFocus = input.value;
   });
 
+  // Enter = aplicar (não quebra linha no contenteditable). beforeinput pega
+  // insertParagraph/insertLineBreak que o keydown sozinho às vezes não barra.
+  display.addEventListener('beforeinput', (e) => {
+    if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak') {
+      e.preventDefault();
+    }
+  });
+
   display.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      display.blur(); // blur faz flush imediato
+      e.stopPropagation();
+      clearDelay();
+      // aplica na hora e formata o label (blur faria o mesmo; chamar direto evita race)
+      applyFromRaw(display.textContent, { restoreText: false, change: true });
+      display.blur();
     } else if (e.key === 'Escape') {
       e.preventDefault();
+      e.stopPropagation();
       clearDelay();
       // volta ao valor de quando entrou no campo
       skipSnap.add(input);
@@ -364,6 +378,14 @@ function bindRangeEdit(input) {
 
   display.addEventListener('input', (e) => {
     if (e.isComposing) return;
+    // strip acidental de <br>/<div> se o browser inserir quebra
+    if (display.querySelector('br, div, p')) {
+      const plain = display.textContent;
+      if (display.textContent !== plain || display.childNodes.length > 1) {
+        display.textContent = plain.replace(/\n/g, '');
+        placeCaretEnd(display);
+      }
+    }
     scheduleApply(display.textContent);
   });
 
@@ -372,6 +394,81 @@ function bindRangeEdit(input) {
     // commit imediato ao sair (Enter ou clique fora) — formata o label
     applyFromRaw(display.textContent, { restoreText: false, change: true });
   });
+}
+
+/**
+ * Clique → foco; Enter → commit (sem quebrar linha); Escape → cancel.
+ * Para labels contenteditable com data-edit="off" no range (ex.: raio de imagem
+ * com max digitável > max do slider). Idempotente.
+ *
+ * @param {HTMLElement} display
+ * @param {{
+ *   onCommit?: (raw: string) => void,
+ *   onCancel?: () => void,
+ *   onInput?: (raw: string) => void,
+ * }} [opts]
+ */
+export function wireFieldEditKeys(display, opts = {}) {
+  if (!display || display.dataset.editKeysReady) return display;
+  display.dataset.editKeysReady = '1';
+  display.classList.add('field-edit');
+  if (display.getAttribute('contenteditable') !== 'true') {
+    display.setAttribute('contenteditable', 'true');
+  }
+  display.setAttribute('spellcheck', 'false');
+  if (!display.getAttribute('inputmode')) display.setAttribute('inputmode', 'numeric');
+  if (!display.getAttribute('title')) display.setAttribute('title', 'Clique para digitar');
+
+  let rawOnFocus = display.textContent || '';
+
+  display.addEventListener('mousedown', (e) => {
+    // <label> roubaria o foco pro range
+    e.preventDefault();
+    e.stopPropagation();
+    display.focus();
+    selectAll(display);
+  });
+
+  display.addEventListener('focus', () => {
+    rawOnFocus = display.textContent || '';
+  });
+
+  display.addEventListener('beforeinput', (e) => {
+    if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak') {
+      e.preventDefault();
+    }
+  });
+
+  display.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      opts.onCommit?.(display.textContent || '');
+      display.blur();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      display.textContent = rawOnFocus;
+      opts.onCancel?.();
+      display.blur();
+    }
+  });
+
+  display.addEventListener('input', (e) => {
+    if (e.isComposing) return;
+    if (display.querySelector('br, div, p')) {
+      const plain = (display.textContent || '').replace(/\n/g, '');
+      display.textContent = plain;
+      placeCaretEnd(display);
+    }
+    opts.onInput?.(display.textContent || '');
+  });
+
+  display.addEventListener('blur', () => {
+    opts.onCommit?.(display.textContent || '');
+  });
+
+  return display;
 }
 
 /** Decora um <input type=range data-snaps="…"> com ticks, ímã e valor digitável. Idempotente. */

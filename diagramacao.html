@@ -1598,11 +1598,7 @@
      não o cinza/pequeno padrão de rótulo de campo. Só o TEXTO muda; o <div class="field"> ao
      redor continua o de sempre (empilha o texto sobre o grupo, via aside .field acima). */
   .fieldtitle { color: var(--ink); font-size: .82rem; }
-  /* segment control com ÍCONE em vez de texto (Largura do Resumo) — mesmos ícones/SVGs de
-     COL_ICON (diagramacao.js) usados na "Posição" da imagem; .segment (paradigma.css) já dá o
-     fundo em pílula + estado selecionado violeta, só falta centralizar o svg no lugar do texto. */
-  .segment.iconseg button { display: flex; align-items: center; justify-content: center; }
-  .segment.iconseg svg { width: 16px; height: 16px; display: block; }
+  /* .segment.iconseg → paradigma.css (+ ui-segment.js) */
   /* trilha H (t3): linha "rótulo + valor" do slider (Cantos raio / Tamanho / Logo) — valor
      empurrado pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de
      baixo, como já era). (t4) botão de reset discreto colado ao lado do valor, no mesmo grupo.
@@ -2105,6 +2101,7 @@
             <div class="blockrow"><button data-type="callout"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5a4.5 4.5 0 0 0-2.5 8.25c.4.28.5.7.5 1.05v.7h4v-.7c0-.35.1-.77.5-1.05A4.5 4.5 0 0 0 8 1.5Z"/><path d="M6.5 14h3"/><path d="M7 12.5h2"/></svg></span><span class="lbl">Callout</span></button><button type="button" class="blockmenu" data-styletype="callout" title="Editar estilo do Callout"></button></div>
             <button data-type="table"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2 6.5h12M2 10h12M6.5 3v10"/></svg></span><span class="lbl">Tabela</span></button>
             <button data-type="image"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M3 12l3.4-3.2 2.4 2.2 2.2-2 2 1.8"/></svg></span><span class="lbl">Imagem</span></button>
+            <button data-type="chart" title="Gráfico editável"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2v12h12"/><rect x="4.2" y="8" width="2" height="4" fill="currentColor" stroke="none"/><rect x="7.2" y="5.5" width="2" height="6.5" fill="currentColor" stroke="none"/><rect x="10.2" y="3.5" width="2" height="8.5" fill="currentColor" stroke="none"/></svg></span><span class="lbl">Gráfico</span></button>
             <button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button>
             <button data-type="pagebreak" title="Quebra de página (⌘⏎)"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h8v3H4zM4 11h8v3H4z"/><path d="M1.5 8h3M6.5 8h3M12 8h2.5"/></svg></span><span class="lbl">Quebra de Página</span><span class="sc">⌘⏎</span></button>
           </div>

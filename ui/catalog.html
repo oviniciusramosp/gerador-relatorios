@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UI Catalog · Paradigma</title>
+<link rel="stylesheet" href="../paradigma.css">
+<style>
+  body {
+    min-height: 100dvh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    margin: 0;
+  }
+  .cat-top {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: .85rem 1.1rem; border-bottom: 1px solid var(--hair);
+  }
+  .cat-top h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .cat-top .lead { color: var(--muted); font-size: .78rem; font-stretch: 90%; margin: 0; }
+  .cat-top select {
+    height: var(--ctrl-h); border-radius: var(--ctrl-r);
+  }
+  .cat-layout {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    min-height: 0;
+  }
+  .cat-side {
+    border-right: 1px solid var(--hair);
+    overflow: auto;
+    padding: .75rem;
+    display: grid;
+    gap: .25rem;
+    align-content: start;
+  }
+  .nav-item {
+    display: flex; justify-content: space-between; align-items: baseline; gap: .5rem;
+    padding: .45rem .55rem; border-radius: 7px; color: var(--muted);
+    text-decoration: none; font-size: .8rem; font-stretch: 90%;
+  }
+  .nav-item:hover { background: color-mix(in srgb, var(--lilac) 10%, transparent); color: var(--ink); }
+  .nav-item small { font-size: .62rem; text-transform: uppercase; letter-spacing: .06em; opacity: .75; }
+  .nav-item.ok small { color: var(--mint); }
+  .nav-item.warn small { color: #E8C547; }
+  .nav-item.plan small { color: var(--lilac); }
+  .cat-main {
+    overflow: auto;
+    padding: 1.1rem 1.25rem 3rem;
+    display: grid; gap: 1.25rem; align-content: start;
+  }
+  /* cards vão dentro de #demos — gap no main não os separa */
+  #demos {
+    display: grid;
+    gap: 1.25rem;
+    align-content: start;
+  }
+  .demo-card {
+    border: 1px solid var(--hair); border-radius: 10px;
+    padding: 1rem 1.1rem;
+    background: color-mix(in srgb, var(--lilac) 4%, transparent);
+  }
+  .demo-head {
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;
+    margin-bottom: .55rem;
+  }
+  .demo-head h2 { margin: 0; font-size: 1rem; font-weight: 600; }
+  .demo-id { font-size: .68rem; color: var(--muted); }
+  .badge {
+    font-size: .62rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    padding: .2rem .45rem; border-radius: 999px;
+  }
+  .badge.ok { color: #0a1a12; background: var(--mint); }
+  .badge.warn { color: #1a1608; background: #E8C547; }
+  .badge.plan { color: var(--ink); background: color-mix(in srgb, var(--lilac) 28%, transparent); }
+  .demo-when, .demo-never { margin: .2rem 0; font-size: .78rem; color: var(--muted); line-height: 1.4; }
+  .demo-when strong, .demo-never strong { color: var(--lilac); font-weight: 600; }
+  .demo-import {
+    margin: .55rem 0 .7rem; padding: .55rem .65rem;
+    border-radius: 8px; border: 1px solid var(--hair);
+    background: color-mix(in srgb, var(--ground) 70%, transparent);
+    font-size: .72rem; overflow-x: auto; color: var(--ink);
+  }
+  .demo-body { margin-top: .35rem; max-width: 28rem; }
+  .demo-mod { margin: .35rem 0 0; font-size: .7rem; color: var(--muted); }
+  .stack { display: grid; gap: .65rem; }
+  .row-gap { display: grid; gap: .4rem; }
+  .token-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: .5rem;
+  }
+  .token-cell { display: grid; gap: .3rem; justify-items: start; }
+  .token-swatch {
+    width: 100%; height: 2rem; border-radius: 8px; border: 1px solid var(--hair-strong);
+  }
+  .token-cell code { font-size: .65rem; color: var(--muted); }
+  .icon-row { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .icon-cell {
+    width: 4.5rem; padding: .45rem; border: 1px solid var(--hair); border-radius: 8px;
+    display: grid; place-items: center; gap: .3rem; color: var(--lilac);
+  }
+  .icon-cell code { font-size: .58rem; color: var(--muted); text-align: center; }
+  .focus-demo { display: grid; gap: 1.2rem; padding: .5rem 0; }
+  .focus-sample {
+    padding: .6rem .75rem; background: #fff; color: #111; border-radius: 4px;
+    max-width: 16rem;
+  }
+  .focus-sample.img {
+    height: 5rem; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--violet) 12%, #eee);
+  }
+  .hint { font-size: .78rem; color: var(--muted); margin: 0; line-height: 1.45; }
+  .hint-list {
+    margin: 0; padding-left: 1.1rem; font-size: .78rem; color: var(--muted); line-height: 1.5;
+  }
+  .hint-list code { font-size: .72rem; color: var(--lilac); }
+  .handle-stage {
+    position: relative; min-height: 5rem; padding: 1.5rem 2.5rem;
+    border: 1px dashed var(--hair-strong); border-radius: 8px;
+    background: #f4f4f6; color: #111;
+  }
+  .handle-target {
+    padding: .5rem .75rem; background: #fff; border-radius: 4px;
+    max-width: 12rem; box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+  .fmt-demo {
+    padding: .75rem 1rem; min-height: 3rem; border-radius: 8px;
+    border: 1px solid var(--hair); background: #fff; color: #111;
+    outline: none; line-height: 1.45;
+  }
+  .fmt-demo:focus { box-shadow: inset 0 0 0 1px var(--violet); }
+  .doc-banner {
+    border: 1px solid var(--hair-strong); border-radius: 10px;
+    padding: .85rem 1rem; margin-bottom: .25rem;
+    background: color-mix(in srgb, var(--violet) 12%, transparent);
+    font-size: .82rem; line-height: 1.45; color: var(--ink);
+  }
+  .doc-banner a { color: var(--mint); }
+  @media (max-width: 800px) {
+    .cat-layout { grid-template-columns: 1fr; }
+    .cat-side { display: none; }
+  }
+</style>
+</head>
+<body>
+  <header class="cat-top">
+    <div>
+      <h1 id="catTitle">UI Catalog</h1>
+      <p class="lead">Storybook estático · sem build · fonte da verdade visual + registry para LLMs</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:.6rem">
+      <label class="field" style="margin:0">
+        <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden">Filtro</span>
+        <select id="statusFilter" aria-label="Filtrar por status">
+          <option value="all">Todos</option>
+          <option value="ready">ready</option>
+          <option value="partial">partial</option>
+          <option value="planned">planned</option>
+        </select>
+      </label>
+      <nav id="fbNav"></nav>
+    </div>
+  </header>
+  <div class="cat-layout">
+    <aside class="cat-side" id="sideNav" aria-label="Componentes"></aside>
+    <main class="cat-main">
+      <div class="doc-banner">
+        Contrato para agentes: leia <a href="../UI.md"><code>UI.md</code></a> e
+        <a href="./registry.js"><code>ui/registry.js</code></a> <strong>antes</strong> de
+        criar UI em qualquer ferramenta. Regra: importar o que for <code>ready</code>;
+        se faltar, extrair + registrar + demo aqui no mesmo PR.
+      </div>
+      <div id="demos"></div>
+    </main>
+  </div>
+  <script type="module" src="./catalog.js"></script>
+</body>
+</html>

@@ -351,12 +351,15 @@ $('btnSvg').addEventListener('click', async () => {
   } catch (e) { flash('Falhou: ' + e.message, true); }
 });
 
-// ── modo embutido (iframe da Diagramação) ────────────────────────────────────
+// ── modo embutido (iframe do Diagramador / Stories) ─────────────────────────
 // Mesmo protocolo do graficos.js (pdgm-chart-ready / -load / -svg): a timeline
-// entra no relatório como imagem, e o spec vai junto pra poder reabrir e editar.
+// entra no host como imagem, e o spec vai junto pra poder reabrir e editar.
+// ?into=story → label de Stories; default = Relatório (Diagramador).
 if (new URLSearchParams(location.search).has('embed')) {
+  const into = new URLSearchParams(location.search).get('into');
+  const importLabel = into === 'story' ? 'Importar para o Story' : 'Importar para o Relatório';
   const b = document.createElement('button');
-  b.id = 'btnImport'; b.className = 'primary'; b.textContent = 'Importar para o Relatório';
+  b.id = 'btnImport'; b.className = 'primary'; b.textContent = importLabel;
   document.querySelector('header nav').append(b);   // extrema direita do header
   b.addEventListener('click', async () => {
     flash('Gerando SVG…');

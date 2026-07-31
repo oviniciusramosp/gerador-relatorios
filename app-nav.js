@@ -18,6 +18,7 @@ const ICO = {
   diagramacao: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2A.5.5 0 0 1 4 1.5Z"/><path d="M9.5 1.5V4.5H12.5M5.5 8h5M5.5 10.5h5M5.5 13h3"/></svg>`,
   timelines: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v10M3 5h6.5a1.5 1.5 0 0 1 0 3H5.5a1.5 1.5 0 0 0 0 3H13"/></svg>`,
   stories: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="1.5" width="8" height="13" rx="1.5"/><path d="M7 12.5h2"/></svg>`,
+  'ui-catalog': `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>`,
 };
 
 /** @type {AppNavItem[]} */
@@ -27,6 +28,7 @@ export const APP_NAV_ITEMS = [
   { id: 'diagramacao', href: 'diagramacao.html', label: 'Diagramador', icon: ICO.diagramacao },
   { id: 'timelines', href: 'timelines.html', label: 'Linhas do Tempo', icon: ICO.timelines },
   { id: 'stories', href: 'stories.html', label: 'Criador de Stories', icon: ICO.stories },
+  { id: 'ui-catalog', href: 'ui/catalog.html', label: 'UI Catalog', icon: ICO['ui-catalog'] },
 ];
 
 const CHEV = `<svg class="app-nav-chev" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -164,17 +166,36 @@ function ensureCss() {
   document.head.appendChild(s);
 }
 
+/** Estamos sob /ui/ ? (catálogo em subpasta — hrefs do menu precisam de ../) */
+function inUiDir(pathname = typeof location !== 'undefined' ? location.pathname : '') {
+  const p = String(pathname || '');
+  return /\/ui\//.test(p) || /\/ui$/.test(p);
+}
+
+/** Resolve href do menu a partir da página atual (root vs ui/). */
+export function resolveAppNavHref(href, pathname = typeof location !== 'undefined' ? location.pathname : '') {
+  const h = String(href || '');
+  if (inUiDir(pathname)) {
+    if (h.startsWith('ui/')) return h.slice(3); // ui/catalog.html → catalog.html
+    return '../' + h;
+  }
+  return h;
+}
+
 /** Detecta o id da ferramenta pela URL atual. */
 export function detectAppNavId(pathname = typeof location !== 'undefined' ? location.pathname : '') {
-  const base = String(pathname || '').split('/').pop() || '';
+  const path = String(pathname || '');
+  const base = path.split('/').pop() || '';
   const lower = base.toLowerCase();
+  if (lower === 'catalog.html' || /\/ui\/catalog/i.test(path)) return 'ui-catalog';
   if (!lower || lower === 'index.html') return 'index';
   for (const it of APP_NAV_ITEMS) {
-    if (it.href === lower) return it.id;
+    const leaf = it.href.split('/').pop();
+    if (leaf === lower || it.href === lower) return it.id;
   }
   // path sem .html (Pages às vezes serve /stories)
   for (const it of APP_NAV_ITEMS) {
-    if (it.id !== 'index' && lower.startsWith(it.id)) return it.id;
+    if (it.id !== 'index' && it.id !== 'ui-catalog' && lower.startsWith(it.id)) return it.id;
   }
   return 'index';
 }
@@ -237,7 +258,7 @@ export function initAppNav(opts = {}) {
 
   for (const it of APP_NAV_ITEMS) {
     const a = document.createElement('a');
-    a.href = it.href;
+    a.href = resolveAppNavHref(it.href);
     a.setAttribute('role', 'menuitem');
     a.dataset.id = it.id;
     if (it.id === current) a.setAttribute('aria-current', 'page');

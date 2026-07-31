@@ -12,18 +12,28 @@ Gerador de relatórios da Paradigma: **HTML + módulos ES**, sem build, sem
 
 - Entrada local: `node --watch server.mjs` → http://localhost:5280
 - Documentação de produto e decisões medidas: `README.md`
+- **UI / tokens / reuso de componentes:** `UI.md` + catálogo `ui/catalog.html`
+  + registry `ui/registry.js` (**obrigatório** antes de UI nova)
 - Instruções de visão (IA): `ia-instrucoes.md`, `ia-timeline.md`
 
 ## Antes de mudar código
 
 1. **Ler o código e os arquivos envolvidos.** Decisões com base em fatos do
    repo, não em achismo.
-2. **Identificar o contrato** que a mudança toca (tabela abaixo). Se tocar
+2. **Se a mudança é de UI** (botão, segment, popover, sidebar, ícone, cor,
+   alça, fmtbar…): ler `UI.md` e consultar `ui/registry.js`. Componente
+   `ready` → **importar**; proibido reimplementar. Se faltar, extrair módulo +
+   registrar + demo no catálogo no **mesmo PR**. Ver regra completa em `UI.md`.
+   **Não** colocar instruções/didática na UI por conta própria (`.hint`,
+   “como usar…”); só se o usuário pedir — e preferir **tooltip/`title`**,
+   não texto permanente.
+3. **Identificar o contrato** que a mudança toca (tabela abaixo). Se tocar
    contrato → teste de regressão no mesmo PR.
-3. **Preferir aditivo.** Campo novo, default seguro, feature flag / degradação
+4. **Preferir aditivo.** Campo novo, default seguro, feature flag / degradação
    no Pages. Não renomear nem remover campos de arquivo sem migrator.
-4. **Não introduzir build step** (Vite, bundler, TS obrigatório) sem pedido
-   explícito — quebra a premissa do Pages e do README.
+5. **Não introduzir build step** (Vite, bundler, TS obrigatório, Storybook npm)
+   sem pedido explícito — quebra a premissa do Pages e do README. O “storybook”
+   deste repo é estático: `ui/catalog.html`.
 
 ## Commits (obrigatório para agentes)
 
@@ -125,6 +135,10 @@ interno pode refatorar se testes e migrator cobrirem o disco.
 | Coisa | Onde |
 |---|---|
 | Módulo de domínio | raiz (`chart.js`, `timeline.js`, `doc-format.js`…) |
+| Módulo de UI compartilhada | raiz (`ui-segment.js`, `ui-icons.js`, `swatch.js`…) |
+| Tokens / shells CSS | `paradigma.css` |
+| Catálogo vivo + registry UI | `ui/catalog.html`, `ui/registry.js` |
+| Contrato de UI (LLM + humanos) | `UI.md` |
 | Teste | `test-<mesmo-conceito>.mjs` na raiz |
 | Fixture de contrato | `fixtures/` |
 | Scripts de dev/CI | `tools/` |
@@ -148,6 +162,8 @@ contrato. Pasta cosméticas sem extração de funções = zero escalabilidade.
 ## Checklist de feature nova
 
 - [ ] Contrato identificado (ou “nenhum — só UI/interno”).
+- [ ] **UI:** consultei `UI.md` / `ui/registry.js`; `ready` importado (não copiado).
+- [ ] **UI nova:** se extraí do monólito → registry + demo em `ui/catalog.html`.
 - [ ] Mudança aditiva ou com migrator + fixture.
 - [ ] Teste do que quebraria calado (`test-*.mjs` ou assert no existente).
 - [ ] Pages: se não há server, o fluxo ainda funciona ou degrada limpo.

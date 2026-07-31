@@ -3,11 +3,11 @@
  * - lista de ferramentas sem um href usado no index
  */
 import assert from 'node:assert/strict';
-import { APP_NAV_ITEMS, detectAppNavId } from './app-nav.js';
+import { APP_NAV_ITEMS, detectAppNavId, resolveAppNavHref } from './app-nav.js';
 
 assert.ok(APP_NAV_ITEMS.length >= 4);
 const ids = new Set(APP_NAV_ITEMS.map((i) => i.id));
-for (const need of ['index', 'graficos', 'diagramacao', 'timelines', 'stories']) {
+for (const need of ['index', 'graficos', 'diagramacao', 'timelines', 'stories', 'ui-catalog']) {
   assert.ok(ids.has(need), `falta item ${need}`);
 }
 for (const it of APP_NAV_ITEMS) {
@@ -25,5 +25,12 @@ assert.equal(detectAppNavId('/repo/index.html'), 'index');
 assert.equal(detectAppNavId('/repo/'), 'index');
 assert.equal(detectAppNavId('/repo/stories'), 'stories');
 assert.equal(detectAppNavId('/repo/unknown.html'), 'index');
+assert.equal(detectAppNavId('/repo/ui/catalog.html'), 'ui-catalog');
+assert.equal(detectAppNavId('catalog.html'), 'ui-catalog');
+
+assert.equal(resolveAppNavHref('stories.html', '/repo/index.html'), 'stories.html');
+assert.equal(resolveAppNavHref('stories.html', '/repo/ui/catalog.html'), '../stories.html');
+assert.equal(resolveAppNavHref('ui/catalog.html', '/repo/ui/catalog.html'), 'catalog.html');
+assert.equal(resolveAppNavHref('ui/catalog.html', '/repo/stories.html'), 'ui/catalog.html');
 
 console.log('test-app-nav: ok');
