@@ -4,16 +4,10 @@
     {
       "name": "gerador",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["server.mjs"],
-      "port": 5180,
-      "autoPort": true
-    },
-    {
-      "name": "gerador-alt",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["server.mjs"],
-      "port": 5181,
-      "autoPort": true
+      "//": "Config ÚNICA de propósito. Antes havia uma 'gerador-alt' na 5181 e autoPort ligado nas duas: cada sessão subia mais um servidor numa porta nova, e sobravam vários no ar com versões diferentes do código — o erro na tela vinha de um processo velho, de um bug já corrigido. --watch reinicia ao editar server.mjs. Porta 5280 (não 5180): a 5180 é a padrão do MCP do Figma e vivia ocupada.",
+      "runtimeArgs": ["--watch", "server.mjs"],
+      "port": 5280,
+      "autoPort": false
     }
   ]
 }

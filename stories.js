@@ -10,6 +10,7 @@
 
 import { enhanceAll, wireFieldEditKeys } from './range-snap.js';
 import { deserializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';
+import { makeZip } from './zip-lite.js';
 import { projectBaseName, projectFormatFromName } from './project-link.js';
 import { initFeedback } from './feedback.js';
 import { initAppNav } from './app-nav.js';
@@ -485,6 +486,19 @@ function applyImgBorderToFrame(frame, b) {
     frame.style.border = 'none';
   }
 }
+/**
+ * Raio só no frame + overflow:hidden clipa o SVG/img.
+ * (Não pôr border-radius no miolo — fica mais redondo que a borda.)
+ * box-shadow do próprio frame não é cortado pelo overflow:hidden.
+ */
+function applyImgRadius(frame, b) {
+  if (!frame) return;
+  frame.style.borderRadius = imgRadiusOf(b) + 'px';
+  frame.style.overflow = 'hidden';
+  frame.querySelectorAll('img, .img-slot').forEach((node) => {
+    node.style.borderRadius = '';
+  });
+}
 /** Largura em px da imagem (scale % da safe). */
 function colWidthOf(b) {
   return blockWidthPx(b, state.doc.marginMode);
@@ -515,8 +529,6 @@ function buildImageEl(b) {
 
   const frame = document.createElement('div');
   frame.className = 'img-frame';
-  const rad = imgRadiusOf(b);
-  frame.style.borderRadius = rad + 'px';
   frame.style.height = '100%';
   frame.style.boxShadow = imgShadowCss(imgShadowOf(b));
   applyImgBorderToFrame(frame, b);
@@ -530,13 +542,11 @@ function buildImageEl(b) {
     img.style.width = '100%';
     img.style.height = '100%';
     img.style.display = 'block';
-    img.style.borderRadius = rad + 'px';
     img.style.objectFit = 'cover';
     frame.appendChild(img);
   } else {
     const slot = document.createElement('div');
     slot.className = 'img-slot';
-    slot.style.borderRadius = rad + 'px';
     if (state.editing) {
       slot.textContent = b.chart
         ? (b.chart.kind === 'timeline' ? 'Linha do tempo…' : 'Gráfico…')
@@ -546,6 +556,8 @@ function buildImageEl(b) {
     }
     frame.appendChild(slot);
   }
+  // raio + clip no frame; SVG/img sem border-radius próprio
+  applyImgRadius(frame, b);
   el.appendChild(frame);
   return el;
 }
@@ -701,8 +713,9 @@ function storyLogoSvg(lg) {
   // aceita #hex ou rgba (opacidade do swatch)
   const color = lg.color || '#000000';
   const inner = L.inner.replace(/currentColor/g, color);
-  return `<svg width="${+w.toFixed(1)}" height="${+h.toFixed(1)}" viewBox="0 0 ${L.w} ${L.h}"`
-    + ` preserveAspectRatio="xMidYMid meet" aria-hidden="true">${inner}</svg>`;
+  // xmlns: foreignObject (export) parseia como XML — SVG sem namespace some
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${+w.toFixed(1)}" height="${+h.toFixed(1)}"`
+    + ` viewBox="0 0 ${L.w} ${L.h}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${inner}</svg>`;
 }
 
 /** Pinta o .colorfield do logo (hex opaco ou checker/paper com alpha). */
@@ -1835,12 +1848,7 @@ function openImgPanel() {
   const liveEl = () => pagesEl.querySelector(`.blk.image[data-id="${b.id}"]`);
   const paintRadius = (n, { syncText = true } = {}) => {
     b.radius = n;
-    const el = liveEl();
-    if (el) {
-      el.querySelectorAll('.img-frame, img, .img-slot').forEach((node) => {
-        node.style.borderRadius = n + 'px';
-      });
-    }
+    applyImgRadius(liveEl()?.querySelector('.img-frame'), b);
     const radv = imgPanel.querySelector('[data-role="radv"]');
     if (syncText && radv && document.activeElement !== radv) radv.textContent = String(n);
     const range = imgPanel.querySelector('input[data-a="radius"]');
@@ -1880,8 +1888,8 @@ function openImgPanel() {
     const w = imgBorderOf({ border: n });
     if (w > 0) b.border = w;
     else delete b.border;
-    const el = liveEl();
-    applyImgBorderToFrame(el?.querySelector('.img-frame'), b);
+    const frame = liveEl()?.querySelector('.img-frame');
+    applyImgBorderToFrame(frame, b);
     const v = imgPanel.querySelector('[data-role="borderv"]');
     if (v) v.textContent = w + 'px';
     const range = imgPanel.querySelector('input[data-a="border"]');
@@ -3484,7 +3492,7 @@ const EXPORT_CSS = `
     background: none; border-bottom: 0.28em solid var(--hl); padding-bottom: 0.04em;
   }
   .story-page .blk.image { padding: 0; overflow: visible; display: flex; flex-direction: column; }
-  .story-page .blk.image .img-frame { width: 100%; height: 100%; overflow: visible; }
+  .story-page .blk.image .img-frame { width: 100%; height: 100%; overflow: hidden; }
   .story-page .blk.image img {
     width: 100%; height: 100%; display: block; object-fit: cover;
   }
@@ -3493,9 +3501,17 @@ const EXPORT_CSS = `
   .story-page .blk.sticker .sticker-frame,
   .story-page .blk.sticker .sticker-icon { width: 100%; height: 100%; }
   .story-page .blk.sticker .sticker-icon svg { width: 100%; height: 100%; display: block; }
+  /* logo: position/flex só existem em stories.html — sem isso some no foreignObject */
+  .story-page .story-logo {
+    position: absolute; display: flex; align-items: center;
+    z-index: 5; pointer-events: none; box-sizing: border-box;
+  }
+  .story-page .story-logo .story-logo-hit { display: inline-flex; line-height: 0; }
+  .story-page .story-logo svg { display: block; }
 `;
 
-function exportPageNode() {
+/** @param {number} [pageIndex] índice da página (default = atual) */
+function exportPageNode(pageIndex = state.pageIndex) {
   // re-render sem chrome de edição / safe / UI
   const prevEdit = state.editing;
   const prevUi = state.doc.uiPreview;
@@ -3503,8 +3519,10 @@ function exportPageNode() {
   state.editing = false;
   state.doc.uiPreview = false;
   state.doc.showSafe = false;
-  const page = currentPage();
-  const node = renderStoryPage(page, state.pageIndex, state.doc.pages.length);
+  const pages = state.doc.pages;
+  const idx = clampPageIndex(pageIndex, pages.length);
+  const page = pages[idx];
+  const node = renderStoryPage(page, idx, pages.length);
   state.editing = prevEdit;
   state.doc.uiPreview = prevUi;
   state.doc.showSafe = prevSafe;
@@ -3512,55 +3530,102 @@ function exportPageNode() {
   return node;
 }
 
-async function pageToCanvas() {
+/**
+ * Serializa o artboard como XHTML (void tags self-close, & escapado).
+ * outerHTML é HTML5 e quebra o parse XML do SVG (ex.: <img> sem />).
+ */
+function serializeExportXhtml(node) {
+  return new XMLSerializer().serializeToString(node);
+}
+
+/** Rasteriza uma página → canvas 1080×1920. */
+async function pageToCanvas(pageIndex = state.pageIndex) {
   const fontCss = await plexFontFace();
+  const pages = state.doc.pages;
+  const idx = clampPageIndex(pageIndex, pages.length);
+  const page = pages[idx];
   // stickers: SVG precisa estar no cache (inline) antes do foreignObject
-  await preloadPageStickers(currentPage());
-  const node = exportPageNode();
+  await preloadPageStickers(page);
+  const node = exportPageNode(idx);
   // rasteriza o artboard de TRABALHO (360×640) e escala p/ Instagram (1080×1920)
-  const html = node.outerHTML;
+  const html = serializeExportXhtml(node);
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${PAGE_W}" height="${PAGE_H}">` +
     `<foreignObject width="100%" height="100%">` +
     `<div xmlns="http://www.w3.org/1999/xhtml" style="width:${PAGE_W}px;height:${PAGE_H}px;margin:0;padding:0">` +
     `<style>${fontCss}${EXPORT_CSS}</style>${html}</div></foreignObject></svg>`;
-  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
-  try {
-    const img = new Image();
-    img.decoding = 'async';
-    await new Promise((res, rej) => {
-      img.onload = () => res();
-      img.onerror = () => rej(new Error('Falha ao rasterizar a página'));
-      img.src = url;
-    });
-    await img.decode().catch(() => {});
-    const c = document.createElement('canvas');
-    c.width = EXPORT_W;
-    c.height = EXPORT_H;
-    const ctx = c.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.fillStyle = currentPage().bg || DEFAULT_BG;
-    ctx.fillRect(0, 0, EXPORT_W, EXPORT_H);
-    // × EXPORT_SCALE (3): 360→1080, 640→1920
-    ctx.drawImage(img, 0, 0, PAGE_W, PAGE_H, 0, 0, EXPORT_W, EXPORT_H);
-    return c;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  // data: URL (não blob:): blob+foreignObject taint o canvas no Chromium
+  // ("Tainted canvases may not be exported") e toBlob/toDataURL falham.
+  const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  const img = new Image();
+  img.decoding = 'async';
+  await new Promise((res, rej) => {
+    img.onload = () => res();
+    img.onerror = () => rej(new Error(`Falha ao rasterizar a página ${idx + 1}`));
+    img.src = url;
+  });
+  await img.decode().catch(() => {});
+  const c = document.createElement('canvas');
+  c.width = EXPORT_W;
+  c.height = EXPORT_H;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = page.bg || DEFAULT_BG;
+  ctx.fillRect(0, 0, EXPORT_W, EXPORT_H);
+  // × EXPORT_SCALE (3): 360→1080, 640→1920
+  ctx.drawImage(img, 0, 0, PAGE_W, PAGE_H, 0, 0, EXPORT_W, EXPORT_H);
+  return c;
+}
+
+async function canvasToBlob(canvas, mime, quality) {
+  return new Promise((res) => canvas.toBlob(res, mime, quality));
 }
 
 async function exportRaster(mime, quality) {
   const ext = mime === 'image/jpeg' ? 'jpg' : 'png';
   toast(`Gerando ${ext.toUpperCase()}…`);
   try {
-    const canvas = await pageToCanvas();
-    const blob = await new Promise((res) => canvas.toBlob(res, mime, quality));
+    const canvas = await pageToCanvas(state.pageIndex);
+    const blob = await canvasToBlob(canvas, mime, quality);
     if (!blob) throw new Error('Canvas vazio');
     const base = slug(state.doc.title);
     const n = state.pageIndex + 1;
     downloadBlob(blob, `${base}-p${n}.${ext}`);
     toast(`${ext.toUpperCase()} baixado.`);
+  } catch (e) {
+    console.error(e);
+    toast('Falha no export: ' + (e.message || e), true);
+  }
+}
+
+/**
+ * Todas as páginas em um .zip de imagens (evita o browser bloquear N downloads).
+ * Com 1 página, cai no export de página única.
+ */
+async function exportAllRaster(mime, quality) {
+  const ext = mime === 'image/jpeg' ? 'jpg' : 'png';
+  const pages = state.doc.pages;
+  const total = pages.length;
+  if (total <= 1) {
+    await exportRaster(mime, quality);
+    return;
+  }
+  toast(`Gerando ${total} ${ext.toUpperCase()}…`);
+  try {
+    const base = slug(state.doc.title);
+    const entries = [];
+    for (let i = 0; i < total; i++) {
+      toast(`Gerando ${ext.toUpperCase()} ${i + 1}/${total}…`);
+      const canvas = await pageToCanvas(i);
+      const blob = await canvasToBlob(canvas, mime, quality);
+      if (!blob) throw new Error(`Canvas vazio (página ${i + 1})`);
+      const data = new Uint8Array(await blob.arrayBuffer());
+      entries.push({ name: `${base}-p${i + 1}.${ext}`, data });
+    }
+    const zip = makeZip(entries);
+    downloadBlob(zip, `${base}-${ext}.zip`);
+    toast(`${total} ${ext.toUpperCase()} baixados.`);
   } catch (e) {
     console.error(e);
     toast('Falha no export: ' + (e.message || e), true);
@@ -3660,7 +3725,20 @@ function bind() {
   // download menu
   const dlMenu = $('downloadMenu');
   const btnDl = $('btnDownload');
+  function syncDlMulti() {
+    const multi = (state.doc.pages?.length || 0) > 1;
+    dlMenu.querySelectorAll('[data-dl-multi]').forEach((el) => {
+      el.hidden = !multi;
+    });
+    // badge com contagem (ex.: "Todos · 4")
+    const n = state.doc.pages?.length || 0;
+    dlMenu.querySelectorAll('[data-dl-multi] .dl-badge').forEach((b) => {
+      if (b.dataset.dlBadgeBase == null) b.dataset.dlBadgeBase = b.textContent || 'Todos';
+      b.textContent = multi ? `${b.dataset.dlBadgeBase} · ${n}` : b.dataset.dlBadgeBase;
+    });
+  }
   function openDl() {
+    syncDlMulti();
     const r = btnDl.getBoundingClientRect();
     dlMenu.hidden = false;
     const mw = dlMenu.offsetWidth || 200;
@@ -3676,6 +3754,8 @@ function bind() {
   }, true);
   dlMenu.querySelector('[data-dl="png"]').onclick = () => { closeDl(); exportRaster('image/png'); };
   dlMenu.querySelector('[data-dl="jpg"]').onclick = () => { closeDl(); exportRaster('image/jpeg', 0.92); };
+  dlMenu.querySelector('[data-dl="png-all"]').onclick = () => { closeDl(); exportAllRaster('image/png'); };
+  dlMenu.querySelector('[data-dl="jpg-all"]').onclick = () => { closeDl(); exportAllRaster('image/jpeg', 0.92); };
   dlMenu.querySelector('[data-dl="zip"]').onclick = () => { closeDl(); exportZip(); };
 
   $('btnNew').addEventListener('click', newDoc);

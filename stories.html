@@ -494,8 +494,8 @@
   }
   .story-page .blk.image .img-frame {
     width: 100%; height: 100%;
-    /* overflow visible: drop shadow do frame não é cortada; clip fica no img/slot */
-    overflow: visible;
+    /* clipa o SVG/img; box-shadow do frame não é cortado pelo overflow:hidden */
+    overflow: hidden;
   }
   .story-page .blk.image .img-slot {
     width: 100%; height: 100%;
@@ -508,7 +508,7 @@
   }
   .story-page .blk.image img {
     width: 100%; height: 100%; display: block;
-    /* border-radius via inline (b.radius, default 4 como o diagramador) */
+    /* sem border-radius: o .img-frame clipa */
   }
   /* sticker (token etc.): ícone quadrado, SVG inline */
   .story-page .blk.sticker {
@@ -877,8 +877,11 @@
 </header>
 
 <div id="downloadMenu" class="float-menu" hidden>
-  <button type="button" data-dl="png"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="1.5"/><circle cx="6" cy="6" r="1.2"/><path d="M2 11l3.5-3.5L9 11l2-2 3 3"/></svg><span class="dl-label">PNG</span><span class="dl-badge">Página</span></button>
-  <button type="button" data-dl="jpg"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="1.5"/><circle cx="6" cy="6" r="1.2"/><path d="M2 11l3.5-3.5L9 11l2-2 3 3"/></svg><span class="dl-label">JPG</span><span class="dl-badge">Página</span></button>
+  <button type="button" data-dl="png" title="Baixar a página atual em PNG"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="1.5"/><circle cx="6" cy="6" r="1.2"/><path d="M2 11l3.5-3.5L9 11l2-2 3 3"/></svg><span class="dl-label">PNG</span><span class="dl-badge">Página</span></button>
+  <button type="button" data-dl="jpg" title="Baixar a página atual em JPG"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="1.5"/><circle cx="6" cy="6" r="1.2"/><path d="M2 11l3.5-3.5L9 11l2-2 3 3"/></svg><span class="dl-label">JPG</span><span class="dl-badge">Página</span></button>
+  <div class="dl-sep" data-dl-multi role="separator" hidden></div>
+  <button type="button" data-dl="png-all" data-dl-multi hidden title="Baixar todas as páginas em PNG (um .zip)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="1.5"/><circle cx="6" cy="6" r="1.2"/><path d="M2 11l3.5-3.5L9 11l2-2 3 3"/><path d="M11 1.5h1.5A1.5 1.5 0 0 1 14 3v10" stroke-linecap="round"/></svg><span class="dl-label">PNG</span><span class="dl-badge">Todos</span></button>
+  <button type="button" data-dl="jpg-all" data-dl-multi hidden title="Baixar todas as páginas em JPG (um .zip)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="1.5"/><circle cx="6" cy="6" r="1.2"/><path d="M2 11l3.5-3.5L9 11l2-2 3 3"/><path d="M11 1.5h1.5A1.5 1.5 0 0 1 14 3v10" stroke-linecap="round"/></svg><span class="dl-label">JPG</span><span class="dl-badge">Todos</span></button>
   <div class="dl-sep" role="separator"></div>
   <button type="button" data-dl="zip" title="Projeto editável (.pdgm.zip)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.5h5.5L12.5 4.5V14a.5.5 0 0 1-.5.5H4a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/><path d="M9.5 1.5V4.5H12.5"/><path d="M7 1.5v2M7 5v1.2M7 7.7v1.2M7 10.4v1.2"/></svg><span class="dl-label">ZIP</span><span class="dl-badge">Projeto</span></button>
 </div>
