@@ -412,23 +412,27 @@ export function mkPage() {
 
 /**
  * Logo Paradigma no story (doc-level, todas as páginas).
+ * Novo story: Completo, rodapé, centro, 0.7×.
  * on:false = Nenhum; kind: icone | full | nome.
  * pos: header (dentro da safe) | footer (fora, centrado nos 55px = 165 export).
  */
 export function defaultStoriesLogo() {
   return {
-    on: false,
-    kind: 'nome',
-    pos: 'header',
-    align: 'left',
+    on: true,
+    kind: 'full',
+    pos: 'footer',
+    align: 'center',
     color: '#000000',
-    size: 1,
+    size: 0.7,
   };
 }
 
 export function normalizeStoriesLogo(raw) {
   const d = defaultStoriesLogo();
-  if (!raw || typeof raw !== 'object') return { ...d };
+  // doc antigo sem logo: não força o logo novo em projetos salvos
+  if (!raw || typeof raw !== 'object') {
+    return { ...d, on: false };
+  }
   const kind = raw.kind === 'icone' || raw.kind === 'full' || raw.kind === 'nome'
     ? raw.kind
     : d.kind;
@@ -438,8 +442,10 @@ export function normalizeStoriesLogo(raw) {
   return {
     on: raw.on === true,
     kind,
-    pos: raw.pos === 'footer' ? 'footer' : 'header',
-    align: raw.align === 'center' || raw.align === 'right' ? raw.align : 'left',
+    pos: raw.pos === 'footer' ? 'footer' : (raw.pos === 'header' ? 'header' : d.pos),
+    align: raw.align === 'center' || raw.align === 'right' || raw.align === 'left'
+      ? raw.align
+      : d.align,
     color: typeof raw.color === 'string' && raw.color ? raw.color : d.color,
     size,
   };
@@ -693,7 +699,8 @@ export function normalizeStoriesDoc(raw) {
   out.showSafe = out.showSafe !== false;
   out.title = (out.title != null && String(out.title)) || base.title;
   out.hiliteStyle = clampHiliteStyle(out.hiliteStyle);
-  out.logo = normalizeStoriesLogo(out.logo);
+  // doc.logo (cru): se ausente, normalizeStoriesLogo mantém off (legado)
+  out.logo = normalizeStoriesLogo(doc.logo);
   if (!out.blockStyles || typeof out.blockStyles !== 'object') out.blockStyles = {};
   else {
     // só normaliza letterSpacing se presente (aditivo)

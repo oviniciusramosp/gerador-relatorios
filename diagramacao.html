@@ -5,7 +5,30 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Diagramação · Gerador de Relatórios Paradigma</title>
 <link rel="stylesheet" href="paradigma.css">
+<!-- Google Material Symbols: Outlined | Rounded | Sharp + eixos FILL/wght/GRAD/opsz -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&family=Material+Symbols+Sharp:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block">
+<!-- Tabler Icons webfont (https://tablericons.com/) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.46.0/dist/tabler-icons.min.css">
 <style>
+  .material-symbols-outlined,
+  .material-symbols-rounded,
+  .material-symbols-sharp {
+    font-weight: normal; font-style: normal;
+    line-height: 1; letter-spacing: normal; text-transform: none;
+    display: inline-block; white-space: nowrap; word-wrap: normal; direction: ltr;
+    font-feature-settings: 'liga'; -webkit-font-feature-settings: 'liga';
+    -webkit-font-smoothing: antialiased;
+    user-select: none; flex: none;
+  }
+  .material-symbols-outlined { font-family: 'Material Symbols Outlined', sans-serif; }
+  .material-symbols-rounded { font-family: 'Material Symbols Rounded', sans-serif; }
+  .material-symbols-sharp { font-family: 'Material Symbols Sharp', sans-serif; }
+  /* Tabler Icons — glifo no fluxo (tamanho/cor via style inline) */
+  .page .ti, .icon-pop .ti, #iconPanel .ti {
+    font-style: normal; line-height: 1; display: inline-block;
+    vertical-align: middle; user-select: none; flex: none;
+    speak: never; -webkit-font-smoothing: antialiased;
+  }
   /* ===================== app shell (tema escuro, igual gráficos) ===================== */
   body { height: 100dvh; display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
 
@@ -1015,6 +1038,7 @@
   .page .ol.b.ol-as-bullet::before {
     font-weight: 400; font-variant-numeric: normal;
   }
+  /* cor/espessura: typeStyleOf('divider') via applyDividerStyle (⋮ Conteúdo) */
   .page .divider.b { height: 1px; min-height: 1px; background: #D9D9D9; }
 
   /* bloco continuado entre páginas: janela sobre o bloco inteiro (o texto sai por cima/baixo
@@ -1044,6 +1068,58 @@
   }
   .page figure.fig-full   { --b-gap: 10px; }
   .page figure.fig-inline { --b-gap: 8px; }
+
+  /* grid de imagens (1–4 colunas): título/legenda só quando ligados no bloco
+     (todas as colunas reservam o espaço, inclusive placeholder vazio) */
+  .page .imggrid-wrap { margin: 0; --b-gap: 10px; }
+  .page .imggrid-wrap .imggrid { width: 100%; min-width: 0; }
+  /* células usam display:contents (JS) — filhos entram no grid pai e alinham por linha */
+  .page .imggrid-wrap .imggrid-cell { min-width: 0; }
+  .page .imggrid-wrap .figtitle {
+    font-weight: 700; font-size: 8px; line-height: 14px; color: #828080;
+    text-align: left; margin: 0 0 4px; letter-spacing: -0.01em;
+    min-height: 14px; min-width: 0;
+  }
+  .page .imggrid-wrap figcaption {
+    font-style: italic; font-weight: 400; font-size: 8px; line-height: 14px; color: #828080;
+    text-align: justify; margin-top: 8px; letter-spacing: -0.01em;
+    min-height: 14px; min-width: 0;
+  }
+  /* estilo "parágrafo": tipografia do p.b (applyTypeStyle reforça blockStyles.p) */
+  .page .imggrid-wrap[data-capstyle="p"] figcaption {
+    font-style: normal; font-weight: 400; font-size: 10px; line-height: 14px;
+    color: #4E4E4E; text-align: justify; letter-spacing: -0.01em;
+  }
+  /* frame sem fundo: PNG/SVG transparentes usam o papel da página (não #f4f4f6) */
+  .page .imggrid-wrap .imggrid-frame {
+    position: relative; overflow: hidden; background: transparent;
+    min-height: 40px; box-sizing: border-box;
+  }
+  .page .imggrid-wrap .imggrid-frame img {
+    display: block; max-width: 100%; background: transparent;
+  }
+  .page .imggrid-wrap .imggrid-empty {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 4px;
+    border: 1.5px dashed #c8c6d4; border-radius: inherit;
+    background: transparent; color: #9a98a8; cursor: pointer;
+    font-size: 9px; font-stretch: 85%; font-weight: 600; letter-spacing: .02em;
+    padding: 0; width: 100%; height: 100%;
+  }
+  .page .imggrid-wrap .imggrid-empty:hover {
+    border-color: #4E39FF; color: #4E39FF;
+    background: color-mix(in srgb, #4E39FF 6%, transparent);
+  }
+  .page .imggrid-wrap .imggrid-empty-ico {
+    font-size: 16px; line-height: 1; font-weight: 400;
+  }
+  .page.editing .imggrid-wrap .imggrid-has { cursor: pointer; }
+  .page.editing .imggrid-wrap .imggrid-has:hover { outline: 1.5px solid color-mix(in srgb, #4E39FF 45%, transparent); outline-offset: 1px; }
+  .page .imggrid-wrap .figtitle:empty, .page .imggrid-wrap figcaption:empty { min-height: 1lh; }
+  .page.editing .imggrid-wrap .figtitle:empty::before,
+  .page.editing .imggrid-wrap figcaption:empty::before {
+    content: attr(data-ph); color: #bbb;
+  }
 
   /* imagem ancorada na coluna direita (posição livre no eixo Y, arrastável) */
   .page .rimg { position: absolute; left: 0; width: 100%; cursor: grab; }
@@ -1180,14 +1256,54 @@
   #fmtbar.caption-mode .typeselect, #fmtbar.caption-mode .sep { display: none; }
 
   /* menus flutuantes: adicionar imagem (clique na coluna direita) + editar imagem selecionada */
-  #addImgMenu, #imgPanel, #tablePanel, #coverPanel, #logoPanel, #downloadMenu, #blockStylePanel, #idxPanel, #resumoPanel {
+  #addImgMenu, #imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #coverPanel, #logoPanel, #downloadMenu, #blockStylePanel, #idxPanel, #resumoPanel {
     position: fixed; z-index: 40; display: grid; gap: .55rem; width: 232px;
     padding: .7rem; border: 1px solid var(--hair-strong); border-radius: 10px;
     background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
     box-shadow: 0 16px 50px -16px #000;
   }
-  #addImgMenu[hidden], #imgPanel[hidden], #tablePanel[hidden], #coverPanel[hidden], #logoPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden],
+  #addImgMenu[hidden], #imgPanel[hidden], #tablePanel[hidden], #imageGridPanel[hidden], #iconPanel[hidden], #coverPanel[hidden], #logoPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden],
   #idxPanel[hidden], #resumoPanel[hidden] { display: none; }
+  #iconPanel .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #iconPanel .field-val { display: inline-flex; align-items: center; gap: .3rem; }
+  #iconPanel .resetbtn {
+    border: 0; background: transparent; padding: 0 .1rem; margin: 0;
+    color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
+  }
+  #iconPanel .resetbtn:hover { color: var(--ink); }
+  #iconPanel .field {
+    display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted);
+  }
+  #iconPanel .icon-pick-btn {
+    display: flex; align-items: center; gap: .5rem; width: 100%;
+    padding: .4rem .5rem; border: 1px solid var(--hair); border-radius: var(--r);
+    background: transparent; color: var(--ink); cursor: pointer; font-size: .8rem; font-stretch: 85%;
+  }
+  #iconPanel .icon-pick-btn:hover { border-color: var(--hair-strong); }
+  #iconPanel .icon-pick-btn .material-symbols-outlined { font-size: 22px; color: inherit; }
+  #imageGridPanel .img-tc-row { flex-wrap: nowrap; gap: .4rem; }
+  #imageGridPanel .img-tc-row .fieldbtn { flex: 1; min-width: 0; justify-content: center; }
+  #imageGridPanel button:disabled { opacity: .4; cursor: default; }
+  /* stepper de colunas: [−] n [+] */
+  #imageGridPanel .numstep {
+    display: flex; align-items: stretch; gap: 0;
+    border: 1px solid var(--hair); border-radius: var(--ctrl-r);
+    overflow: hidden; height: var(--ctrl-h); background: color-mix(in srgb, var(--lilac) 6%, transparent);
+  }
+  #imageGridPanel .numstep button {
+    width: 2rem; border: 0; background: transparent; color: var(--ink);
+    cursor: pointer; font-size: 1rem; line-height: 1; flex: none;
+  }
+  #imageGridPanel .numstep button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--violet) 16%, transparent);
+  }
+  #imageGridPanel .numstep button:disabled { opacity: .35; cursor: default; }
+  #imageGridPanel .numstep-val {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    font-size: .85rem; font-stretch: 90%; font-weight: 600; color: var(--ink);
+    border-left: 1px solid var(--hair); border-right: 1px solid var(--hair);
+    min-width: 2.2rem; user-select: none;
+  }
   /* menu do botão "Baixar" (PDF/ZIP) — mesmo desenho de botão icone+label do .fieldbtn,
      só que gap menor (é um menu, não um formulário) e sem borda própria por botão. */
   #downloadMenu { gap: .2rem; padding: .35rem; min-width: 220px; }
@@ -1446,7 +1562,7 @@
     /* padding permanente do editor some no PDF */
     .page .idx-section { padding: 0; }
     .page.editing .col-right::after { display: none; }
-    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #chartModal, #linkProjectModal, #syncOfferModal, #freePdfModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
+    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #imageGridPanel, #iconPanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #chartModal, #linkProjectModal, #syncOfferModal, #freePdfModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
     #linkedit { display: none !important; }
   }
 
@@ -1570,7 +1686,7 @@
      MESMA declaração aqui: "aside .field" cobre TODOS os divs assim dentro da sidebar (inclusive
      #blockcol); cada popover flutuante precisa do próprio seletor (idx/resumo/blockStyle inclusos —
      sem isso "Largura" no #idxPanel caía no estilo de texto normal, diferente de "Cores" em <label>). */
-  #imgPanel .field, #tablePanel .field, #coverPanel .field, #logoPanel .field,
+  #imgPanel .field, #tablePanel .field, #imageGridPanel .field, #coverPanel .field, #logoPanel .field,
   #idxPanel .field, #resumoPanel .field, #blockStylePanel .field, aside .field {
     display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted);
   }
@@ -1603,13 +1719,13 @@
      empurrado pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de
      baixo, como já era). (t4) botão de reset discreto colado ao lado do valor, no mesmo grupo.
      `aside` cobre o slider de tamanho do Logo da Paradigma na sidebar esquerda (capa/contracapa). */
-  #imgPanel .field-row, #tablePanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, #idxPanel .field-row, #resumoPanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
-  #imgPanel .field-val, #tablePanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, #idxPanel .field-val, #resumoPanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
-  #imgPanel .resetbtn, #coverPanel .resetbtn, #logoPanel .resetbtn, #blockStylePanel .resetbtn, #idxPanel .resetbtn, #resumoPanel .resetbtn, aside .resetbtn {
+  #imgPanel .field-row, #tablePanel .field-row, #imageGridPanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, #idxPanel .field-row, #resumoPanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #imgPanel .field-val, #tablePanel .field-val, #imageGridPanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, #idxPanel .field-val, #resumoPanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
+  #imgPanel .resetbtn, #imageGridPanel .resetbtn, #coverPanel .resetbtn, #logoPanel .resetbtn, #blockStylePanel .resetbtn, #idxPanel .resetbtn, #resumoPanel .resetbtn, aside .resetbtn {
     border: 0; background: transparent; padding: 0 .1rem; margin: 0;
     color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
   }
-  #imgPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #logoPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover, #idxPanel .resetbtn:hover, #resumoPanel .resetbtn:hover, aside .resetbtn:hover { color: var(--ink); }
+  #imgPanel .resetbtn:hover, #imageGridPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #logoPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover, #idxPanel .resetbtn:hover, #resumoPanel .resetbtn:hover, aside .resetbtn:hover { color: var(--ink); }
   /* picker de símbolo da lista de pontos (menu ⋮) */
   #blockStylePanel .markerpick {
     display: flex; flex-wrap: wrap; gap: .3rem;
@@ -1676,6 +1792,38 @@
   #calloutBar .co-iconbtn:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
   #calloutBar .swatch { width: 24px; height: 24px; border-radius: 5px; }
   #calloutBar .sep { width: 1px; align-self: stretch; margin: 2px 1px; background: var(--hair-strong); }
+
+  /* título com ícone à esquerda — centro vertical; tipografia fica no <hN class="b hN"> */
+  .page .head-wrap {
+    display: flex; align-items: center; gap: 8px;
+    /* tipografia NÃO no envelope — o texto usa .page h1.b etc. (mesmo sem ícone) */
+    font-size: inherit; font-weight: inherit; line-height: inherit;
+  }
+  .page .head-wrap .head-icon {
+    flex: none; display: grid; place-items: center; line-height: 1;
+    align-self: center;
+  }
+  .page .head-wrap .head-icon [class*="material-symbols"] {
+    /* glifo isolado: não herda font-size do título se o envelope pegar estilo */
+    line-height: 1;
+  }
+  .page .head-wrap .head-txt {
+    flex: 1; min-width: 0;
+  }
+  /* bloco Ícones (símbolo sozinho no fluxo) */
+  .page .icon-block {
+    display: flex; align-items: center; justify-content: flex-start;
+    width: 100%; box-sizing: border-box;
+  }
+  .page .icon-block .icon-block-glyph {
+    line-height: 1; display: block;
+  }
+  .page.editing .icon-block { cursor: pointer; }
+  .page.editing .icon-block:hover { background-color: color-mix(in srgb, #4E39FF 5%, transparent); }
+
+  .material-icon-pop .ip-grid .material-symbols-outlined {
+    font-size: 22px; color: var(--ink);
+  }
 
   /* popover do ícone do callout — "Emoji personalizado" + grade dos Ionicons curados */
   .ico-pop {
@@ -2099,10 +2247,12 @@
                  igual aos outros tipos (era 💡, o único emoji da lista); o ícone DENTRO do bloco
                  já criado continua editável/emoji por padrão (picker próprio, ver buildText). -->
             <div class="blockrow"><button data-type="callout"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5a4.5 4.5 0 0 0-2.5 8.25c.4.28.5.7.5 1.05v.7h4v-.7c0-.35.1-.77.5-1.05A4.5 4.5 0 0 0 8 1.5Z"/><path d="M6.5 14h3"/><path d="M7 12.5h2"/></svg></span><span class="lbl">Callout</span></button><button type="button" class="blockmenu" data-styletype="callout" title="Editar estilo do Callout"></button></div>
+            <button data-type="icon" title="Ícone (Google Symbols)"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.2v3.2M8 10.6h.01"/></svg></span><span class="lbl">Ícones</span></button>
             <button data-type="table"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2 6.5h12M2 10h12M6.5 3v10"/></svg></span><span class="lbl">Tabela</span></button>
+            <button data-type="image-grid" title="Até 4 imagens em colunas iguais"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1.5" y="3" width="5.5" height="10" rx="1"/><rect x="9" y="3" width="5.5" height="10" rx="1"/><circle cx="3.5" cy="5.8" r=".7"/><path d="M2.2 11.5l1.5-1.4 1.1 1 1-.9 1 1"/><circle cx="11" cy="5.8" r=".7"/><path d="M9.7 11.5l1.5-1.4 1.1 1 1-.9 1 1"/></svg></span><span class="lbl">Grid de Imagens</span></button>
             <button data-type="image"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M3 12l3.4-3.2 2.4 2.2 2.2-2 2 1.8"/></svg></span><span class="lbl">Imagem</span></button>
             <button data-type="chart" title="Gráfico editável"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2v12h12"/><rect x="4.2" y="8" width="2" height="4" fill="currentColor" stroke="none"/><rect x="7.2" y="5.5" width="2" height="6.5" fill="currentColor" stroke="none"/><rect x="10.2" y="3.5" width="2" height="8.5" fill="currentColor" stroke="none"/></svg></span><span class="lbl">Gráfico</span></button>
-            <button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button>
+            <div class="blockrow"><button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button><button type="button" class="blockmenu" data-styletype="divider" title="Editar estilo do Divisor"></button></div>
             <button data-type="pagebreak" title="Quebra de página (⌘⏎)"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h8v3H4zM4 11h8v3H4z"/><path d="M1.5 8h3M6.5 8h3M12 8h2.5"/></svg></span><span class="lbl">Quebra de Página</span><span class="sc">⌘⏎</span></button>
           </div>
           <!-- posição do bloco EM FOCO — mesmo segment (widthSeg) do popover de Imagem e

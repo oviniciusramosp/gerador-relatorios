@@ -3825,11 +3825,12 @@ function bind() {
     btn.addEventListener('mousedown', (e) => e.preventDefault());
     btn.addEventListener('click', () => {
       const lg = (state.doc.logo = normalizeStoriesLogo(state.doc.logo));
-      lg.size = 1;
+      const defSize = defaultStoriesLogo().size;
+      lg.size = defSize;
       const s = document.querySelector('[data-logosize]');
-      if (s) s.value = '100';
+      if (s) s.value = String(Math.round(defSize * 100));
       const sp = document.querySelector('[data-logosizev]');
-      if (sp) sp.textContent = '1×';
+      if (sp) sp.textContent = (+defSize.toFixed(2)) + '×';
       applyStoryLogoLive();
       save(); scheduleCommit();
     });

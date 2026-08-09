@@ -526,11 +526,18 @@ assert.equal(hitX.x, 40);
 assert.equal(hitX.kind, 'start');
 
 // ── logo Paradigma (doc.logo) ───────────────────────────────────────────────
+// Novo story: Completo, rodapé, centro, 0.7×
 const logo0 = defaultStoriesLogo();
-assert.equal(logo0.on, false);
-assert.equal(logo0.kind, 'nome');
-assert.equal(logo0.pos, 'header');
-assert.equal(seed.logo.on, false);
+assert.equal(logo0.on, true);
+assert.equal(logo0.kind, 'full');
+assert.equal(logo0.pos, 'footer');
+assert.equal(logo0.align, 'center');
+assert.equal(logo0.size, 0.7);
+assert.equal(seed.logo.on, true);
+assert.equal(seed.logo.kind, 'full');
+assert.equal(seed.logo.pos, 'footer');
+assert.equal(seed.logo.align, 'center');
+assert.equal(seed.logo.size, 0.7);
 const nLogo = normalizeStoriesDoc({
   kind: 'stories',
   logo: { on: true, kind: 'icone', pos: 'footer', align: 'center', color: '#FFFFFF', size: 1.5 },
@@ -541,10 +548,12 @@ assert.equal(nLogo.logo.kind, 'icone');
 assert.equal(nLogo.logo.pos, 'footer');
 assert.equal(nLogo.logo.align, 'center');
 assert.equal(nLogo.logo.size, 1.5);
-// doc antigo sem logo → default off
+// doc antigo sem logo → off (não força logo novo em projetos salvos)
 const nNoLogo = normalizeStoriesDoc({ kind: 'stories', pages: [{}] });
 assert.equal(nNoLogo.logo.on, false);
-assert.equal(normalizeStoriesLogo({ kind: 'nope', on: true }).kind, 'nome');
+// kind inválido cai no default (full); size clamp 0.4–2.6
+assert.equal(normalizeStoriesLogo({ kind: 'nope', on: true }).kind, 'full');
 assert.equal(normalizeStoriesLogo({ on: true, kind: 'full', size: 9 }).size, 2.6);
+assert.equal(normalizeStoriesLogo({ on: true, kind: 'full', size: 0.1 }).size, 0.4);
 
 console.log('test-stories: ok');

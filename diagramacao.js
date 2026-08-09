@@ -21,6 +21,11 @@ import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do 
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
+import {
+  buildImageGridEl, ensureImageGrid, equalModeOf, setGridCols, setGridItemImage,
+  setTitlesOn, setCaptionsOn, titlesOn, captionsOn, captionStyleOf, gapOf, clampGap,
+  IMAGE_GRID_MAX, IMAGE_GRID_GAP, IMAGE_GRID_GAP_MAX,
+} from './bloco-image-grid.js';
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
 import { deserializeDoc, serializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
 import {
@@ -33,12 +38,66 @@ import { projectFormatFromName, projectBaseName, shouldReloadLinkedProject } fro
 import { registerIcons, findIcon, iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
 import { IONICONS_LIB, IONICONS_LIB_SOLID } from './ionicons-lib.js';  // outline + solid (charts / callout)
 import { openIconPop, paintIconBtn } from './icon-pop.js';
+import {
+  materialIconHtml, iconHtml, paintMaterialIconBtn, openMaterialIconPop,
+  normalizeMaterialName, normalizeTablerName, materialOptsFrom, applyMaterialOpts,
+  applyMaterialStyleToEl, MS_DEFAULTS, clampMsWeight, clampMsGrade, clampMsOpsz, clampMsSize,
+  clampTablerStroke, resolveIconName,
+} from './material-symbols.js';
 import { initFeedback, openFeedbackReport } from './feedback.js';
 import { initAppNav } from './app-nav.js';
 import { COL_ICON, ALIGN_ICON, POS_ICON, widthSeg } from './ui-segment.js';
 import { createBlockHandles, HANDLE_GEOM } from './ui-handles.js';
 registerIcons(IONICONS_LIB);                          // outline (default do app)
 registerIcons(IONICONS_LIB_SOLID, { style: 'solid' }); // filled (callout default)
+
+// defaults do bloco Ícones / ícone em títulos (Google Material Symbols + eixos)
+const DEFAULT_MS_ICON = 'star';
+const DEFAULT_MS_COLOR = MS_DEFAULTS.color;
+const DEFAULT_MS_SIZE = MS_DEFAULTS.size;
+// headers: Material Symbol se icon presente e iconSet !== 'none'
+// (iconSet 'ionicon' legado do callout-style ainda pode existir — trata como MS se for nome válido)
+function headHasIcon(b) {
+  if (!b || b.iconSet === 'none' || b.icon === '' || b.icon == null) return false;
+  return !!(normalizeMaterialName(b.icon) || normalizeTablerName(b.icon));
+}
+function headIconName(b) {
+  if (!headHasIcon(b)) return '';
+  const fam = materialOptsFrom(b, 'head').family;
+  return resolveIconName(b.icon, fam, b.icon);
+}
+function headIconColorOf(b) {
+  return materialOptsFrom(b, 'head').color;
+}
+/** Tamanho global dos ícones de título (Conteúdo › ⋮ do H1–H4). null = auto por tipo. */
+const DEFAULT_HEADING_ICON_SIZE = 24;
+function headingIconSizePx(type) {
+  const g = state.doc?.headingIconSize;
+  if (g != null && Number.isFinite(+g)) return clampMsSize(+g);
+  const fs = typeStyleOf(type || 'h1').fontSize || 20;
+  return Math.round(fs * 1.05);
+}
+function clearHeadIconFields(b) {
+  if (!b) return;
+  b.iconSet = 'none';
+  b.icon = '';
+  delete b.iconFamily; delete b.iconColor; delete b.iconFill; delete b.iconWeight;
+  delete b.iconGrade; delete b.iconOpsz; delete b.iconShape; delete b.iconSize;
+  delete b.iconStroke;
+}
+function ensureHeadIcon(b) {
+  if (!b || headHasIcon(b)) return;
+  b.icon = DEFAULT_MS_ICON;
+  delete b.iconSet;
+  delete b.iconFamily; // material default
+  if (!b.iconColor) b.iconColor = DEFAULT_MS_COLOR;
+}
+function iconNameOf(b, mode = 'icon') {
+  if (mode === 'head') return headIconName(b);
+  const fam = materialOptsFrom(b, 'icon').family;
+  return resolveIconName(b.icon, fam, fam === 'tabler' ? 'star' : DEFAULT_MS_ICON)
+    || (fam === 'tabler' ? 'star' : DEFAULT_MS_ICON);
+}
 
 // ─────────────────────────── geometria (px, 1:1 com a página) ───────────────
 const PAGE_W = 595, PAGE_H = 842;
@@ -87,7 +146,7 @@ function colRightX() { return colL() + GAP; }
 // Sem placement explícito o default vem do TIPO: títulos H1–H3 e tabela ocupam as duas
 // colunas; o resto fica na esquerda. Ler sempre por placementOf() — nunca b.placement
 // direto — senão documentos antigos (sem o campo) perdem o default do tipo.
-const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'table']);
+const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'table', 'image-grid']);
 const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : 'inline');
 
 // Espaçamento vertical ANTES de um bloco — depende do tipo do bloco de cima (prev).
@@ -115,8 +174,8 @@ function gapBefore(b, prev) {
   // qualquer lista consecutiva (mesmo misturando pontos/número/check) fica compacta —
   // permite "1. pai → subitem • → 2. continua" sem folga de parágrafo no meio
   if (LIST_TYPES.has(b.type) && LIST_TYPES.has(pt)) return LIST_GAP;
-  // após tabela: mesmo respiro p↔p (1 linha). Headings já saíram nas regras acima.
-  if (pt === 'table') return PARA_LH;
+  // após tabela / grid de imagens: mesmo respiro p↔p (1 linha). Headings já saíram acima.
+  if (pt === 'table' || pt === 'image-grid') return PARA_LH;
   return PARA_LH;                     // demais blocos (inclui 'callout', trilha G): folga de 1 linha, sem regra especial
 }
 
@@ -212,7 +271,17 @@ const TYPE_STYLE_DEFAULTS = {
   check: { gap: 6, checkColor: '#29E899', checkedOpacity: 0.55 },
   quote: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14, borderColor: '#29E899' },
   callout: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
+  // divisor: cor e espessura globais (⋮ no card Divisor da aba Conteúdo)
+  divider: { color: '#D9D9D9', thickness: 1 },
 };
+function applyDividerStyle(el) {
+  if (!el) return;
+  const o = typeStyleOf('divider');
+  const th = o.thickness != null ? Math.max(0.5, Math.min(12, +o.thickness || 1)) : 1;
+  el.style.height = th + 'px';
+  el.style.minHeight = th + 'px';
+  el.style.background = o.color || '#D9D9D9';
+}
 // tipos cuja tipografia (cor/tamanho/lh/tracking) espelha o parágrafo — não tem controles
 // próprios no popover ⋮ e applyTypeStyle lê de blockStyles.p.
 const TEXT_FROM_P = new Set(['li', 'ol', 'check']);
@@ -259,6 +328,16 @@ const mkBlock = (type, html = '') => {
     b.icon = DEFAULT_CALLOUT_ICON;
     b.iconStyle = DEFAULT_CALLOUT_ICON_STYLE;
   }
+  if (type === 'image-grid') {
+    // 2 slots vazios por padrão; equal=width = colunas iguais
+    ensureImageGrid(b);
+  }
+  if (type === 'icon') {
+    b.icon = DEFAULT_MS_ICON;
+    b.color = DEFAULT_MS_COLOR;
+    b.size = DEFAULT_MS_SIZE;
+    delete b.html;
+  }
   return b;
 };
 // item de capa/contracapa: bloco livre (type = mesmo da paleta: p/h1/image/table/…)
@@ -292,6 +371,8 @@ function seedDoc() {
     // blocks inteiros, sem precisar de migração: Object.assign(seedDoc(), doc) em applyDoc()
     // já cobre documentos antigos sem este campo.
     blockStyles: {},
+    // tamanho (px) dos ícones em TODOS os headings (H1–H4). null = 1.05 × fontSize do tipo.
+    headingIconSize: null,
     // páginas especiais — ligadas por padrão via switcher no painel Documento.
     // bgX/bgY = posição do fundo (Fill) em %; bgScale = zoom (100 = sem zoom, "cover" puro);
     // itens posicionados por coluna (x) + y livre.
@@ -672,11 +753,18 @@ function ensureCalloutDefaults(b) {
 function buildText(b, editing) {
   const isCheck = b.type === 'check';                                   // trilha B (t7)
   const isCallout = b.type === 'callout';                                // trilha G: envelope [emoji][texto], como o checklist
-  const tag = HEAD_TYPES.has(b.type) ? b.type
+  const isHead = HEAD_TYPES.has(b.type);
+  const showHeadIcon = isHead && headHasIcon(b);
+  const tag = isHead ? b.type
     : b.type === 'quote' ? 'blockquote' : (b.type === 'li' || b.type === 'ol' || isCheck || isCallout) ? 'div' : 'p';
   const el = document.createElement(tag);
-  // o texto do checklist/callout é '.ck-txt'/'.co-txt' (SEM a classe 'b' — a moldura/hover/outline vai no envelope)
-  el.className = isCheck ? 'ck-txt' : isCallout ? 'co-txt' : 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
+  // o texto do checklist/callout é interno SEM 'b' (moldura no envelope).
+  // head com ícone MANTÉM 'b' + tipo no <hN> — senão perde .page h1.b { font-size:24px… }
+  // e o título muda de tamanho ao colocar o ícone (UA stylesheet do h1).
+  el.className = isCheck ? 'ck-txt'
+    : isCallout ? 'co-txt'
+      : showHeadIcon ? ('b head-txt ' + b.type)
+        : 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
   el.dataset.id = b.id;
   el.dataset.ph = PH[b.type] || '';
   el.innerHTML = b.html || '';
@@ -691,6 +779,35 @@ function buildText(b, editing) {
   // active-block NÃO é aplicado aqui — paintActiveBlock() pinta o envelope
   // (`.col-left > [data-id]`, que no corte entre páginas é o .frag, e no check/callout
   // é o wrap). Assim a borda roxa cobre a altura total e a alça ⠿ ancora no mesmo box.
+  // header com ícone: envelope flex [ícone | texto], alinhados ao centro vertical
+  if (showHeadIcon) {
+    const wrap = document.createElement('div');
+    // envelope sem tipo h1/h2 no class (evita herdar tipografia errada); só head-wrap + b p/ foco
+    wrap.className = 'b head-wrap';
+    wrap.dataset.id = b.id;
+    wrap.dataset.head = b.type;
+    const ico = document.createElement('span');
+    ico.className = 'head-icon';
+    ico.setAttribute('aria-hidden', 'true');
+    // tamanho global (doc.headingIconSize) ou auto 1.05×fontSize do tipo
+    const ms = materialOptsFrom(b, 'head');
+    const sz = headingIconSizePx(b.type);
+    ico.innerHTML = iconHtml(headIconName(b), { ...ms, size: sz });
+    // clique no glifo foca o bloco e abre o painel (sem menu flutuante)
+    if (editing) {
+      ico.style.cursor = 'pointer';
+      ico.title = 'Editar ícone';
+      ico.addEventListener('mousedown', (e) => e.preventDefault());
+      ico.addEventListener('click', (e) => {
+        e.stopPropagation();
+        state.activeId = b.id;
+        paintActiveBlock(b.id);
+        openIconBlockPanel();
+      });
+    }
+    wrap.append(ico, el);
+    return wrap;
+  }
   if (!isCheck && !isCallout) return el;
   if (isCallout) {
     // callout = [.callout-row: ícone+texto]. Ícone padrão = information-circle (lib completa
@@ -865,6 +982,24 @@ calloutBarBgBtn.addEventListener('click', () => {
     paintCalloutBgChip(calloutBarBgBtn, color);
   }, b.color || DEFAULT_CALLOUT_BG, { paper: true });
 });
+// ── ícone em H1–H4: só painel contextual à direita (sem barra flutuante) ─────
+// updateHeadBar: ao focar/selecionar um título (bloco ou parte do texto), abre
+// #iconPanel (mode=head). Não remonta se já está aberto pro mesmo bid (digitação).
+function updateHeadBar() {
+  const b = state.activeId && blockOf(state.activeId);
+  if (!b || !HEAD_TYPES.has(b.type) || !editing) {
+    if (iconPanel && iconPanel.dataset.mode === 'head') closeIconBlockPanel();
+    return;
+  }
+  if (!iconPanel || iconPanel.hidden
+    || iconPanel.dataset.mode !== 'head'
+    || iconPanel.dataset.bid !== b.id) {
+    openIconBlockPanel();
+  } else {
+    positionIconBlockPanel();
+  }
+}
+
 // mostra/esconde e reposiciona a barra sobre o bloco callout ATIVO — chamada no focusin
 // (qualquer bloco ganhando foco, callout ou não) e no scroll do palco (reflow de posição).
 function updateCalloutBar() {
@@ -917,6 +1052,7 @@ function openTablePanel() {
   if (!b || !editing) { closeTablePanel(); return; }
   tablePanelDismissed = false;
   closeImgPanel();
+  closeImageGridPanel();
   if (!tablePanel) {
     tablePanel = document.createElement('div');
     tablePanel.id = 'tablePanel';
@@ -1019,6 +1155,244 @@ function updateTableBar() {
   } else {
     tablePanelDismissed = false;
     closeTablePanel();
+  }
+}
+
+// ── popover do Grid de Imagens (igualar largura/altura, +/− colunas, remover) ─
+let imageGridPanel;
+let imageGridPanelDismissed = false;
+function activeImageGridBlock() {
+  const b = state.activeId && blockOf(state.activeId);
+  if (b && b.type === 'image-grid') return b;
+  if (state.sel) {
+    const f = findCoverItem(state.sel);
+    if (f && f.item.type === 'image-grid') return f.item;
+  }
+  return null;
+}
+function closeImageGridPanel() { if (imageGridPanel) imageGridPanel.hidden = true; }
+function openImageGridPanel() {
+  const b = activeImageGridBlock();
+  if (!b || !editing) { closeImageGridPanel(); return; }
+  ensureImageGrid(b);
+  imageGridPanelDismissed = false;
+  closeImgPanel();
+  closeTablePanel();
+  if (!imageGridPanel) {
+    imageGridPanel = document.createElement('div');
+    imageGridPanel.id = 'imageGridPanel';
+    document.body.appendChild(imageGridPanel);
+  }
+  imageGridPanel.dataset.gid = b.id;
+  const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
+  const plus = typeof PLUS_SVG !== 'undefined' ? PLUS_SVG : '+';
+  const minus = typeof MINUS_SVG !== 'undefined' ? MINUS_SVG : '−';
+  const n = b.items.length;
+  const equal = equalModeOf(b);
+  const gap = gapOf(b);
+  const hasTitle = titlesOn(b);
+  const hasCap = captionsOn(b);
+  const capStyle = captionStyleOf(b);
+  // raio: default 4 (igual imagem avulsa); slider fino 0–24, digitável acima disso
+  const RADIUS_SLIDER_MAX = 24;
+  const RADIUS_DEFAULT = 4;
+  const radius = b.radius != null ? b.radius : RADIUS_DEFAULT;
+  imageGridPanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">Grid de Imagens</div>
+    <div class="row img-tc-row">
+      <button type="button" class="fieldbtn" data-a="title">${hasTitle ? minus : plus}<span>Título</span></button>
+      <button type="button" class="fieldbtn" data-a="caption">${hasCap ? minus : plus}<span>Legenda</span></button>
+    </div>
+    ${hasCap ? `<div class="field">Estilo da legenda<div data-slot="capstyle"></div></div>` : ''}
+    <div class="field">Igualar por<div data-slot="equal"></div></div>
+    <div class="field"><span class="field-row">Colunas</span>
+      <div class="numstep" data-role="cols">
+        <button type="button" data-a="col-" ${n <= 1 ? 'disabled' : ''} title="Menos colunas" aria-label="Menos colunas">−</button>
+        <span class="numstep-val" data-role="coln">${n}</span>
+        <button type="button" data-a="col+" ${n >= IMAGE_GRID_MAX ? 'disabled' : ''} title="Mais colunas" aria-label="Mais colunas">+</button>
+      </div>
+    </div>
+    <label class="field"><span class="field-row">Espaço entre colunas <span class="field-val"><span data-role="gapv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${gap}</span>px<button type="button" class="resetbtn" data-a="gapreset" title="Redefinir para ${IMAGE_GRID_GAP}px">↺</button></span></span>
+      <input type="range" data-a="gap" min="0" max="${IMAGE_GRID_GAP_MAX}" step="1" value="${gap}" data-snaps="0,4,8,12,16,24,32,48" data-edit="off">
+    </label>
+    <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para ${RADIUS_DEFAULT}px">↺</button></span></span>
+      <input type="range" data-a="radius" min="0" max="${RADIUS_SLIDER_MAX}" step="1" value="${Math.min(radius, RADIUS_SLIDER_MAX)}" data-snaps="0,4,8,12,16,24" data-edit="off">
+    </label>
+    <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
+  imageGridPanel.hidden = false;
+
+  const reopen = () => {
+    render();
+    if (state.activeId === b.id || state.sel === b.id) openImageGridPanel();
+  };
+
+  // seta de duas pontas: horizontal = igualar por largura; vertical = por altura
+  const EQ_W_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h12M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg>';
+  const EQ_H_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M4.5 5.5 8 2l3.5 3.5M4.5 10.5 8 14l3.5-3.5"/></svg>';
+  imageGridPanel.querySelector('[data-slot="equal"]').append(
+    widthSeg(equal, [
+      { val: 'width', label: 'Largura (colunas iguais)', icon: EQ_W_ICO },
+      { val: 'height', label: 'Altura (mesma altura)', icon: EQ_H_ICO },
+    ], (v) => {
+      b.equal = v === 'height' ? 'height' : 'width';
+      if (b.equal === 'width') delete b.equal;
+      reopen();
+    }));
+
+  const capSlot = imageGridPanel.querySelector('[data-slot="capstyle"]');
+  if (capSlot) {
+    // legenda padrão (itálico figcaption) vs tipografia do parágrafo
+    const CAP_DEF_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 5h10M3 8h7M3 11h9"/><path d="M11 4l2 8" opacity=".5"/></svg>';
+    const CAP_P_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><text x="3" y="12" font-size="11" font-weight="700" fill="currentColor" stroke="none" font-family="system-ui,sans-serif">¶</text></svg>';
+    capSlot.append(widthSeg(capStyle, [
+      { val: 'default', label: 'Padrão (legenda)', icon: CAP_DEF_ICO },
+      { val: 'p', label: 'Parágrafo', icon: CAP_P_ICO },
+    ], (v) => {
+      if (v === 'p') b.captionStyle = 'p';
+      else delete b.captionStyle;
+      reopen();
+    }));
+  }
+
+  const gapv = imageGridPanel.querySelector('[data-role="gapv"]');
+  const paintGap = (raw, { reflow = false, syncText = true } = {}) => {
+    const g = clampGap(raw);
+    if (g === IMAGE_GRID_GAP) delete b.gap;
+    else b.gap = g;
+    if (syncText && gapv && document.activeElement !== gapv) gapv.textContent = String(g);
+    const range = imageGridPanel.querySelector('input[data-a="gap"]');
+    if (range && document.activeElement !== range) range.value = String(g);
+    // gap: no arraste só columnGap (equal-width ok); equal-height recalcula no change
+    if (reflow) reopen();
+    else {
+      const grid = pagesEl.querySelector(`.imggrid-wrap[data-id="${b.id}"] .imggrid`);
+      if (grid) grid.style.columnGap = g + 'px';
+      save(); scheduleCommit();
+    }
+  };
+  if (gapv) {
+    wireFieldEditKeys(gapv, {
+      onInput: (raw) => {
+        const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+        if (!Number.isFinite(n)) return;
+        paintGap(n, { reflow: false, syncText: false });
+      },
+      onCommit: (raw) => {
+        const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+        paintGap(Number.isFinite(n) ? n : gapOf(b), { reflow: true, syncText: true });
+        gapv.textContent = String(gapOf(b));
+      },
+      onCancel: () => {
+        gapv.textContent = String(gapOf(b));
+        paintGap(gapOf(b), { reflow: false, syncText: true });
+      },
+    });
+  }
+
+  // raio em TODAS as imagens do grid (live no arraste, sem rebuild)
+  const radv = imageGridPanel.querySelector('[data-role="radv"]');
+  const parseRadius = (raw) => {
+    const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+    if (!Number.isFinite(n)) return null;
+    return Math.max(0, Math.min(Math.floor(PAGE_W / 2), n));
+  };
+  const paintRadius = (raw, { syncText = true } = {}) => {
+    const n = typeof raw === 'number' ? Math.max(0, Math.min(Math.floor(PAGE_W / 2), Math.round(raw))) : parseRadius(raw);
+    if (n == null) return;
+    if (n === RADIUS_DEFAULT) delete b.radius;
+    else b.radius = n;
+    const host = pagesEl.querySelector(`.imggrid-wrap[data-id="${b.id}"]`);
+    if (host) {
+      const px = n + 'px';
+      host.querySelectorAll('.imggrid-frame').forEach((fr) => { fr.style.borderRadius = px; });
+      host.querySelectorAll('.imggrid-frame img').forEach((img) => { img.style.borderRadius = px; });
+    }
+    if (syncText && radv && document.activeElement !== radv) radv.textContent = String(n);
+    const range = imageGridPanel.querySelector('input[data-a="radius"]');
+    if (range) range.value = Math.min(n, RADIUS_SLIDER_MAX);
+    save(); scheduleCommit();
+  };
+  if (radv) {
+    wireFieldEditKeys(radv, {
+      onInput: (raw) => {
+        const n = parseRadius(raw);
+        if (n == null) return;
+        paintRadius(n, { syncText: false });
+      },
+      onCommit: (raw) => {
+        const n = parseRadius(raw);
+        paintRadius(n == null ? (b.radius ?? RADIUS_DEFAULT) : n, { syncText: true });
+        radv.textContent = String(b.radius ?? RADIUS_DEFAULT);
+      },
+      onCancel: () => {
+        radv.textContent = String(b.radius ?? RADIUS_DEFAULT);
+        paintRadius(b.radius ?? RADIUS_DEFAULT, { syncText: true });
+      },
+    });
+  }
+
+  imageGridPanel.querySelectorAll('.resetbtn').forEach((btn) => {
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+  });
+  enhanceAll(imageGridPanel);
+
+  imageGridPanel.querySelectorAll('button[data-a], input[data-a]').forEach((el) => {
+    const isRange = el.type === 'range';
+    el.addEventListener(isRange ? 'input' : 'click', () => {
+      const a = el.dataset.a;
+      if (a === 'gap') { paintGap(+el.value, { reflow: false }); return; }
+      if (a === 'gapreset') { paintGap(IMAGE_GRID_GAP, { reflow: true }); return; }
+      if (a === 'radius' || a === 'radiusreset') {
+        paintRadius(a === 'radiusreset' ? RADIUS_DEFAULT : +el.value);
+        return;
+      }
+      if (a === 'title') { setTitlesOn(b, !titlesOn(b)); reopen(); return; }
+      if (a === 'caption') { setCaptionsOn(b, !captionsOn(b)); reopen(); return; }
+      if (a === 'col+') {
+        if (b.items.length < IMAGE_GRID_MAX) { setGridCols(b, b.items.length + 1); reopen(); }
+        return;
+      }
+      if (a === 'col-') {
+        if (b.items.length > 1) { setGridCols(b, b.items.length - 1); reopen(); }
+        return;
+      }
+      if (a === 'del') {
+        imageGridCtx.removeBlock(b.id);
+        closeImageGridPanel();
+      }
+    });
+  });
+  // soltar o thumb do gap: re-layout (equal height recalcula larguras)
+  const gapRange = imageGridPanel.querySelector('input[data-a="gap"]');
+  if (gapRange) {
+    gapRange.addEventListener('change', () => paintGap(+gapRange.value, { reflow: true }));
+  }
+  positionImageGridPanel();
+}
+function positionImageGridPanel() {
+  if (!imageGridPanel || imageGridPanel.hidden) return;
+  const b = activeImageGridBlock();
+  const el = b && pagesEl.querySelector(`.imggrid-wrap[data-id="${b.id}"]`);
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const pw = imageGridPanel.offsetWidth || 220, ph = imageGridPanel.offsetHeight || 200;
+  let x = r.right + 10;
+  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  imageGridPanel.style.left = x + 'px'; imageGridPanel.style.top = y + 'px';
+}
+function updateImageGridBar() {
+  const b = activeImageGridBlock();
+  if (b && editing) {
+    if (imageGridPanelDismissed && imageGridPanel && imageGridPanel.dataset.gid === b.id) {
+      if (!imageGridPanel.hidden) positionImageGridPanel();
+      return;
+    }
+    if (!imageGridPanel || imageGridPanel.hidden || imageGridPanel.dataset.gid !== b.id) openImageGridPanel();
+    else positionImageGridPanel();
+  } else {
+    imageGridPanelDismissed = false;
+    closeImageGridPanel();
   }
 }
 
@@ -1137,6 +1511,34 @@ const tableCtx = {
   },
 };
 
+// Grid de imagens: mesmos hooks de commit/rerender/remove + pickImage (file picker por célula).
+// pendingGridPick = { blockId, itemIndex } consumido no change do #imgfile.
+let pendingGridPick = null;
+const imageGridCtx = {
+  commit: () => { save(); scheduleCommit(); },
+  rerender: () => render(),
+  removeBlock: (id) => tableCtx.removeBlock(id),
+  pickImage: (blockId, itemIndex) => {
+    pendingGridPick = { blockId, itemIndex };
+    replaceImageId = null;
+    pendingImgPlacement = null;
+    pendingCoverImageId = null;
+    document.getElementById('imgfile').click();
+  },
+  // legenda no estilo parágrafo: tipografia do tipo p (defaults + blockStyles.p)
+  applyCaptionStyle: (el) => {
+    // base do .page p.b (CSS); applyTypeStyle só grava overrides do ⋮
+    el.style.fontStyle = 'normal';
+    el.style.fontWeight = '400';
+    el.style.fontSize = '10px';
+    el.style.lineHeight = '14px';
+    el.style.color = '#4E4E4E';
+    el.style.textAlign = 'justify';
+    el.style.letterSpacing = '-0.01em';
+    applyTypeStyle(el, 'p');
+  },
+};
+
 // bloco genérico (usado na medição e no fluxo da coluna esquerda / largura total)
 function buildBlock(b, editing) {
   const el = buildBlockEl(b, editing);
@@ -1163,6 +1565,7 @@ function buildBlockEl(b, editing) {
     const d = document.createElement('div');
     d.className = 'divider b' + (state.sel === b.id ? ' divsel' : '');   // reaplica seleção pós-render
     d.dataset.id = b.id;
+    applyDividerStyle(d);
     return d;
   }
   if (b.type === 'pagebreak') {                    // trilha E: barra da quebra MANUAL
@@ -1175,19 +1578,54 @@ function buildBlockEl(b, editing) {
     return d;
   }
   if (b.type === 'table') return buildTableEl(b, editing, tableCtx);   // trilha B (t6)
+  if (b.type === 'image-grid') {
+    const colW = placementOf(b) === 'full' ? COL_FULL : colL();
+    return buildImageGridEl(b, editing, imageGridCtx, colW);
+  }
+  if (b.type === 'icon') return buildIconBlock(b, editing);
   return buildText(b, editing);
+}
+
+/** Alinhamento do glifo no bloco Ícones (left|center|right). Default left. */
+function iconAlignOf(b) {
+  return b && (b.align === 'center' || b.align === 'right') ? b.align : 'left';
+}
+
+/** Bloco Ícones — Material Symbol no fluxo (eixos + alinhamento + colunas no popover). */
+function buildIconBlock(b, editing) {
+  const name = normalizeMaterialName(b.icon) || DEFAULT_MS_ICON;
+  const ms = materialOptsFrom(b, 'icon');
+  const align = iconAlignOf(b);
+  const wrap = document.createElement('div');
+  wrap.className = 'b icon-block';
+  wrap.dataset.id = b.id;
+  wrap.dataset.align = align;
+  wrap.style.justifyContent = align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start';
+  wrap.innerHTML = iconHtml(name, { ...ms, className: 'icon-block-glyph' });
+  if (editing) {
+    wrap.title = 'Clique para editar o ícone';
+    wrap.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('[contenteditable]')) return;
+      state.activeId = b.id;
+      state.sel = null;
+      paintActiveBlock(b.id);
+      syncTypeUI('icon');
+      openIconBlockPanel();
+    });
+  }
+  return wrap;
 }
 
 // numera as listas numéricas no "list tree" atual.
 // - subitens de OUTRO tipo (li/check indentados) NÃO quebram a contagem do pai:
 //   1. Item  →  (tab) • ponto  →  2. Item  continua em 2.
-// - imagem não quebra a run (igual antes).
+// - imagem / grid de imagens não quebra a run (igual antes).
 // - bloco não-lista (p, h1, …) reinicia.
 // - b._nums = caminho completo [1,2] pra render "1.2."; b._num = contador do nível atual.
 function numberLists() {
   let counters = [];
   for (const b of state.doc.blocks) {
-    if (b.type === 'image') continue;
+    if (b.type === 'image' || b.type === 'image-grid' || b.type === 'icon') continue;
     if (!LIST_TYPES.has(b.type)) {
       counters = [];
       continue;
@@ -1359,7 +1797,12 @@ function render(caret /* optional {id,offset,role} */) {
   // re-pinta a borda do ativo e reposiciona alça/menus depois do rebuild.
   // Se o foco é Índice/Resumo, NÃO pinta o miolo (senão ficam duas bordas roxas).
   updateCalloutBar();
+  updateHeadBar();
   updateTableBar();
+  {
+    const ab = state.activeId && blockOf(state.activeId);
+    if (ab?.type === 'icon') openIconBlockPanel();
+  }
   syncColUI();
   if (idxFocus === 'index') {
     pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
@@ -1966,11 +2409,12 @@ function buildCoverItem(kind, it) {
   if (type === 'divider') {
     const d = document.createElement('div');
     d.className = 'divider b';
+    applyDividerStyle(d);
     el.appendChild(d);
     return el;
   }
-  // ── tabela / lista / check / callout — reusa o builder do miolo ──
-  if (type === 'table' || type === 'li' || type === 'ol' || type === 'check' || type === 'callout') {
+  // ── tabela / grid de imagens / lista / check / callout — reusa o builder do miolo ──
+  if (type === 'table' || type === 'image-grid' || type === 'li' || type === 'ol' || type === 'check' || type === 'callout') {
     if (type === 'ol' || type === 'li') {
       // numberLists() só roda no miolo — na capa, um item isolado vira "1." / "•"
       if (it._num == null) it._num = 1;
@@ -1979,7 +2423,12 @@ function buildCoverItem(kind, it) {
     if (type === 'callout') ensureCalloutDefaults(it);
     // data-id fica no inner (tabela/lista precisam) — focusin da capa roda antes do miolo
     // e blockOf(cover-id) retorna null, então não há colisão com o fluxo do miolo.
-    el.appendChild(buildBlockEl(it, editing));
+    if (type === 'image-grid') {
+      const boxW = box.width;
+      el.appendChild(buildImageGridEl(it, editing, imageGridCtx, boxW));
+    } else {
+      el.appendChild(buildBlockEl(it, editing));
+    }
     return el;
   }
   // ── texto simples (title/subtitle, h1–h4, p, quote) ──
@@ -2206,8 +2655,8 @@ pagesEl.addEventListener('keydown', (e) => {
     const f = findCoverItem(coverEl.dataset.cid);
     if (!f) return;
     const type = coverTypeOf(f.item);
-    // tabela tem o próprio Enter (próxima célula) — não intercepta
-    if (type === 'table' || type === 'image' || type === 'divider') return;
+    // tabela tem o próprio Enter (próxima célula); imagem/grid/divisor sem enter→novo bloco
+    if (type === 'table' || type === 'image' || type === 'image-grid' || type === 'divider') return;
     if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
       document.execCommand('insertLineBreak');
@@ -2421,8 +2870,23 @@ pagesEl.addEventListener('input', (e) => {
   const b = blockOf(host.dataset.id);
   if (!b) return;
 
-  if (role === 'title') { b.title = host.innerHTML; save(); return; }
-  if (role === 'caption') { b.caption = host.innerHTML; save(); return; }
+  if (role === 'title' || role === 'caption') {
+    // grid: data-item = índice da célula; imagem avulsa: campos no próprio bloco
+    if (host.dataset.item != null && b.type === 'image-grid') {
+      ensureImageGrid(b);
+      const it = b.items[+host.dataset.item];
+      if (it) {
+        it[role] = host.innerHTML;
+        // garante flag do bloco se o usuário digita (caso edge de DOM residual)
+        if (role === 'title' && !titlesOn(b)) b.titles = true;
+        if (role === 'caption' && !captionsOn(b)) b.captions = true;
+      }
+    } else {
+      b[role] = host.innerHTML;
+    }
+    save();
+    return;
+  }
 
   // ── atalhos markdown ──────────────────────────────────────────────────────
   const t = host.textContent;
@@ -2488,10 +2952,9 @@ const slash = initSlashMenu({
     if (def.type === 'pagebreak' || def.type === 'divider' || def.type === 'image') {
       render({ id: b.id, role: 'block', offset: 0 });   // limpa o DOM e devolve o caret ao bloco vazio
       if (def.type === 'image') addImageViaPalette(); else insertSeparatorButton(def.type);
-    } else if (def.type === 'table') {
-      // trilha G (bug): mesma correção do clique na paleta — tabela é estrutural, nunca
-      // converte o bloco ("/table" já foi limpo de b.html acima; insertBlockAfter faz o resto).
-      insertBlockAfter('table');
+    } else if (def.type === 'table' || def.type === 'image-grid' || def.type === 'icon') {
+      // estrutural: nunca converte o bloco ("/table" já limpo; insertBlockAfter faz o resto)
+      insertBlockAfter(def.type);
     } else {
       setActiveType(def.type);                  // reusa a troca de tipo (já renderiza + foca)
     }
@@ -2533,12 +2996,19 @@ function applyCoverItemType(it, type) {
   // limpa campos de outros tipos
   delete it.src; delete it.nw; delete it.nh; delete it.radius; delete it.chart;
   delete it.rows; delete it.colWidths; delete it.headerColor; delete it.hideVLines;
-  delete it.checked; delete it.icon; delete it.iconSet; delete it.iconStyle; delete it.iconColor;
+  delete it.items; delete it.equal; delete it.fill; delete it.size; delete it.color;
+  delete it.checked; delete it.icon; delete it.iconSet; delete it.iconStyle; delete it.iconColor; delete it.iconFill;
   it.type = type;
   it.html = '';
   if (type === 'table') {
     // buildTableEl semeia rows no primeiro render se vazio
     it.rows = null;
+  } else if (type === 'image-grid') {
+    ensureImageGrid(it);
+  } else if (type === 'icon') {
+    it.icon = DEFAULT_MS_ICON;
+    it.color = DEFAULT_MS_COLOR;
+    it.size = DEFAULT_MS_SIZE;
   } else if (type === 'callout') {
     ensureCalloutDefaults(it);
   } else if (type === 'check') {
@@ -2707,7 +3177,16 @@ pagesEl.addEventListener('focusin', (e) => {
   showHandleAtFocused();                   // alça ⠿ à esquerda, centrada na altura do bloco
   updateCalloutBar();                      // barra flutuante do callout — só aparece se b.type==='callout'
   if (b.type === 'table') tablePanelDismissed = false; // re-focar célula reabre o popover
+  if (b.type === 'image-grid') imageGridPanelDismissed = false;
+  // painel de ícone: bloco type=icon OU qualquer heading (H1–H4) — não fechar o de título
+  if (b.type === 'icon' || HEAD_TYPES.has(b.type)) {
+    if (HEAD_TYPES.has(b.type)) updateHeadBar();
+    else openIconBlockPanel();
+  } else {
+    closeIconBlockPanel();
+  }
   updateTableBar();
+  updateImageGridBar();
   syncColUI();                             // coluna do bloco ativo na aba Conteúdo
 });
 
@@ -2725,6 +3204,7 @@ function setImgSel(id) {
     paintActiveBlock(state.activeId);
     showHandleAtFocused();
     updateCalloutBar();
+    updateHeadBar();
     updateTableBar();
     return;
   }
@@ -2739,6 +3219,13 @@ function setImgSel(id) {
   syncColUI();
   updateCalloutBar();
   updateTableBar();
+  updateImageGridBar();
+  if (b.type === 'icon' || HEAD_TYPES.has(b.type)) {
+    if (HEAD_TYPES.has(b.type)) updateHeadBar();
+    else openIconBlockPanel();
+  } else {
+    closeIconBlockPanel();
+  }
   if (b.type === 'divider') {                    // divisor: borda roxa, sem painel
     const el = pagesEl.querySelector(`.divider[data-id="${id}"]`);
     if (el) el.classList.add('divsel');
@@ -2752,7 +3239,7 @@ function setImgSel(id) {
     return;
   }
   // coluna direita: qualquer tipo ganha outline de seleção no .rimg; painel flutuante
-  // só existe pra imagem (texto/tabela usam a sidebar: Posição + Travar no texto).
+  // só existe pra imagem (texto/tabela/grid usam a sidebar: Posição + Travar no texto).
   const el = pagesEl.querySelector(`.rimg[data-id="${id}"]`) || pagesEl.querySelector(`figure[data-id="${id}"]`);
   if (el) el.classList.add('imgsel');
   if (b.type === 'image') openImgPanel();
@@ -2774,6 +3261,11 @@ pagesEl.addEventListener('mousedown', (e) => {
   const pbreak = e.target.closest && e.target.closest('.e-pbreak');   // bug: nunca era selecionável → Backspace não achava o quê remover
   const callout = e.target.closest && e.target.closest('.callout.b');
   const tbl = e.target.closest && e.target.closest('.tbl-wrap.b');
+  const imggrid = e.target.closest && e.target.closest('.imggrid-wrap.b');
+  const iconBlk = e.target.closest && e.target.closest('.icon-block.b');
+  const headWrap = e.target.closest && e.target.closest('.head-wrap.b');
+  // H1–H4 sem ícone não têm .head-wrap — ainda assim abrem o menu Ícone do título
+  const headPlain = e.target.closest && e.target.closest('h1.b, h2.b, h3.b, h4.b');
   const editable = e.target.closest && e.target.closest('[contenteditable]');
   if (idxSec) {
     // resumo editável: o focusin cuida; mousedown no título/borda da seção também foca
@@ -2784,6 +3276,18 @@ pagesEl.addEventListener('mousedown', (e) => {
   } else if (tbl) {
     // clique na moldura/célula da tabela → ativo + popover lateral (célula ainda recebe o focusin)
     selectBlockFromHandle(tbl.dataset.id);
+  } else if (imggrid) {
+    // igual tabela: clicar na moldura, slot vazio, título ou legenda ativa o grid + painel
+    selectBlockFromHandle(imggrid.dataset.id);
+  } else if (iconBlk) {
+    selectBlockFromHandle(iconBlk.dataset.id);
+  } else if (headWrap && !editable) {
+    selectBlockFromHandle(headWrap.dataset.id);
+  } else if (headPlain && !editable?.closest?.('.head-wrap')) {
+    // título sem ícone (ou clique na moldura do hN): ativa + painel Ícone do título
+    // se editable está no head-wrap, o focusin do texto já cuida
+    const hid = headPlain.dataset.id || headWrap?.dataset?.id;
+    if (hid) selectBlockFromHandle(hid);
   } else if (coverLogo) selectCoverLogo(coverLogo.dataset.logo);
   else if (coverIt) selectCoverItem(coverIt.dataset.cid);
   else if (fig && !editable) setImgSel(fig.dataset.id);
@@ -3022,7 +3526,16 @@ function selectBlockFromHandle(id) {
     syncColUI();
     updateCalloutBar();
     if (b.type === 'table') tablePanelDismissed = false;
+    if (b.type === 'image-grid') imageGridPanelDismissed = false;
+    // não fechar o painel de ícone de título (bug: close antes de updateHeadBar)
+    if (b.type === 'icon' || HEAD_TYPES.has(b.type)) {
+      if (HEAD_TYPES.has(b.type)) updateHeadBar();
+      else openIconBlockPanel();
+    } else {
+      closeIconBlockPanel();
+    }
     updateTableBar();
+    updateImageGridBar();
     showHandleAtFocused();
   }
 }
@@ -3370,6 +3883,7 @@ function openImgPanel() {
   const b = blockOf(state.sel);
   if (!b || b.type !== 'image') return;
   closeTablePanel();
+  closeImageGridPanel();
   if (!imgPanel) {
     imgPanel = document.createElement('div');
     imgPanel.id = 'imgPanel';
@@ -3610,7 +4124,7 @@ document.addEventListener('mousedown', (e) => {
   const t = e.target;
   if (!(t && t.closest)) return;
   // âncoras e popovers que devem permanecer abertos
-  if (t.closest('#imgPanel, #tablePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit')) return;
+  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit')) return;
   if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu')) return;
   if (t.closest('#btnPrint, #zoomPct, #zoomFit, #bhandle, #badd')) return;
   // imagem: clicar fora limpa a seleção (fecha o painel)
@@ -3621,6 +4135,20 @@ document.addEventListener('mousedown', (e) => {
   if (tablePanel && !tablePanel.hidden && !t.closest('.tbl-wrap')) {
     tablePanelDismissed = true;
     closeTablePanel();
+  }
+  // grid de imagens: mesmo padrão da tabela
+  if (imageGridPanel && !imageGridPanel.hidden && !t.closest('.imggrid-wrap')) {
+    imageGridPanelDismissed = true;
+    closeImageGridPanel();
+  }
+  if (iconPanel && !iconPanel.hidden
+    && !t.closest('.icon-block')
+    && !t.closest('.head-wrap')
+    && !t.closest(`h1[data-id], h2[data-id], h3[data-id], h4[data-id]`)) {
+    // fecha se clicou fora do painel e fora do título/bloco de ícone
+    const host = t.closest?.('[data-id]');
+    const id = host?.dataset?.id;
+    if (!id || id !== iconPanel.dataset.bid) closeIconBlockPanel();
   }
   if (typeof closeCoverPanel === 'function') closeCoverPanel();
   if (typeof closeLogoPanel === 'function') closeLogoPanel();
@@ -3757,10 +4285,14 @@ function selectCoverItem(cid) {
     lastCoverKind = coverKindOf(f.cov);
     syncTypeUI(coverTypeOf(f.item));   // paleta da aba Conteúdo reflete o tipo do item
   }
-  // tabela na capa: reusa o painel de tabela do miolo
+  // tabela / grid na capa: reusa o painel do miolo
   if (f?.item?.type === 'table') {
     tablePanelDismissed = false;
     updateTableBar();
+  }
+  if (f?.item?.type === 'image-grid') {
+    imageGridPanelDismissed = false;
+    updateImageGridBar();
   }
   showHandleAtFocused();                   // alça de arraste fica visível no bloco selecionado
 }
@@ -3793,7 +4325,7 @@ const COVER_TYPE_LABEL = {
   // antigo e o fallback quando type vinha errado/ausente.
   p: 'Texto', quote: 'Citação',
   li: 'Lista de Pontos', ol: 'Lista Numérica', check: 'Checklist', callout: 'Callout',
-  image: 'Imagem', table: 'Tabela', divider: 'Divisor',
+  image: 'Imagem', 'image-grid': 'Grid de Imagens', table: 'Tabela', divider: 'Divisor',
 };
 function openCoverPanel() {
   const f = findCoverItem(state.sel); if (!f) return;
@@ -4330,6 +4862,41 @@ function blocksFromHtml(html) {
 let pendingImgPlacement = null;
 // id do bloco que o painel pediu pra SUBSTITUIR (null = fluxo normal de inserir)
 let replaceImageId = null;
+// arquivo → célula do grid de imagens (miolo ou capa)
+function setGridItemFromFile(file, blockId, itemIndex) {
+  const cov = findCoverItem(blockId);
+  const b = cov ? cov.item : blockOf(blockId);
+  if (!b || b.type !== 'image-grid') return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      setGridItemImage(b, itemIndex, {
+        src: reader.result,
+        nw: img.naturalWidth,
+        nh: img.naturalHeight,
+      });
+      if (cov) {
+        state.sel = blockId;
+        state.activeId = null;
+        render();
+        selectCoverItem(blockId);
+      } else {
+        state.activeId = blockId;
+        state.sel = null;
+        render();
+        imageGridPanelDismissed = false;
+        updateImageGridBar();
+        paintActiveBlock(blockId);
+        showHandleAtFocused();
+        syncTypeUI('image-grid');
+        syncColUI();
+      }
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
 function addImageViaPalette() {
   const coverKind = activeCoverKind();
   if (coverKind) {
@@ -4482,6 +5049,17 @@ function toMarkdown() {
       case 'divider': return '\n---\n';
       case 'pagebreak': return '\n<!-- quebra de página -->\n';
       case 'image': return `![${strip(b.title) || ''}](imagem)` + (b.caption ? `\n*${strip(b.caption)}*` : '');
+      case 'image-grid': {
+        ensureImageGrid(b);
+        const withT = titlesOn(b);
+        const withC = captionsOn(b);
+        return b.items.map((it) => {
+          if (!it.src) return '';
+          const line = `![${withT ? (strip(it.title) || '') : ''}](imagem)`;
+          return withC && it.caption ? line + `\n*${strip(it.caption)}*` : line;
+        }).filter(Boolean).join('\n\n');
+      }
+      case 'icon': return `:${normalizeMaterialName(b.icon) || 'icon'}:`;
       default: return strip(b.html);
     }
   }).join('\n\n');
@@ -5504,9 +6082,9 @@ document.querySelectorAll('#blocktypes button[data-type]').forEach(btn => {
       openChartModal('chart');
       return;
     }
-    // trilha G (bug): tabela é ESTRUTURAL — clicar com um parágrafo/título selecionado NÃO
-    // pode converter (destruiria o texto). Sempre insere depois, igual imagem/divisor/quebra.
-    if (t === 'table') return insertBlockAfter('table');
+    // trilha G (bug): tabela/grid/ícone são ESTRUTURAIS — clicar com um parágrafo/título
+    // selecionado NÃO pode converter (destruiria o texto). Sempre insere depois.
+    if (t === 'table' || t === 'image-grid' || t === 'icon') return insertBlockAfter(t);
     setActiveType(t);
   });
 });
@@ -5536,6 +6114,7 @@ function openBlockStylePanel(type, anchorEl) {
   const cur = state.doc.blockStyles[type] || {};
   const v = (k) => cur[k] != null ? cur[k] : def[k];
   const isHead = HEAD_TYPES.has(type);
+  const isDivider = type === 'divider';
   const inheritsText = TEXT_FROM_P.has(type);          // li/ol/check: sem controles de tipografia
   const isListGap = type === 'li' || type === 'ol' || type === 'check';
   const label = (btByType[type]?.querySelector('.lbl') || {}).textContent || type;
@@ -5550,7 +6129,14 @@ function openBlockStylePanel(type, anchorEl) {
     + `</div>`;
 
   let fields = '';
-  if (!inheritsText) {
+  // divisor: só cor + espessura (todos os divisores do relatório)
+  if (isDivider) {
+    fields = `
+    <label class="field">Cor da linha <button type="button" class="colorfield" data-a="color" style="background:${v('color')}"></button></label>
+    <label class="field"><span class="field-row">Espessura <span class="field-val"><span data-role="thicknessv">${fmtPx(v('thickness'))}</span><button type="button" class="resetbtn" data-r="thickness" title="Redefinir para ${def.thickness}px">↺</button></span></span>
+      <input type="range" data-a="thickness" min="0.5" max="8" step="0.5" value="${v('thickness')}" data-snaps="0.5,1,1.5,2,3,4,6,8">
+    </label>`;
+  } else if (!inheritsText) {
     fields += `
     <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fmtPx(v('fontSize'))}</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para ${def.fontSize}px">↺</button></span></span>
       <input type="range" data-a="fontSize" min="8" max="48" step="1" value="${v('fontSize')}" data-snaps="8,12,16,20,24,48">
@@ -5562,20 +6148,29 @@ function openBlockStylePanel(type, anchorEl) {
       <input type="range" data-a="letterSpacing" min="-0.05" max="0.15" step="0.01" value="${v('letterSpacing')}" data-snaps="-0.05,-0.01,0,0.05,0.1,0.15">
     </label>`;
   }
-  if (isHead) {
-    fields += `
+  if (!isDivider) {
+    if (isHead) {
+      const icoSz = state.doc.headingIconSize != null
+        ? clampMsSize(state.doc.headingIconSize)
+        : DEFAULT_HEADING_ICON_SIZE;
+      const icoAuto = state.doc.headingIconSize == null;
+      fields += `
     <label class="field"><span class="field-row">Margem acima (título) <span class="field-val"><span data-role="marginTopv">${fmtPx(v('marginTop'))}</span><button type="button" class="resetbtn" data-r="marginTop" title="Redefinir para ${def.marginTop}px">↺</button></span></span>
       <input type="range" data-a="marginTop" min="0" max="80" step="1" value="${v('marginTop')}" data-snaps="0,14,24,32,48,80">
+    </label>
+    <label class="field"><span class="field-row">Tamanho do ícone (todos os títulos) <span class="field-val"><span data-role="headingIconSizev">${icoAuto ? 'auto' : fmtPx(icoSz)}</span><button type="button" class="resetbtn" data-r="headingIconSize" title="Redefinir (auto por tipo)">↺</button></span></span>
+      <input type="range" data-a="headingIconSize" min="12" max="64" step="1" value="${icoSz}" data-snaps="12,16,20,24,28,32,40,48,64" data-edit="off">
     </label>`;
-  } else {
-    const gapLbl = isListGap ? 'Espaço entre itens' : 'Espaço entre parágrafos';
-    fields += `
+    } else {
+      const gapLbl = isListGap ? 'Espaço entre itens' : 'Espaço entre parágrafos';
+      fields += `
     <label class="field"><span class="field-row">${gapLbl} <span class="field-val"><span data-role="gapv">${fmtPx(v('gap'))}</span><button type="button" class="resetbtn" data-r="gap" title="Redefinir para ${def.gap}px">↺</button></span></span>
       <input type="range" data-a="gap" min="0" max="48" step="1" value="${v('gap')}" data-snaps="0,6,14,16,24,48">
     </label>`;
-  }
-  if (!inheritsText) {
-    fields += `<label class="field">Cor do texto <button type="button" class="colorfield" data-a="color" style="background:${v('color')}"></button></label>`;
+    }
+    if (!inheritsText) {
+      fields += `<label class="field">Cor do texto <button type="button" class="colorfield" data-a="color" style="background:${v('color')}"></button></label>`;
+    }
   }
   // lista de pontos: símbolo do item (nível 0), do subitem (Tab) e cor do marcador
   if (type === 'li') {
@@ -5624,11 +6219,22 @@ function openBlockStylePanel(type, anchorEl) {
   blockStylePanel.querySelectorAll('.resetbtn').forEach(b => b.addEventListener('mousedown', (e) => e.preventDefault()));
 
   const setField = (field, val) => {
+    // tamanho global dos ícones de título (todos H1–H4) — vive no doc, não em blockStyles[type]
+    if (field === 'headingIconSize') {
+      state.doc.headingIconSize = clampMsSize(val);
+      scheduleStyleRender();
+      return;
+    }
     const o = (state.doc.blockStyles[type] ||= {});
     o[field] = val;
     scheduleStyleRender();
   };
   const resetField = (field) => {
+    if (field === 'headingIconSize') {
+      delete state.doc.headingIconSize; // auto = 1.05 × fontSize do tipo
+      scheduleStyleRender();
+      return;
+    }
     const o = state.doc.blockStyles[type];
     if (o) { delete o[field]; if (!Object.keys(o).length) delete state.doc.blockStyles[type]; }
     scheduleStyleRender();
@@ -5636,10 +6242,13 @@ function openBlockStylePanel(type, anchorEl) {
   const displayFor = (field, val) => {
     if (field === 'letterSpacing') return fmtLS(val);
     if (field === 'checkedOpacity') return fmtPct(val);
+    if (field === 'headingIconSize') {
+      return state.doc.headingIconSize == null ? 'auto' : fmtPx(val);
+    }
     return fmtPx(val);
   };
   const parseRange = (field, raw) => {
-    if (field === 'letterSpacing' || field === 'checkedOpacity') return +raw;
+    if (field === 'letterSpacing' || field === 'checkedOpacity' || field === 'thickness') return +raw;
     return Math.round(+raw);
   };
 
@@ -5656,7 +6265,7 @@ function openBlockStylePanel(type, anchorEl) {
     btn.addEventListener('click', () => {
       const field = btn.dataset.r;
       resetField(field);
-      const d = def[field];
+      const d = field === 'headingIconSize' ? DEFAULT_HEADING_ICON_SIZE : def[field];
       const inp = blockStylePanel.querySelector(`input[data-a="${field}"]`);
       if (inp) inp.value = d;
       const disp = blockStylePanel.querySelector(`[data-role="${field}v"]`);
@@ -5819,11 +6428,15 @@ function setActiveType(t) {
   const b = id && blockOf(id);
   if (b && TEXT_TYPES.has(b.type)) {
     const keep = captureCaret();             // preserva a SELEÇÃO (não só o caret)
+    const wasHead = HEAD_TYPES.has(b.type);
     b.type = t;
     if (t === 'callout') ensureCalloutDefaults(b);
     if (!LIST_TYPES.has(t)) delete b.indent; // indent só faz sentido em lista
+    // ícone de título (Material Symbols) só vale em H1–H4
+    if (wasHead && !HEAD_TYPES.has(t)) clearHeadIconFields(b);
     render(keep && keep.id === b.id ? keep : { id: b.id, role: 'block', offset: 0 });
     syncTypeUI(t);
+    updateHeadBar();
   }
   else { const nb = mkBlock(t, ''); state.doc.blocks.push(nb); state.activeId = nb.id; render({ id: nb.id, role: 'block', offset: 0 }); syncTypeUI(t); }
 }
@@ -5840,10 +6453,8 @@ function insertSeparatorButton(sepType) {
   if (host && b) breakAtCaret(host, b, sepType);
   else { state.doc.blocks.push(mkBlock(sepType, ''), mkBlock('p', '')); render(); }
 }
-// trilha G: caminho pros tipos ESTRUTURAIS (hoje só 'table' — image/divider/pagebreak já
-// inserem-depois pelas próprias funções acima). NUNCA converte o bloco ativo: sempre insere
-// um bloco novo LOGO DEPOIS dele (ou no fim, se não houver bloco ativo) e foca nele. `mkBlock`
-// com html vazio basta pra tabela — buildTableEl semeia b.rows sozinha no primeiro render.
+// trilha G: caminho pros tipos ESTRUTURAIS ('table', 'image-grid', 'icon' — image/divider/
+// pagebreak já inserem-depois pelas próprias funções acima). NUNCA converte o bloco ativo.
 function insertBlockAfter(t) {
   const coverKind = activeCoverKind();
   if (coverKind) {
@@ -5857,9 +6468,330 @@ function insertBlockAfter(t) {
   else state.doc.blocks.push(nb);
   state.activeId = nb.id;
   render({ id: nb.id, role: 'block', offset: 0 });
-  // ponytail: foco automático na 1ª célula da tabela seria bônus (render() só foca um
-  // [data-role=block][contenteditable], que a tabela não tem) — o bloco fica inserido e
-  // visível/selecionado, que é o requisito; focar a célula fica de próximo passo se pedirem.
+  if (t === 'image-grid') {
+    imageGridPanelDismissed = false;
+    updateImageGridBar();
+  }
+  if (t === 'icon') {
+    paintActiveBlock(nb.id);
+    openIconBlockPanel();
+  }
+}
+
+// ── popover Material Symbol (bloco type=icon OU ícone de header) ─────────────
+// mode = 'icon' | 'head' — mesmos eixos: Weight, Fill, Shape, Grade, Optical Size
+let iconPanel;
+function closeIconBlockPanel() {
+  if (iconPanel) { iconPanel.hidden = true; delete iconPanel.dataset.mode; }
+}
+function openIconBlockPanel() {
+  const b = state.activeId && blockOf(state.activeId);
+  if (!b || !editing) { closeIconBlockPanel(); return; }
+  const mode = b.type === 'icon' ? 'icon'
+    : (HEAD_TYPES.has(b.type) ? 'head' : null);
+  if (!mode) { closeIconBlockPanel(); return; }
+
+  closeImgPanel(); closeTablePanel(); closeImageGridPanel();
+  if (!iconPanel) {
+    iconPanel = document.createElement('div');
+    iconPanel.id = 'iconPanel';
+    document.body.appendChild(iconPanel);
+  }
+  iconPanel.dataset.mode = mode;
+  iconPanel.dataset.bid = b.id;
+
+  const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
+  const plus = typeof PLUS_SVG !== 'undefined' ? PLUS_SVG : '+';
+  const hasHeadIcon = mode === 'head' && headHasIcon(b);
+
+  // título sem ícone: só "Adicionar ícone" → coloca default e reabre com controles
+  if (mode === 'head' && !hasHeadIcon) {
+    iconPanel.innerHTML = `
+      <div class="eyebrow" style="margin:0">Ícone do título</div>
+      <button type="button" class="fieldbtn" data-a="addicon">${plus}<span>Adicionar ícone</span></button>`;
+    iconPanel.hidden = false;
+    iconPanel.querySelector('[data-a="addicon"]').addEventListener('click', () => {
+      ensureHeadIcon(b);
+      save(); scheduleCommit();
+      render({ id: b.id, role: 'block', offset: 0 });
+      openIconBlockPanel();
+    });
+    positionIconBlockPanel();
+    return;
+  }
+
+  const ms = materialOptsFrom(b, mode);
+  const name = iconNameOf(b, mode);
+  const title = mode === 'head' ? 'Ícone do título' : 'Ícones';
+  const icoAlign = iconAlignOf(b);
+  const icoPlace = placementOf(b);
+  const isTabler = ms.family === 'tabler';
+  // Tabler: espessura em px (1–3); Material: weight 100–700
+  const strokePx = ms.stroke;
+
+  iconPanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">${title}</div>
+    <div class="field">Símbolo
+      <button type="button" class="icon-pick-btn" data-a="pick" title="Escolher símbolo (Material ou Tabler)">
+        ${iconHtml(name, { ...ms, size: 22 })}
+        <span data-role="iname">${name}${isTabler ? ' · Tabler' : ' · Material'}</span>
+      </button>
+    </div>
+    <label class="field">Cor <button type="button" class="colorfield" data-a="color" style="background:${ms.color}"></button></label>
+    ${mode === 'icon' ? `
+    <div class="field">Alinhamento<div data-slot="align"></div></div>
+    <div class="field">Colunas<div data-slot="place"></div></div>
+    ` : ''}
+    ${isTabler ? `
+    <label class="field"><span class="field-row">Espessura <span class="field-val"><span data-role="strokev" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal">${strokePx}</span>px<button type="button" class="resetbtn" data-a="strokereset" title="Redefinir para 2px">↺</button></span></span>
+      <input type="range" data-a="stroke" min="1" max="3" step="0.5" value="${strokePx}" data-snaps="1,1.5,2,2.5,3" data-edit="off">
+    </label>
+    ` : `
+    <div class="field">Estilo<div data-slot="shape"></div></div>
+    <div class="swrow"><span>Preenchido</span>
+      <button type="button" class="sw" data-a="fill" role="switch" aria-checked="${ms.fill ? 'true' : 'false'}"></button></div>
+    <label class="field"><span class="field-row">Espessura (Weight) <span class="field-val"><span data-role="weightv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric">${ms.weight}</span><button type="button" class="resetbtn" data-a="weightreset" title="Redefinir">↺</button></span></span>
+      <input type="range" data-a="weight" min="100" max="700" step="100" value="${ms.weight}" data-snaps="100,200,300,400,500,600,700" data-edit="off">
+    </label>
+    <label class="field"><span class="field-row">Grade <span class="field-val"><span data-role="gradev" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric">${ms.grade}</span><button type="button" class="resetbtn" data-a="gradereset" title="Redefinir">↺</button></span></span>
+      <input type="range" data-a="grade" min="-50" max="200" step="25" value="${ms.grade}" data-snaps="-50,0,50,100,150,200" data-edit="off">
+    </label>
+    <label class="field"><span class="field-row">Optical Size <span class="field-val"><span data-role="opszv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric">${ms.opsz}</span><button type="button" class="resetbtn" data-a="opszreset" title="Redefinir">↺</button></span></span>
+      <input type="range" data-a="opsz" min="20" max="48" step="1" value="${ms.opsz}" data-snaps="20,24,32,40,48" data-edit="off">
+    </label>
+    `}
+    ${mode === 'icon' ? `
+    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="sizev" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric">${ms.size}</span>px<button type="button" class="resetbtn" data-a="sizereset" title="Redefinir">↺</button></span></span>
+      <input type="range" data-a="size" min="12" max="96" step="1" value="${Math.min(96, ms.size)}" data-snaps="12,16,20,24,28,32,40,48,64,96" data-edit="off">
+    </label>` : ''}
+    <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>${mode === 'head' ? 'Remover ícone' : 'Remover'}</span></button>`;
+  iconPanel.hidden = false;
+
+  const liveHost = () => {
+    if (mode === 'icon') return pagesEl.querySelector(`.icon-block[data-id="${b.id}"]`);
+    return pagesEl.querySelector(`.head-wrap[data-id="${b.id}"] .head-icon`);
+  };
+  const paintLive = () => {
+    const host = liveHost();
+    const o = materialOptsFrom(b, mode);
+    const sz = mode === 'head' ? headingIconSizePx(b.type) : o.size;
+    const n = iconNameOf(b, mode);
+    if (host) {
+      // reconstrói o glifo (Material ↔ Tabler trocam a tag)
+      if (mode === 'icon') {
+        host.innerHTML = iconHtml(n, { ...o, size: sz, className: 'icon-block-glyph' });
+      } else {
+        host.innerHTML = iconHtml(n, { ...o, size: sz });
+      }
+    }
+    const pickBtn = iconPanel.querySelector('[data-a="pick"]');
+    if (pickBtn) {
+      const fam = o.family === 'tabler' ? 'Tabler' : 'Material';
+      pickBtn.innerHTML = iconHtml(n, { ...o, size: 22 })
+        + `<span data-role="iname">${n} · ${fam}</span>`;
+    }
+    // previews do Estilo (só Material — slot ausente em Tabler)
+    iconPanel.querySelectorAll('[data-slot="shape"] button').forEach((btn, i) => {
+      const shapes = ['outlined', 'rounded', 'sharp'];
+      const sh = shapes[i];
+      if (!sh) return;
+      btn.innerHTML = iconHtml(n, { ...o, size: 18, family: 'material', shape: sh, color: 'currentColor' });
+    });
+  };
+  const reopen = () => {
+    render();
+    state.activeId = b.id;
+    paintActiveBlock(b.id);
+    openIconBlockPanel();
+  };
+
+  // Biblioteca: só no grid do picker (abas Material | Tabler) — sem toggle no painel
+
+  // Estilo Material: Outlined | Rounded | Sharp (ausente para Tabler)
+  const shapeSlot = iconPanel.querySelector('[data-slot="shape"]');
+  if (shapeSlot) {
+    const stylePreview = (shape) => iconHtml(name, {
+      ...ms, family: 'material', size: 18, shape, color: 'currentColor',
+    });
+    shapeSlot.append(
+      widthSeg(ms.shape, [
+        { val: 'outlined', label: 'Outlined', icon: stylePreview('outlined') },
+        { val: 'rounded', label: 'Rounded', icon: stylePreview('rounded') },
+        { val: 'sharp', label: 'Sharp', icon: stylePreview('sharp') },
+      ], (v) => {
+        applyMaterialOpts(b, { shape: v }, mode);
+        paintLive(); save(); scheduleCommit();
+        openIconBlockPanel();
+      }));
+  }
+
+  // bloco Ícones: alinhamento + colunas (placement)
+  if (mode === 'icon') {
+    const alignSlot = iconPanel.querySelector('[data-slot="align"]');
+    if (alignSlot) {
+      alignSlot.append(widthSeg(icoAlign, [
+        { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+        { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+        { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+      ], (v) => {
+        if (v === 'left') delete b.align;
+        else b.align = v;
+        const host = pagesEl.querySelector(`.icon-block[data-id="${b.id}"]`);
+        if (host) {
+          host.dataset.align = v;
+          host.style.justifyContent = v === 'center' ? 'center' : v === 'right' ? 'flex-end' : 'flex-start';
+        }
+        save(); scheduleCommit();
+        openIconBlockPanel();
+      }));
+    }
+    const placeSlot = iconPanel.querySelector('[data-slot="place"]');
+    if (placeSlot) {
+      placeSlot.append(widthSeg(icoPlace, [
+        { val: 'inline', label: 'Coluna Esquerda', icon: COL_ICON.left },
+        { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+        { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
+      ], (v) => {
+        setBlockPlacement(b.id, v);
+        openIconBlockPanel();
+      }));
+    }
+  }
+
+  iconPanel.querySelector('[data-a="pick"]').addEventListener('click', (e) => {
+    e.preventDefault();
+    const o = materialOptsFrom(b, mode);
+    openMaterialIconPop(e.currentTarget, (key, meta) => {
+      if (!key && mode === 'icon') return;
+      if (!key) {
+        clearHeadIconFields(b);
+        save(); scheduleCommit(); reopen();
+        return;
+      }
+      // key já vem no formato da família escolhida no picker;
+      // applyMaterialOpts remapeia se só a family mudar sem key novo
+      const nextFam = meta?.family || o.family;
+      b.icon = key;
+      if (mode === 'head') delete b.iconSet;
+      applyMaterialOpts(b, { family: nextFam }, mode);
+      // se a lib mudou e o pick não trouxe nome mapeado (edge), força resolve
+      const resolved = resolveIconName(b.icon, nextFam, b.icon);
+      if (resolved) b.icon = resolved;
+      save(); scheduleCommit();
+      reopen();
+    }, name, {
+      allowNone: mode === 'head',
+      family: o.family,
+      fill: o.fill, weight: o.weight, grade: o.grade, opsz: o.opsz, shape: o.shape,
+      stroke: o.stroke,
+    });
+  });
+
+  const cf = iconPanel.querySelector('[data-a="color"]');
+  cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
+    applyMaterialOpts(b, { color: hex }, mode);
+    cf.style.background = hex;
+    paintLive(); save(); scheduleCommit();
+  }, ms.color));
+
+  const wireNum = (role, field, clamp) => {
+    const span = iconPanel.querySelector(`[data-role="${role}"]`);
+    const range = iconPanel.querySelector(`input[data-a="${field}"]`);
+    const paint = (raw, { syncText = true } = {}) => {
+      const n = clamp(raw);
+      applyMaterialOpts(b, { [field]: n }, mode);
+      if (syncText && span && document.activeElement !== span) span.textContent = String(n);
+      if (range && document.activeElement !== range) range.value = String(n);
+      paintLive(); save(); scheduleCommit();
+    };
+    if (span) {
+      wireFieldEditKeys(span, {
+        onInput: (raw) => {
+          const n = Number(String(raw ?? '').replace(/[^\d.-]/g, ''));
+          if (!Number.isFinite(n)) return;
+          paint(n, { syncText: false });
+        },
+        onCommit: (raw) => {
+          const n = Number(String(raw ?? '').replace(/[^\d.-]/g, ''));
+          paint(Number.isFinite(n) ? n : materialOptsFrom(b, mode)[field], { syncText: true });
+          span.textContent = String(materialOptsFrom(b, mode)[field]);
+        },
+        onCancel: () => {
+          const v = materialOptsFrom(b, mode)[field];
+          span.textContent = String(v);
+          paint(v, { syncText: true });
+        },
+      });
+    }
+    return paint;
+  };
+  const paintWeight = !isTabler ? wireNum('weightv', 'weight', clampMsWeight) : null;
+  const paintGrade = !isTabler ? wireNum('gradev', 'grade', clampMsGrade) : null;
+  const paintOpsz = !isTabler ? wireNum('opszv', 'opsz', clampMsOpsz) : null;
+  const paintStroke = isTabler ? wireNum('strokev', 'stroke', clampTablerStroke) : null;
+  const paintSize = mode === 'icon' ? wireNum('sizev', 'size', clampMsSize) : null;
+
+  iconPanel.querySelectorAll('.resetbtn').forEach((btn) => {
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+  });
+  enhanceAll(iconPanel);
+
+  iconPanel.querySelectorAll('button[data-a], input[data-a]').forEach((el) => {
+    if (el.dataset.a === 'pick' || el.dataset.a === 'color') return;
+    const isRange = el.type === 'range';
+    el.addEventListener(isRange ? 'input' : 'click', () => {
+      const a = el.dataset.a;
+      if (a === 'weight' && paintWeight) { paintWeight(+el.value); return; }
+      if (a === 'weightreset' && paintWeight) { paintWeight(MS_DEFAULTS.weight); return; }
+      if (a === 'grade' && paintGrade) { paintGrade(+el.value); return; }
+      if (a === 'gradereset' && paintGrade) { paintGrade(MS_DEFAULTS.grade); return; }
+      if (a === 'opsz' && paintOpsz) { paintOpsz(+el.value); return; }
+      if (a === 'opszreset' && paintOpsz) { paintOpsz(MS_DEFAULTS.opsz); return; }
+      if (a === 'stroke' && paintStroke) { paintStroke(+el.value); return; }
+      if (a === 'strokereset' && paintStroke) { paintStroke(MS_DEFAULTS.stroke); return; }
+      if (a === 'size' && paintSize) { paintSize(+el.value); return; }
+      if (a === 'sizereset' && paintSize) { paintSize(MS_DEFAULTS.size); return; }
+      if (a === 'fill') {
+        // Tabler não tem filled — control só existe no HTML Material
+        const on = el.getAttribute('aria-checked') !== 'true';
+        el.setAttribute('aria-checked', String(on));
+        applyMaterialOpts(b, { fill: on }, mode);
+        paintLive(); save(); scheduleCommit();
+        return;
+      }
+      if (a === 'del') {
+        if (mode === 'head') {
+          clearHeadIconFields(b);
+          save(); scheduleCommit();
+          render({ id: b.id, role: 'block', offset: 0 });
+          openIconBlockPanel(); // volta ao estado "Adicionar ícone"
+        } else {
+          const i = idxOf(b.id);
+          if (i >= 0) state.doc.blocks.splice(i, 1);
+          state.activeId = null;
+          closeIconBlockPanel();
+          render();
+        }
+      }
+    });
+  });
+  positionIconBlockPanel();
+}
+function positionIconBlockPanel() {
+  if (!iconPanel || iconPanel.hidden) return;
+  const b = state.activeId && blockOf(state.activeId);
+  if (!b) return;
+  const mode = iconPanel.dataset.mode;
+  const el = mode === 'head'
+    ? pagesEl.querySelector(`.head-wrap[data-id="${b.id}"], [data-id="${b.id}"]`)
+    : pagesEl.querySelector(`.icon-block[data-id="${b.id}"]`);
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const pw = iconPanel.offsetWidth || 220, ph = iconPanel.offsetHeight || 280;
+  let x = r.right + 10;
+  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  iconPanel.style.left = x + 'px'; iconPanel.style.top = y + 'px';
 }
 
 // #file: fallback sem File System Access API (Safari/Firefox) — pickFile() ainda usa
@@ -5901,13 +6833,15 @@ document.getElementById('fileProject').addEventListener('change', (e) => {
 document.getElementById('imgfile').addEventListener('change', (e) => {
   const f = e.target.files[0];
   if (f) {
-    if (replaceImageId) replaceImageFile(f, replaceImageId);
+    if (pendingGridPick) setGridItemFromFile(f, pendingGridPick.blockId, pendingGridPick.itemIndex);
+    else if (replaceImageId) replaceImageFile(f, replaceImageId);
     else addImageFile(f, pendingImgPlacement);
   } else {
     pendingCoverImageId = null;   // cancelou o picker da capa
   }
   pendingImgPlacement = null;
   replaceImageId = null;
+  pendingGridPick = null;
   e.target.value = '';
 });
 document.getElementById('btnNew').addEventListener('click', () => {
@@ -8011,6 +8945,7 @@ stage.addEventListener('scroll', () => {
   if (!fmtbar.hidden) updateFmtbar();
   if (!calloutBar.hidden) updateCalloutBar();   // reposiciona (não esconde) — mesmo tratamento do fmtbar
   if (tablePanel && !tablePanel.hidden) positionTablePanel();
+  if (iconPanel && !iconPanel.hidden) positionIconBlockPanel();
   if (imgPanel && !imgPanel.hidden) positionImgPanel();
   if (coverPanel && !coverPanel.hidden) positionCoverPanel();
   if (logoPanel && !logoPanel.hidden) positionLogoPanel();
