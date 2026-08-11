@@ -1408,7 +1408,7 @@ function tableStyleFieldsHtml(b, mode = 'full') {
     <div class="swrow"><span>Coluna de cabeçalho</span>
       <button type="button" class="sw" data-a="headerCol" role="switch" aria-checked="${!!data.headerCol}"></button></div>
     <div class="row img-tc-row" style="display:flex;gap:.4rem">
-      <button type="button" class="fieldbtn" data-a="merge" style="flex:1;justify-content:center" title="Arraste ou Shift+clique nas células, depois mescle">Mesclar</button>
+      <button type="button" class="fieldbtn" data-a="merge" style="flex:1;justify-content:center" title="Mescla a seleção; com 1 célula, junta à da direita (ou abaixo)">Mesclar</button>
       <button type="button" class="fieldbtn" data-a="unmerge" style="flex:1;justify-content:center" title="Desfaz o merge da célula ativa">Desagrupar</button>
     </div>`;
   }

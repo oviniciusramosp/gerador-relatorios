@@ -20,6 +20,7 @@ import {
   ensureTable, resolveGridTableItem, mergeCells, unmergeCells, isCellCovered,
   mergeOriginAt, ensureMerges, addTableRow, addTableCol,
   setTableHeaderRow, setTableHeaderCol, unwrapTableData,
+  resolveMergeRange, mergeSelectionOrNeighbor,
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   tableHeaderTextOf, tableTextColorOf,
@@ -331,6 +332,32 @@ import {
   assert.equal(b.items[0].headerCol, true);
   setTableHeaderCol(again, false);
   assert.equal(b.items[0].headerCol, undefined);
+}
+
+// ── merge “inteligente”: 1 célula → direita; range multi → como está ────────
+{
+  const t = { rows: [['A', 'B', 'C'], ['1', '2', '3']] };
+  // 1 célula (0,0) → (0,0)-(0,1)
+  assert.deepEqual(resolveMergeRange(t, { r0: 0, c0: 0, r1: 0, c1: 0 }), {
+    r0: 0, c0: 0, r1: 0, c1: 1,
+  });
+  assert.equal(mergeSelectionOrNeighbor(t, { r0: 0, c0: 0, r1: 0, c1: 0 }), true);
+  assert.deepEqual(t.merges[0], { r: 0, c: 0, cs: 2, rs: 1 });
+  assert.equal(isCellCovered(t, 0, 1), true);
+
+  // última col da linha: estende p/ baixo
+  const t2 = { rows: [['A', 'B'], ['1', '2']] };
+  assert.deepEqual(resolveMergeRange(t2, { r0: 0, c0: 1, r1: 0, c1: 1 }), {
+    r0: 0, c0: 1, r1: 1, c1: 1,
+  });
+
+  // multi já definido
+  const t3 = { rows: [['A', 'B', 'C'], ['1', '2', '3']] };
+  assert.deepEqual(resolveMergeRange(t3, { r0: 0, c0: 0, r1: 1, c1: 1 }), {
+    r0: 0, c0: 0, r1: 1, c1: 1,
+  });
+  assert.equal(mergeSelectionOrNeighbor(t3, { r0: 0, c0: 0, r1: 1, c1: 1 }), true);
+  assert.deepEqual(t3.merges[0], { r: 0, c: 0, cs: 2, rs: 2 });
 }
 
 console.log('test-table-grid: ok');

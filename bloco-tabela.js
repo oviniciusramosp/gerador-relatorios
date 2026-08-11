@@ -371,6 +371,52 @@ export function mergeCells(b, r0, c0, r1, c1) {
   return !!(t.merges && t.merges.length);
 }
 
+/**
+ * Resolve um retângulo de merge “inteligente” (planilha):
+ * - se a seleção já for multi-célula → usa ela
+ * - se for 1 célula → mescla com a da direita; senão com a de baixo
+ * - se já for origem de merge → estende +1 col à direita (ou +1 row)
+ * Retorna { r0,c0,r1,c1 } ou null.
+ */
+export function resolveMergeRange(b, sel) {
+  const t = unwrapTableData(b) || b;
+  ensureMatrix(t);
+  const nR = t.rows.length;
+  const nC = nColsOf(t);
+  if (!sel || !Number.isFinite(+sel.r0) || !Number.isFinite(+sel.c0)) return null;
+  let r0 = Math.min(+sel.r0, +sel.r1 ?? +sel.r0);
+  let r1 = Math.max(+sel.r0, +sel.r1 ?? +sel.r0);
+  let c0 = Math.min(+sel.c0, +sel.c1 ?? +sel.c0);
+  let c1 = Math.max(+sel.c0, +sel.c1 ?? +sel.c0);
+  r0 = Math.max(0, Math.min(nR - 1, r0));
+  r1 = Math.max(0, Math.min(nR - 1, r1));
+  c0 = Math.max(0, Math.min(nC - 1, c0));
+  c1 = Math.max(0, Math.min(nC - 1, c1));
+
+  // se a âncora é origem de merge existente, usa a caixa inteira do merge
+  const origin = mergeOriginAt(t, r0, c0) || findMergeCovering(t, r0, c0);
+  if (origin && r0 === r1 && c0 === c1) {
+    r0 = origin.r;
+    c0 = origin.c;
+    r1 = origin.r + origin.rs - 1;
+    c1 = origin.c + origin.cs - 1;
+  }
+
+  if (r0 !== r1 || c0 !== c1) return { r0, c0, r1, c1 };
+
+  // 1 célula (ou 1 merge): estende p/ direita, senão p/ baixo
+  if (c1 + 1 < nC) return { r0, c0, r1, c1: c1 + 1 };
+  if (r1 + 1 < nR) return { r0, c0, r1: r1 + 1, c1 };
+  return null;
+}
+
+/** Atalho: resolve range + mergeCells. */
+export function mergeSelectionOrNeighbor(b, sel) {
+  const range = resolveMergeRange(b, sel);
+  if (!range) return false;
+  return mergeCells(b, range.r0, range.c0, range.r1, range.c1);
+}
+
 export function unmergeCells(b, r, c) {
   const t = unwrapTableData(b) || b;
   const m = findMergeCovering(t, r, c);
@@ -897,25 +943,27 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     mergeBtn.type = 'button';
     mergeBtn.className = 'tbl-merge-btn';
     mergeBtn.textContent = 'Mesclar células';
-    mergeBtn.title = 'Agrupa o retângulo selecionado (arraste ou Shift+clique)';
+    mergeBtn.title = 'Mescla a seleção; com 1 célula, junta à da direita (ou abaixo)';
     const unmergeBtn = document.createElement('button');
     unmergeBtn.type = 'button';
     unmergeBtn.className = 'tbl-merge-btn';
     unmergeBtn.textContent = 'Desagrupar';
-    unmergeBtn.title = 'Remove o agrupamento da célula';
+    unmergeBtn.title = 'Remove o agrupamento da célula ativa';
     mergeBar.append(mergeBtn, unmergeBtn);
 
     paintCellSel = () => {
       table.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
+      // barra sempre visível em edição — merge funciona com 1 célula (direita/baixo)
+      mergeBar.hidden = false;
+      mergeBtn.disabled = false;
       if (!cellSel) {
-        mergeBar.hidden = true;
+        unmergeBtn.disabled = true;
         return;
       }
       const rMin = Math.min(cellSel.r0, cellSel.r1);
       const rMax = Math.max(cellSel.r0, cellSel.r1);
       const cMin = Math.min(cellSel.c0, cellSel.c1);
       const cMax = Math.max(cellSel.c0, cellSel.c1);
-      const multi = rMin !== rMax || cMin !== cMax;
       let hasMerge = false;
       table.querySelectorAll('th, td').forEach((el) => {
         const rr = +el.dataset.row;
@@ -928,16 +976,15 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
         if (hit) el.classList.add('tbl-sel');
         if (hit && m && (m.cs > 1 || m.rs > 1)) hasMerge = true;
       });
-      mergeBtn.disabled = !multi;
-      // se a seleção é 1 célula mesclada, permite desagrupar
-      if (!multi) {
+      // desagrupar se a seleção toca algum merge
+      if (!hasMerge) {
         const m = findMergeCovering(b, rMin, cMin);
-        unmergeBtn.disabled = !m || (m.cs <= 1 && m.rs <= 1);
-      } else {
-        unmergeBtn.disabled = !hasMerge;
+        hasMerge = !!(m && (m.cs > 1 || m.rs > 1));
       }
-      mergeBar.hidden = !multi && unmergeBtn.disabled;
+      unmergeBtn.disabled = !hasMerge;
     };
+    // mostra a barra já no mount (sem esperar seleção)
+    paintCellSel();
 
     // seleção de range (estilo planilha):
     // - clique = âncora
@@ -1006,26 +1053,41 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       extendSelTo(+td.dataset.row, +td.dataset.col);
     });
 
+    /** Célula âncora: seleção atual, senão a célula com foco. */
+    const anchorSel = () => {
+      if (cellSel) return cellSel;
+      const ae = typeof document !== 'undefined' ? document.activeElement : null;
+      const td = ae && ae.closest && ae.closest('th, td');
+      if (td && table.contains(td)) {
+        const r = +td.dataset.row;
+        const c = +td.dataset.col;
+        if (Number.isFinite(r) && Number.isFinite(c)) {
+          return { r0: r, c0: c, r1: r, c1: c };
+        }
+      }
+      // fallback: primeira célula de dados
+      return { r0: 0, c0: 0, r1: 0, c1: 0 };
+    };
     const runMerge = () => {
-      if (!cellSel) return false;
       const data = unwrapTableData(b) || b;
-      const ok = mergeCells(data, cellSel.r0, cellSel.c0, cellSel.r1, cellSel.c1);
-      // se b é Proxy, merges já foram pro item; se for clone antigo, copia
-      if (ok && data !== b && data.merges) b.merges = data.merges;
+      const sel = anchorSel();
+      const ok = mergeSelectionOrNeighbor(data, sel);
       if (ok) {
         cellSel = null;
+        ctx.commit?.();
         ctx.rerender?.();
       }
       return ok;
     };
     const runUnmerge = () => {
-      if (!cellSel) return false;
       const data = unwrapTableData(b) || b;
-      const r = Math.min(cellSel.r0, cellSel.r1);
-      const c = Math.min(cellSel.c0, cellSel.c1);
+      const sel = anchorSel();
+      const r = Math.min(sel.r0, sel.r1 ?? sel.r0);
+      const c = Math.min(sel.c0, sel.c1 ?? sel.c0);
       const ok = unmergeCells(data, r, c);
       if (ok) {
         cellSel = null;
+        ctx.commit?.();
         ctx.rerender?.();
       }
       return ok;
@@ -1042,6 +1104,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       e.stopImmediatePropagation?.();
       runUnmerge();
     };
+    // só pointerdown (não click): rerender destrói o botão antes do click
     mergeBtn.addEventListener('pointerdown', doMerge);
     unmergeBtn.addEventListener('pointerdown', doUnmerge);
 
