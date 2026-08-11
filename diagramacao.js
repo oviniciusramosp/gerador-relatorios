@@ -774,6 +774,11 @@ function syncMeasurerCols() {
   mL.style.width = L + 'px';
   mF.style.width = COL_FULL + 'px';
   trialCol.style.width = L + 'px';
+  // Mesma classe .editing das páginas reais: botões do grid (Substituir/Remover) só
+  // ficam position:absolute sob .page.editing. Sem isso o medidor conta ~35px a mais
+  // por célula e a paginação empurra o bloco seguinte (ex.: última imagem sozinha
+  // na página) mesmo com espaço visual sobrando.
+  measurer.classList.toggle('editing', !!editing);
 }
 
 function measure(b) {

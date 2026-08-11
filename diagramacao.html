@@ -1130,25 +1130,28 @@
   .page .imggrid-wrap .imggrid-empty-ico {
     font-size: 16px; line-height: 1; font-weight: 400;
   }
-  /* foto preenchida: sem clique-para-substituir; ações no hover (Substituir / Remover) */
-  .page.editing .imggrid-wrap .imggrid-has { cursor: default; }
-  .page.editing .imggrid-wrap .imggrid-has:hover { outline: 1.5px solid color-mix(in srgb, #4E39FF 45%, transparent); outline-offset: 1px; }
-  .page.editing .imggrid-wrap .imggrid-actions {
+  /* foto preenchida: sem clique-para-substituir; ações no hover (Substituir / Remover).
+     position:absolute SEMPRE (não só em .page.editing): o medidor de paginação monta
+     o grid com editing=true mas sem a classe .editing no host — se as ações entrarem
+     no fluxo, a altura medida sobe ~35px e o próximo bloco cai de página à toa. */
+  .page .imggrid-wrap .imggrid-actions {
     position: absolute; top: 4px; right: 4px; z-index: 2;
     display: inline-flex; gap: 4px; align-items: center;
     opacity: 0; pointer-events: none;
     transition: opacity .12s ease;
   }
-  .page.editing .imggrid-wrap .imggrid-frame:hover .imggrid-actions,
-  .page.editing .imggrid-wrap .imggrid-actions:focus-within {
-    opacity: 1; pointer-events: auto;
-  }
-  .page.editing .imggrid-wrap .imggrid-rep,
-  .page.editing .imggrid-wrap .imggrid-rm {
+  .page .imggrid-wrap .imggrid-rep,
+  .page .imggrid-wrap .imggrid-rm {
     width: 22px; height: 22px; padding: 0; margin: 0;
     display: inline-flex; align-items: center; justify-content: center;
     border: 0; border-radius: 6px; cursor: pointer;
     color: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+  }
+  .page.editing .imggrid-wrap .imggrid-has { cursor: default; }
+  .page.editing .imggrid-wrap .imggrid-has:hover { outline: 1.5px solid color-mix(in srgb, #4E39FF 45%, transparent); outline-offset: 1px; }
+  .page.editing .imggrid-wrap .imggrid-frame:hover .imggrid-actions,
+  .page.editing .imggrid-wrap .imggrid-actions:focus-within {
+    opacity: 1; pointer-events: auto;
   }
   .page.editing .imggrid-wrap .imggrid-rep {
     background: color-mix(in srgb, #4E39FF 88%, #000);
