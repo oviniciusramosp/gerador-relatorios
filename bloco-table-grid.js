@@ -131,13 +131,13 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     cell.style.minWidth = '0';
     if (equal === 'height') cell.style.display = 'flex';
 
-    // estilo compartilhado + cores do item; mesma ref de rows/merges do item
+    // estilo shared no clone; rows/merges/colWidths compartilhados com o item
+    // (resolveGridTableItem já reata as refs — syncStructure é cinto de segurança
+    // se ensureMatrix precisar reatribuir a matriz)
     const resolved = resolveGridTableItem(b, it);
-    resolved.rows = it.rows;
-    if (it.colWidths) resolved.colWidths = it.colWidths;
-    if (it.merges) resolved.merges = it.merges;
 
     const syncStructure = () => {
+      it.rows = resolved.rows;
       if (resolved.merges && resolved.merges.length) it.merges = resolved.merges;
       else delete it.merges;
       if (resolved.colWidths) it.colWidths = resolved.colWidths;
@@ -233,6 +233,8 @@ function clearSiblingTableCellFocus(gridWrap, keepItemIndex) {
   .tblgrid-wrap { position: relative; z-index: 2; overflow: visible; display: flow-root; }
   .tblgrid { width: 100%; min-width: 0; }
   .tblgrid-cell { position: relative; min-width: 0; overflow: visible; }
+  /* ativa por cima das vizinhas: “+”/alças na borda não ficam sob a célula ao lado */
+  .tblgrid-cell.is-active { z-index: 4; }
   .tblgrid-cell .tbl-wrap { width: 100% !important; overflow: visible; }
   .page.editing .tblgrid-cell.is-active .tbl-frame {
     outline: 1.5px solid color-mix(in srgb, #4E39FF 55%, transparent);

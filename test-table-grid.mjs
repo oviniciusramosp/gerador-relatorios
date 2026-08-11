@@ -8,6 +8,7 @@
  * - gap custom não entrando no layout de colunas
  * - layout com colunas de larguras diferentes em equal=width
  * - ensureTable limpando border/radius default
+ * - “+”/reordenar no grid mutando clone desligado do item (rows some no rerender)
  */
 import assert from 'node:assert/strict';
 import {
@@ -17,7 +18,7 @@ import {
 } from './bloco-table-grid.js';
 import {
   ensureTable, resolveGridTableItem, mergeCells, unmergeCells, isCellCovered,
-  mergeOriginAt, ensureMerges,
+  mergeOriginAt, ensureMerges, addTableRow, addTableCol,
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   tableHeaderTextOf, tableTextColorOf,
@@ -258,6 +259,42 @@ import {
   t.merges = [{ r: 0, c: 0, cs: 1, rs: 1 }];
   ensureMerges(t);
   assert.equal(t.merges, undefined);
+}
+
+// ── mutate via clone resolvido = muta o item real (caminho do “+”/alças no grid) ─
+// Antes: ensureMatrix reatribuía resolved.rows e desligava do item → addRow sumia no rerender.
+{
+  const b = {
+    type: 'table-grid',
+    fontSize: 12,
+    items: [{ rows: [['H1', 'H2'], ['a', 'b'], ['c', 'd']], bg: '#FAFAFA' }],
+  };
+  ensureTableGrid(b);
+  const it = b.items[0];
+  const resolved = resolveGridTableItem(b, it);
+  assert.equal(resolved.rows, it.rows, 'rows compartilhado após resolve');
+  assert.equal(resolved.fontSize, 12, 'estilo shared no clone');
+
+  const n0 = it.rows.length;
+  addTableRow(resolved, null);
+  assert.equal(it.rows.length, n0 + 1, 'addRow no clone grava no item');
+  assert.equal(resolved.rows, it.rows, 'ref rows permanece após addRow');
+
+  const cols0 = it.rows[0].length;
+  addTableCol(resolved, null);
+  assert.equal(it.rows[0].length, cols0 + 1, 'addCol no clone grava no item');
+  // colWidths é reatribuído no clone — o itemCtx.rerender do grid faz o sync
+  assert.ok(resolved.colWidths && resolved.colWidths.length === cols0 + 1);
+  it.colWidths = resolved.colWidths; // espelha syncStructure
+  assert.equal(it.colWidths, resolved.colWidths);
+
+  // reordenar: splice in-place no array compartilhado (como moveRow)
+  const r2 = resolveGridTableItem(b, it);
+  assert.equal(r2.rows, it.rows, 're-resolve mantém ref de rows');
+  const [row] = r2.rows.splice(2, 1);
+  r2.rows.splice(1, 0, row);
+  assert.equal(it.rows[1][0], 'c', 'reorder no clone reflete no item');
+  assert.equal(it.rows[2][0], 'a');
 }
 
 console.log('test-table-grid: ok');

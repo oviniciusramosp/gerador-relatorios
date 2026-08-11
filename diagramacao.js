@@ -19,9 +19,9 @@ import {
   openSwatchPop as openSwatchPopBase, parseColor, withAlpha, harvestColorsFromHtml,
 } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
 import {
-  rotateOf, setBlockRotate, snapRotate, ROTATE_SNAPS,
+  rotateOf, setBlockRotate, snapRotate, clampRotate, ROTATE_SNAPS,
 } from './stories-core.js';   // rotação de imagem (mesmo contrato dos Stories)
-import { enhanceAll, wireFieldEditKeys } from './range-snap.js';  // snap + digitação (Enter aplica, sem quebrar linha)
+import { enhanceAll, wireFieldEditKeys, isFreeSnap } from './range-snap.js';  // snap + digitação (Enter aplica, sem quebrar linha); Shift = sem ímã
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
@@ -4234,10 +4234,20 @@ pagesEl.addEventListener('mousedown', (e) => {
     // qualquer parte do callout (ícone, padding, texto) seleciona e mostra a #calloutBar
     selectBlockFromHandle(callout.dataset.id);
   } else if (tblgrid) {
-    selectBlockFromHandle(tblgrid.dataset.id);
+    // chrome da tabela ( +, alças, resize ): o próprio bloco-tabela cuida;
+    // não reabrir painel no meio do pointerdown de add/reorder
+    if (e.target.closest?.('.tbl-edge-add, .tbl-handle, .tbl-resizer, .tbl-merge-bar, .tbl-merge-btn, .tbl-menu')) {
+      /* no-op */
+    } else {
+      selectBlockFromHandle(tblgrid.dataset.id);
+    }
   } else if (tbl) {
     // clique na moldura/célula da tabela → ativo + popover lateral (célula ainda recebe o focusin)
-    selectBlockFromHandle(tbl.dataset.id);
+    if (e.target.closest?.('.tbl-edge-add, .tbl-handle, .tbl-resizer, .tbl-merge-bar, .tbl-merge-btn, .tbl-menu')) {
+      /* no-op */
+    } else {
+      selectBlockFromHandle(tbl.dataset.id);
+    }
   } else if (imggrid) {
     // igual tabela: clicar na moldura, slot vazio, título ou legenda ativa o grid + painel
     selectBlockFromHandle(imggrid.dataset.id);
@@ -4888,7 +4898,7 @@ function openImgPanel() {
         <button type="button" class="sw" data-a="capfit" role="switch" aria-checked="${b.capFit ? 'true' : 'false'}"></button>
       </div>
     </div>
-    <label class="field" title="Giro plano da foto (mesmo contrato dos Stories)"><span class="field-row">Rotação <span class="field-val"><span data-role="rotatev">${rot}</span>°<button type="button" class="resetbtn" data-a="rotatereset" title="Sem rotação">↺</button></span></span>
+    <label class="field" title="Giro plano da foto. Digite o ângulo ou arraste; Shift = sem ímã (ajuste fino)"><span class="field-row">Rotação <span class="field-val"><span data-role="rotatev">${rot}</span>°<button type="button" class="resetbtn" data-a="rotatereset" title="Sem rotação">↺</button></span></span>
       <input type="range" data-a="rotate" min="-180" max="180" step="1" value="${rot}" data-snaps="${rotateSnaps}">
     </label>
     <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
@@ -4971,15 +4981,18 @@ function openImgPanel() {
     if (range && document.activeElement !== range) range.value = String(n);
     save(); scheduleCommit();
   };
-  // rotação: ao vivo no <img> (ímã nos ângulos dos Stories); 0 apaga o campo
+  // rotação: ao vivo no <img>. ímã 0/15/45/… no arraste; digitação e Shift = livre
+  // (sem isto, digitar 3 colava em 0 por ROTATE_SNAP_THRESH=4). 0 apaga o campo.
   const paintRotate = (n) => {
-    setBlockRotate(b, snapRotate(n));
+    const range = imgPanel.querySelector('input[data-a="rotate"]');
+    const free = isFreeSnap(range);
+    setBlockRotate(b, free ? clampRotate(n) : snapRotate(n));
     const r = rotateOf(b);
     const img = liveFig()?.querySelector('img');
     applyImgRotate(img, b);
     const v = imgPanel.querySelector('[data-role="rotatev"]');
-    if (v) v.textContent = String(r);
-    const range = imgPanel.querySelector('input[data-a="rotate"]');
+    // não sobrescreve enquanto digita (caret / rascunho "3" no meio de "30")
+    if (v && document.activeElement !== v) v.textContent = String(r);
     if (range && document.activeElement !== range) range.value = String(r);
     save(); scheduleCommit();
   };

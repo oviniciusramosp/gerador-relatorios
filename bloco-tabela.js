@@ -61,11 +61,25 @@ export const TABLE_GRID_SHARED_KEYS = [
 function nColsOf(b) {
   return Math.max(1, ...(b.rows || []).map((r) => r.length), 1);
 }
+/**
+ * Garante matriz retangular. Só reatribui b.rows quando precisa normalizar —
+ * se já estiver ok, muta in-place. Importante pro table-grid: buildTableEl
+ * edita um clone com styles shared; se ensureMatrix trocar a ref de rows,
+ * addRow/moveRow no “+”/alça não gravam no item real e o rerender desfaz.
+ */
 function ensureMatrix(b) {
-  if (!b.rows || !b.rows.length) b.rows = seed();
+  if (!b.rows || !b.rows.length) {
+    b.rows = seed();
+    return;
+  }
   const cols = nColsOf(b);
+  let dirty = false;
+  for (const r of b.rows) {
+    if (!Array.isArray(r) || r.length !== cols) { dirty = true; break; }
+  }
+  if (!dirty) return;
   b.rows = b.rows.map((r) => {
-    const row = r.slice();
+    const row = Array.isArray(r) ? r.slice() : [];
     while (row.length < cols) row.push('');
     return row.slice(0, cols);
   });
@@ -151,7 +165,11 @@ export function ensureSharedTableStyle(b) {
   return b;
 }
 
-/** Copia estilos compartilhados do grid para um clone de item (render/edição). */
+/**
+ * Copia estilos compartilhados do grid para um clone de item (render/edição).
+ * Estrutura (rows/merges/colWidths) fica compartilhada com o item real — mutações
+ * do editor ( + linha, reordenar, etc.) precisam sobreviver ao rerender.
+ */
 export function resolveGridTableItem(grid, item) {
   const t = item && typeof item === 'object' ? { ...item } : { rows: seed() };
   if (!Array.isArray(t.rows)) t.rows = seed();
@@ -162,6 +180,24 @@ export function resolveGridTableItem(grid, item) {
   delete t.id;
   delete t.type;
   ensureTable(t);
+  // ensureTable pode ter normalizado rows → devolve a ref ao item e reusa nela
+  if (item && typeof item === 'object') {
+    item.rows = t.rows;
+    t.rows = item.rows;
+    if (t.colWidths) {
+      item.colWidths = t.colWidths;
+      t.colWidths = item.colWidths;
+    } else {
+      delete item.colWidths;
+    }
+    if (t.merges?.length) {
+      item.merges = t.merges;
+      t.merges = item.merges;
+    } else {
+      delete item.merges;
+      delete t.merges;
+    }
+  }
   return t;
 }
 
@@ -457,8 +493,10 @@ function addCol(b, at /* null = fim */) {
   ensureMatrix(b);
   const n = nColsOf(b);
   const i = at == null ? n : Math.max(0, Math.min(n, at));
-  b.rows.forEach((r) => r.splice(i, 0, ''));
+  // larguras ANTES de inserir a coluna — senão colWidthsOf já vê n+1 e
+  // o splice do slice gera n+2 frações (bug silencioso no “+” coluna).
   const w = colWidthsOf(b);
+  b.rows.forEach((r) => r.splice(i, 0, ''));
   // nova coluna nasce com fatia igual à média; re-normaliza
   const slice = 1 / (n + 1);
   const scaled = w.map((x) => x * (1 - slice));
@@ -853,6 +891,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       btn.innerHTML = '<span></span><span></span><span></span>';
       btn.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
+        e.stopImmediatePropagation?.();
         if (r === 0) {
           // header row: só menu (não reordena)
           e.preventDefault();
@@ -887,6 +926,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       btn.innerHTML = '<span></span><span></span><span></span>';
       btn.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
+        e.stopImmediatePropagation?.();
         startColDrag(e, b, c, wrap, table, btn, ctx, {
           // 1ª coluna: switcher de cabeçalho no menu de click
           headerSwitcher: c === 0,
@@ -897,18 +937,18 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     wrap.appendChild(colHandles);
 
     // ── “+” redondos, só perto da borda ────────────────────────────────────
+    // pointerdown (não click): no table-grid o mousedown do painel/célula
+    // podia destruir o botão antes do click; ação imediata + stopImmediate.
     const addRowBtn = document.createElement('button');
     addRowBtn.type = 'button';
     addRowBtn.className = 'tbl-edge-add tbl-add-row';
     addRowBtn.title = 'Nova linha';
     addRowBtn.textContent = '+';
-    addRowBtn.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      e.stopPropagation(); // não deixa o grid capturar e rebuildar o painel
-    });
-    addRowBtn.addEventListener('click', (e) => {
+    addRowBtn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation?.();
       addRow(b, null);
       ctx.rerender?.();
     });
@@ -919,13 +959,11 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     addColBtn.className = 'tbl-edge-add tbl-add-col';
     addColBtn.title = 'Nova coluna';
     addColBtn.textContent = '+';
-    addColBtn.addEventListener('mousedown', (e) => {
+    addColBtn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
-    });
-    addColBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
+      e.stopImmediatePropagation?.();
       addCol(b, null);
       ctx.rerender?.();
     });
