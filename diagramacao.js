@@ -1913,9 +1913,17 @@ function closeTableGridPanel() { if (tableGridPanel) tableGridPanel.hidden = tru
 function paintTableGridFocus(blockId, focus) {
   const host = pagesEl.querySelector(`.tblgrid-wrap[data-id="${blockId}"]`);
   if (!host) return;
+  const keep = focus === 'grid' ? -1 : +focus;
   host.querySelectorAll('.tblgrid-cell').forEach((cell) => {
     const i = +cell.dataset.item;
-    cell.classList.toggle('is-active', focus !== 'grid' && i === +focus);
+    const on = keep >= 0 && i === keep;
+    cell.classList.toggle('is-active', on);
+    if (!on) {
+      // limpa foco/seleção visual das outras tabelas
+      cell.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
+      const ae = document.activeElement;
+      if (ae && cell.contains(ae) && typeof ae.blur === 'function') ae.blur();
+    }
   });
 }
 

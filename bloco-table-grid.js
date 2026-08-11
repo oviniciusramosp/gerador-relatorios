@@ -179,7 +179,10 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     if (editing) {
       // clique / foco numa célula → painel seleciona "Tabela N"
       // NÃO interceptar chrome (+ linha/coluna, alças, merge) — senão o click some no rebuild
-      const pick = () => ctx.selectGridItem?.(b.id, i);
+      const pick = () => {
+        clearSiblingTableCellFocus(wrap, i);
+        ctx.selectGridItem?.(b.id, i);
+      };
       cell.addEventListener('mousedown', (e) => {
         if (e.target.closest?.('.tbl-edge-add, .tbl-handle, .tbl-resizer, .tbl-merge-bar, .tbl-merge-btn, .tbl-menu')) {
           return;
@@ -199,6 +202,28 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
   return wrap;
 }
 
+/**
+ * Tira o foco visual de células nas OUTRAS tabelas do mesmo grid.
+ * Sem isso, contenteditable em T1 mantém outline roxo ao clicar em T2.
+ */
+function clearSiblingTableCellFocus(gridWrap, keepItemIndex) {
+  if (!gridWrap) return;
+  gridWrap.querySelectorAll('.tblgrid-cell').forEach((cell) => {
+    if (+cell.dataset.item === keepItemIndex) return;
+    // limpa seleção de merge
+    cell.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
+    // blur se o activeElement está nesta tabela
+    const ae = document.activeElement;
+    if (ae && cell.contains(ae) && typeof ae.blur === 'function') {
+      ae.blur();
+    }
+    // reforço: remove :focus residual se o browser mantiver
+    cell.querySelectorAll('th:focus, td:focus').forEach((el) => {
+      if (typeof el.blur === 'function') el.blur();
+    });
+  });
+}
+
 // CSS do grid (injetado uma vez)
 (function injectCss() {
   if (typeof document === 'undefined' || document.getElementById('tblgrid-css')) return;
@@ -212,6 +237,11 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
   .page.editing .tblgrid-cell.is-active .tbl-frame {
     outline: 1.5px solid color-mix(in srgb, #4E39FF 55%, transparent);
     outline-offset: 2px;
+  }
+  /* só a tabela ativa mostra outline de foco em células (evita T1+T2 “ligadas”) */
+  .page.editing .tblgrid-cell:not(.is-active) .tbl th:focus,
+  .page.editing .tblgrid-cell:not(.is-active) .tbl td:focus {
+    outline: none;
   }
   /* tabela selecionada no grid: “+” de linha/coluna sempre visíveis */
   .tblgrid-cell.is-active .tbl-editing .tbl-edge-add { opacity: 1; }
