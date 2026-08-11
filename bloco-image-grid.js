@@ -5,7 +5,7 @@
  *     b.equal         — 'width' (default) | 'height'
  *     b.titles        — true = reserva título em TODAS as colunas (default off)
  *     b.captions      — true = reserva legenda em TODAS as colunas (default off)
- *     b.captionStyle  — 'default' | 'p' (só com captions; default = estilo figcaption)
+ *     b.captionStyle  — 'default' | 'p' (só com captions; default = tipo caption / ⋮ Legenda)
  *     b.gap           — px entre colunas (default IMAGE_GRID_GAP)
  *     b.radius        — raio dos cantos (default 4)
  *     ctx             — { commit, rerender, removeBlock, pickImage }
@@ -65,7 +65,7 @@ export function captionsOn(b) {
   return !!(b && b.captions);
 }
 
-/** 'default' = estilo figcaption; 'p' = tipografia do parágrafo do doc. */
+/** 'default' = tipo caption (⋮ Legenda); 'p' = tipografia do parágrafo do doc. */
 export function captionStyleOf(b) {
   return b && b.captionStyle === 'p' ? 'p' : 'default';
 }
@@ -196,7 +196,7 @@ export function setCaptionsOn(b, on) {
  * Monta o DOM do grid.
  * @param {object} b
  * @param {boolean} editing
- * @param {{ commit?:Function, rerender?:Function, removeBlock?:Function, pickImage?:Function, applyCaptionStyle?:(el:HTMLElement)=>void }} ctx
+ * @param {{ commit?:Function, rerender?:Function, removeBlock?:Function, pickImage?:Function, applyCaptionStyle?:(el:HTMLElement, mode?:'default'|'p')=>void }} ctx
  * @param {number} [colW]
  */
 export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
@@ -359,7 +359,8 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
       c.style.gridColumn = String(col);
       c.style.gridRow = String(capRow);
       if (editing) { c.contentEditable = 'true'; c.spellcheck = true; c.lang = 'pt-BR'; }
-      if (capStyle === 'p' && ctx.applyCaptionStyle) ctx.applyCaptionStyle(c);
+      // default = tipo 'caption' (⋮ Legenda); 'p' = tipografia do parágrafo
+      if (ctx.applyCaptionStyle) ctx.applyCaptionStyle(c, capStyle);
       cell.appendChild(c);
     }
 

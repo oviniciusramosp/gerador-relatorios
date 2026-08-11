@@ -292,28 +292,58 @@ function applyDividerStyle(el) {
   el.style.background = o.color || '#D9D9D9';
 }
 // tipos cuja tipografia (cor/tamanho/lh/tracking) espelha o parágrafo — não tem controles
-// próprios no popover ⋮ e applyTypeStyle lê de blockStyles.p.
+// próprios no popover ⋮ e applyTypeStyle lê de typeStyleOf('p').
 const TEXT_FROM_P = new Set(['li', 'ol', 'check']);
 function typeStyleOf(type) {
   const def = TYPE_STYLE_DEFAULTS[type] || {};
-  const cur = (state.doc.blockStyles && state.doc.blockStyles[type]) || {};
-  return { ...def, ...cur };
+  const cur = (state.doc && state.doc.blockStyles && state.doc.blockStyles[type]) || {};
+  // descarta NaN/undefined de overrides corrompidos (slider vazio etc.) pra não vazar pro UI
+  const clean = {};
+  for (const [k, v] of Object.entries(cur)) {
+    if (v == null) continue;
+    if (typeof v === 'number' && !Number.isFinite(v)) continue;
+    clean[k] = v;
+  }
+  return { ...def, ...clean };
 }
 // aplica tipografia no elemento que RENDERIZA o texto — pro check/callout isso é o
 // .ck-txt/.co-txt (não o envelope). li/ol/check leem de p; quote também aplica borderColor.
+// Sempre usa typeStyleOf (default + override): figcaption de imagem/grid e o bloco
+// 'caption' compartilham o ⋮ Legenda; depender só de blockStyles deixava default/NaN de fora.
 function applyTypeStyle(el, type) {
+  if (!el) return;
   const textType = TEXT_FROM_P.has(type) ? 'p' : type;
-  const o = state.doc.blockStyles && state.doc.blockStyles[textType];
-  if (o) {
-    if (o.color) el.style.color = o.color;
-    if (o.fontSize != null) el.style.fontSize = o.fontSize + 'px';
-    if (o.lineHeight != null) el.style.lineHeight = o.lineHeight + 'px';
-    if (o.letterSpacing != null) el.style.letterSpacing = o.letterSpacing + 'em';
+  const o = typeStyleOf(textType);
+  if (o.color) el.style.color = o.color;
+  if (o.fontSize != null && Number.isFinite(+o.fontSize)) el.style.fontSize = (+o.fontSize) + 'px';
+  if (o.lineHeight != null && Number.isFinite(+o.lineHeight)) el.style.lineHeight = (+o.lineHeight) + 'px';
+  if (o.letterSpacing != null && Number.isFinite(+o.letterSpacing)) el.style.letterSpacing = (+o.letterSpacing) + 'em';
+  // legenda (bloco solto + figcaption): face itálica fixa da spec de imagem
+  if (textType === 'caption') {
+    el.style.fontStyle = 'italic';
+    el.style.fontWeight = '400';
+    el.style.textAlign = 'justify';
   }
   if (type === 'quote') {
     const border = typeStyleOf('quote').borderColor;
     if (border) el.style.borderLeftColor = border;
   }
+}
+/** Face da legenda (figcaption de imagem/grid ou bloco type=caption). */
+function applyCaptionFace(el, mode = 'default') {
+  if (!el) return;
+  if (mode === 'p') {
+    el.style.fontStyle = 'normal';
+    el.style.fontWeight = '400';
+    el.style.textAlign = 'justify';
+    const o = typeStyleOf('p');
+    if (o.color) el.style.color = o.color;
+    if (o.fontSize != null && Number.isFinite(+o.fontSize)) el.style.fontSize = (+o.fontSize) + 'px';
+    if (o.lineHeight != null && Number.isFinite(+o.lineHeight)) el.style.lineHeight = (+o.lineHeight) + 'px';
+    if (o.letterSpacing != null && Number.isFinite(+o.letterSpacing)) el.style.letterSpacing = (+o.letterSpacing) + 'em';
+    return;
+  }
+  applyTypeStyle(el, 'caption');
 }
 /** Títulos "Índice" / "Resumo": espelham o H1 global (⋮ da paleta), inclusive cor.
  *  Usa typeStyleOf (default + override) — não só blockStyles, senão cor default some. */
@@ -1286,11 +1316,11 @@ function openImageGridPanel() {
 
   const capSlot = imageGridPanel.querySelector('[data-slot="capstyle"]');
   if (capSlot) {
-    // legenda padrão (itálico figcaption) vs tipografia do parágrafo
+    // Legenda (⋮ do tipo caption) vs tipografia do parágrafo
     const CAP_DEF_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 5h10M3 8h7M3 11h9"/><path d="M11 4l2 8" opacity=".5"/></svg>';
     const CAP_P_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><text x="3" y="12" font-size="11" font-weight="700" fill="currentColor" stroke="none" font-family="system-ui,sans-serif">¶</text></svg>';
     capSlot.append(widthSeg(capStyle, [
-      { val: 'default', label: 'Padrão (legenda)', icon: CAP_DEF_ICO },
+      { val: 'default', label: 'Legenda', icon: CAP_DEF_ICO },
       { val: 'p', label: 'Parágrafo', icon: CAP_P_ICO },
     ], (v) => {
       if (v === 'p') b.captionStyle = 'p';
@@ -1535,6 +1565,8 @@ function buildFigure(b, colW, editing) {
     c.dataset.role = 'caption'; c.dataset.id = b.id;
     c.dataset.ph = 'Legenda'; c.innerHTML = b.caption || '';
     if (editing) { c.contentEditable = 'true'; c.spellcheck = true; c.lang = 'pt-BR'; }
+    // mesma tipografia do bloco Legenda (⋮ da paleta → blockStyles.caption)
+    applyCaptionFace(c, 'default');
     fig.appendChild(c);
   }
   applyFigureLayout(fig, b, colW);
@@ -1570,18 +1602,8 @@ const imageGridCtx = {
     pendingCoverImageId = null;
     document.getElementById('imgfile').click();
   },
-  // legenda no estilo parágrafo: tipografia do tipo p (defaults + blockStyles.p)
-  applyCaptionStyle: (el) => {
-    // base do .page p.b (CSS); applyTypeStyle só grava overrides do ⋮
-    el.style.fontStyle = 'normal';
-    el.style.fontWeight = '400';
-    el.style.fontSize = '10px';
-    el.style.lineHeight = '14px';
-    el.style.color = '#4E4E4E';
-    el.style.textAlign = 'justify';
-    el.style.letterSpacing = '-0.01em';
-    applyTypeStyle(el, 'p');
-  },
+  // legenda do grid: 'default' = tipo caption (⋮ Legenda); 'p' = tipografia do parágrafo
+  applyCaptionStyle: (el, mode = 'default') => applyCaptionFace(el, mode),
 };
 
 // bloco genérico (usado na medição e no fluxo da coluna esquerda / largura total)
@@ -6245,17 +6267,24 @@ let blockStylePanel, blockStyleType = null;
 function openBlockStylePanel(type, anchorEl) {
   if (!blockStylePanel) { blockStylePanel = document.createElement('div'); blockStylePanel.id = 'blockStylePanel'; document.body.appendChild(blockStylePanel); }
   blockStyleType = type;
+  if (!state.doc.blockStyles || typeof state.doc.blockStyles !== 'object') state.doc.blockStyles = {};
   const def = TYPE_STYLE_DEFAULTS[type] || {};
-  const cur = state.doc.blockStyles[type] || {};
-  const v = (k) => cur[k] != null ? cur[k] : def[k];
+  // typeStyleOf já mescla default + override e descarta NaN — painel e render usam a mesma fonte
+  const merged = typeStyleOf(type);
+  const v = (k) => {
+    const raw = merged[k];
+    if (raw == null) return def[k];
+    if (typeof raw === 'number' && !Number.isFinite(raw)) return def[k];
+    return raw;
+  };
   const isHead = HEAD_TYPES.has(type);
   const isDivider = type === 'divider';
   const inheritsText = TEXT_FROM_P.has(type);          // li/ol/check: sem controles de tipografia
   const isListGap = type === 'li' || type === 'ol' || type === 'check';
   const label = (btByType[type]?.querySelector('.lbl') || {}).textContent || type;
-  const fmtPct = (n) => Math.round((+n) * 100) + '%';
-  const fmtLS = (n) => (+n).toFixed(2) + 'em';
-  const fmtPx = (n) => n + 'px';
+  const fmtPct = (n) => Math.round((Number.isFinite(+n) ? +n : 0) * 100) + '%';
+  const fmtLS = (n) => (Number.isFinite(+n) ? +n : 0).toFixed(2) + 'em';
+  const fmtPx = (n) => (Number.isFinite(+n) ? +n : 0) + 'px';
   const markerPickHtml = (field, active) =>
     `<div class="markerpick" data-a="${field}" role="listbox" aria-label="${field === 'marker' ? 'Símbolo do item' : 'Símbolo do subitem'}">`
     + LI_MARKER_OPTS.map(m =>
@@ -6360,6 +6389,10 @@ function openBlockStylePanel(type, anchorEl) {
       scheduleStyleRender();
       return;
     }
+    // não gravar NaN/undefined (range vazio ou parse falho) — isso virava "undefinedpx" no painel
+    if (val == null) return;
+    if (typeof val === 'number' && !Number.isFinite(val)) return;
+    if (!state.doc.blockStyles || typeof state.doc.blockStyles !== 'object') state.doc.blockStyles = {};
     const o = (state.doc.blockStyles[type] ||= {});
     o[field] = val;
     scheduleStyleRender();
