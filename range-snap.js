@@ -2,6 +2,7 @@
  * - data-snaps="0,25,50,75,100"  → marcas DENTRO da trilha + ímã nesses valores
  * - no máx. 6 marcas (lista maior é amostrada, extremos preservados)
  * - o usuário ainda pode parar em valores livres (ímã só perto do ponto)
+ * - Shift no arraste = sem ímã (ajuste fino livre) — espelha a alça de rotação dos Stories
  * - não altera o valor inicial; só intervém em input do usuário
  * - label numérico ao lado (se existir) vira digitável: sem ímã, clampa min/max/step
  * - data-edit-scale: displayNum = rangeVal * scale (ex.: 0.01 para ×, 100 para % de 0–1)
@@ -20,6 +21,29 @@ const THRESH_FRAC = 0.035;
 
 /** input → true enquanto o valor veio da digitação (ímã não deve puxar). */
 const skipSnap = new WeakSet();
+
+/** Shift pressionado = ajuste fino sem ímã (keydown/keyup em capture no window). */
+let shiftHeld = false;
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Shift') shiftHeld = true;
+  }, true);
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') shiftHeld = false;
+  }, true);
+  // perde o estado se a janela perde foco com Shift ainda baixo
+  window.addEventListener('blur', () => { shiftHeld = false; });
+}
+
+/**
+ * true quando o valor do range NÃO deve receber ímã:
+ * digitação (skipSnap) ou Shift no arraste (ajuste fino).
+ * App que re-aplica snap no handler (ex.: paintRotate) deve consultar isto.
+ */
+export function isFreeSnap(input) {
+  if (shiftHeld) return true;
+  return !!(input && skipSnap.has(input));
+}
 
 function parseSnaps(raw) {
   if (!raw) return [];
@@ -508,9 +532,10 @@ export function enhanceRange(input) {
       }
       input.setAttribute(DONE, '');
 
-      // capture: ímã antes dos handlers do app (que leem e.target.value no bubble)
+      // capture: ímã antes dos handlers do app (que leem e.target.value no bubble).
+      // digitação e Shift = livre (isFreeSnap).
       input.addEventListener('input', () => {
-        if (skipSnap.has(input)) return;
+        if (isFreeSnap(input)) return;
         const a = min(), b = max();
         const hit = nearestSnap(+input.value, snaps);
         if (hit && hit.dist <= threshold(a, b, snaps) && String(hit.value) !== input.value) {

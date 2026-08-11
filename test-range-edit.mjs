@@ -6,6 +6,8 @@
  * - checkedOpacity/barGap: digitar 55% e o range não ir pra 0.55 (scale 100)
  * - step 0.01 com float dust (letter-spacing)
  * - parse de sufixos (px, %, ×, em) e de string vazia/inválida
+ * - isFreeSnap: sem digitação/Shift → false (ímã ligado); app usa isto p/ não
+ *   re-snappar rotação digitada (3° → 0° com thresh 4)
  */
 import assert from 'node:assert/strict';
 import {
@@ -18,6 +20,7 @@ import {
   decimalsOfStep,
   quantizeClamp,
   parseEditToRange,
+  isFreeSnap,
 } from './range-snap.js';
 
 // ── parse do que o usuário digita ────────────────────────────────────────────
@@ -104,4 +107,8 @@ assert.equal(readEditDelay('250'), 250);
 assert.equal(readEditDelay({ getAttribute: (k) => k === 'data-edit-delay' ? '500' : null }), 500);
 assert.equal(readEditDelay({ getAttribute: () => null }), DEFAULT_EDIT_DELAY_MS);
 
-console.log('ok — range-edit: parse, scale, quantize (sem snap), delay, pipeline digitado→range');
+// ── isFreeSnap: baseline sem digitação e sem Shift (Node não tem key events) ──
+assert.equal(isFreeSnap(null), false);
+assert.equal(isFreeSnap({}), false);
+
+console.log('ok — range-edit: parse, scale, quantize (sem snap), delay, pipeline digitado→range, free-snap');

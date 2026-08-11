@@ -8,7 +8,7 @@
  * Ícones de token: coin-icons.js + pasta coin-icons/ (mesma base do mexc-bot).
  */
 
-import { enhanceAll, wireFieldEditKeys } from './range-snap.js';
+import { enhanceAll, wireFieldEditKeys, isFreeSnap } from './range-snap.js';
 import { deserializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';
 import { makeZip } from './zip-lite.js';
 import { projectBaseName, projectFormatFromName } from './project-link.js';
@@ -1821,7 +1821,7 @@ function openImgPanel() {
     <label class="field"><span class="field-row">Escala <span class="field-val"><span data-role="scalev">${scaleLabel}</span>%<button type="button" class="resetbtn" data-a="scalereset" title="Redefinir para 100% (largura total)">↺</button></span></span>
       <input type="range" data-a="scale" min="10" max="100" step="${IMG_SCALE_STEP}" value="${scalePct}" data-snaps="10,25,50,75,100">
     </label>
-    <label class="field" title="Giro plano do bloco (mesmo da alça de rotação)"><span class="field-row">Rotação <span class="field-val"><span data-role="rotatev">${rot}</span>°<button type="button" class="resetbtn" data-a="rotatereset" title="Sem rotação">↺</button></span></span>
+    <label class="field" title="Giro plano do bloco (mesmo da alça). Digite o ângulo ou arraste; Shift = sem ímã"><span class="field-row">Rotação <span class="field-val"><span data-role="rotatev">${rot}</span>°<button type="button" class="resetbtn" data-a="rotatereset" title="Sem rotação">↺</button></span></span>
       <input type="range" data-a="rotate" min="-180" max="180" step="1" value="${rot}" data-snaps="${rotateSnaps}">
     </label>
     <label class="field" title="Inclinação em perspectiva (CSS rotateY)"><span class="field-row">Eixo Z <span class="field-val"><span data-role="tiltv">${tilt}</span>°<button type="button" class="resetbtn" data-a="tiltreset" title="Sem perspectiva">↺</button></span></span>
@@ -1909,13 +1909,15 @@ function openImgPanel() {
     // AABB muda com o tilt — alça de rotação acompanha; painel só no commit do range
     placeRotateHandle();
   };
-  // rotação plana (mesmo campo `rotate` da alça) — pinado até o change/reset
+  // rotação plana (mesmo da alça). ímã no arraste; digitação e Shift = livre
+  // (sem free, digitar 3 colava em 0 por ROTATE_SNAP_THRESH=4)
   const paintRotate = (n) => {
-    setBlockRotate(b, snapRotate(n));
+    const range = imgPanel.querySelector('input[data-a="rotate"]');
+    const free = isFreeSnap(range);
+    setBlockRotate(b, free ? clampRotate(n) : snapRotate(n));
     const r = rotateOf(b);
     const v = imgPanel.querySelector('[data-role="rotatev"]');
-    if (v) v.textContent = String(r);
-    const range = imgPanel.querySelector('input[data-a="rotate"]');
+    if (v && document.activeElement !== v) v.textContent = String(r);
     if (range && document.activeElement !== range) range.value = String(r);
     const el = liveEl();
     if (el) applyBlockTransform(el, b);
@@ -2185,7 +2187,7 @@ function openStickerPanel() {
     <label class="field"><span class="field-row">Escala <span class="field-val"><span data-role="scalev">${fmtImgScalePct(scalePct)}</span>%<button type="button" class="resetbtn" data-a="scalereset" title="Redefinir para ${DEFAULT_STICKER_SCALE}%">↺</button></span></span>
       <input type="range" data-a="scale" min="10" max="100" step="${IMG_SCALE_STEP}" value="${scalePct}" data-snaps="10,25,${DEFAULT_STICKER_SCALE},50,75,100">
     </label>
-    <label class="field" title="Giro plano do bloco (mesmo da alça de rotação)"><span class="field-row">Rotação <span class="field-val"><span data-role="rotatev">${rot}</span>°<button type="button" class="resetbtn" data-a="rotatereset" title="Sem rotação">↺</button></span></span>
+    <label class="field" title="Giro plano do bloco (mesmo da alça). Digite o ângulo ou arraste; Shift = sem ímã"><span class="field-row">Rotação <span class="field-val"><span data-role="rotatev">${rot}</span>°<button type="button" class="resetbtn" data-a="rotatereset" title="Sem rotação">↺</button></span></span>
       <input type="range" data-a="rotate" min="-180" max="180" step="1" value="${rot}" data-snaps="${rotateSnaps}">
     </label>
     <label class="field sticker-search-field">
@@ -2218,11 +2220,12 @@ function openStickerPanel() {
     placeRotateHandle();
   };
   const paintRotate = (n) => {
-    setBlockRotate(b, snapRotate(n));
+    const range = stickerPanel.querySelector('input[data-a="rotate"]');
+    const free = isFreeSnap(range);
+    setBlockRotate(b, free ? clampRotate(n) : snapRotate(n));
     const r = rotateOf(b);
     const v = stickerPanel.querySelector('[data-role="rotatev"]');
-    if (v) v.textContent = String(r);
-    const range = stickerPanel.querySelector('input[data-a="rotate"]');
+    if (v && document.activeElement !== v) v.textContent = String(r);
     if (range && document.activeElement !== range) range.value = String(r);
     const el = liveEl();
     if (el) applyBlockTransform(el, b);

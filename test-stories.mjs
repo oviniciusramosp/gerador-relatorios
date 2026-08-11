@@ -12,6 +12,7 @@
  * - snap X/Y: centro da tela / bordas e centros de peers (arraste sem ímã)
  * - bloco gráfico (imagem + b.chart) perdendo spec no open ou rótulo de camada
  * - rotação de bloco: open sem rotate = 0; ímã em 0/15/30/45/90; 0 some do disco
+ * - digitar 3° no slider NÃO pode ir pro ímã de 0 (free = clampRotate; snapRotate(3)=0)
  * - sticker token: seed/open com symbol+scale default; kind desconhecido → token
  */
 import assert from 'node:assert/strict';
@@ -315,6 +316,7 @@ assert.equal(rotateDist(0, 10), 10);
 assert.equal(rotateDist(170, -170), 20);
 assert.equal(snapRotate(0), 0);
 assert.equal(snapRotate(2), 0); // ímã em 0
+assert.equal(snapRotate(3), 0); // thresh 4° — digitar "3" NÃO pode passar por snapRotate (use free/clamp)
 assert.equal(snapRotate(14), 15);
 assert.equal(snapRotate(43), 45);
 assert.equal(snapRotate(88), 90);
@@ -322,6 +324,10 @@ assert.equal(snapRotate(178), 180);
 assert.equal(snapRotate(-2), 0);
 assert.equal(snapRotate(7), 7); // meio do vão 0–15, livre
 assert.equal(snapRotate(7.4), 7);
+// caminho livre (digitação / Shift): grava o valor, sem ímã
+assert.equal(clampRotate(3), 3);
+assert.equal(clampRotate(1), 1);
+assert.equal(clampRotate(14), 14);
 // setBlockRotate: 0 apaga o campo
 const rotBlk = { id: 'r1', type: 'text' };
 setBlockRotate(rotBlk, 45);
