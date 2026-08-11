@@ -117,7 +117,7 @@ export const UI_REGISTRY = [
     module: 'swatch.js',
     css: ['injetado por swatch.js'],
     when: 'Qualquer escolha de cor (página, texto, logo, marca…)',
-    never: 'input[type=color] cru ou picker próprio',
+    never: 'input[type=color] cru fora do swatch, ou picker próprio',
     importHint: "import { openSwatchPop, parseColor } from './swatch.js'",
     apps: ['todos'],
     demo: 'swatch',

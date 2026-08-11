@@ -20,7 +20,8 @@
  * modular a cor recém-escolhida. Fecha com Enter no HEX ou clique fora.
  *
  * Seções (expandable): (1) Nesse documento (open se houver cores), (2) Cores nomeadas
- * (fechado), (3) Complementares (fechado). Fixas: HEX + Opacidade.
+ * (fechado), (3) Complementares (fechado). Fixas: HEX (texto + <input type=color> nativo
+ * sob o preview) + Opacidade. O nativo só escolhe matiz RGB; alpha continua no slider.
  * O CSS é injetado uma vez pelo próprio módulo — nenhum host precisa declarar nada. */
 
 import { enhanceRange } from './range-snap.js';
@@ -180,10 +181,16 @@ export function openSwatchPop(anchor, pick, current, opts) {
   swatchPop = document.createElement('div');
   swatchPop.className = 'swatch-pop' + (paperBase ? ' paper-base' : '');
 
-  // refs preenchidos abaixo (selectColor precisa de inp/paintPreview/markOn)
-  let inp, paintPreview, markOn;
+  // refs preenchidos abaixo (selectColor precisa de inp/colorInp/paintPreview/markOn)
+  let inp, colorInp, paintPreview, markOn;
 
-  /** Seleciona matiz: atualiza HEX + .on + preview; aplica com alpha atual; NÃO fecha. */
+  /** type=color exige #rrggbb minúsculo; invalid/empty → fallback pro nativo não quebrar. */
+  const toColorInputValue = (hex) => {
+    const h = normHex(hex);
+    return h ? h.toLowerCase() : '#000000';
+  };
+
+  /** Seleciona matiz: atualiza HEX + nativo + .on + preview; aplica com alpha atual; NÃO fecha. */
   const selectColor = (hex, { close = false } = {}) => {
     const h = normHex(hex);
     if (!h) return;
@@ -192,6 +199,7 @@ export function openSwatchPop(anchor, pick, current, opts) {
       inp.value = h;
       inp.classList.remove('bad');
     }
+    if (colorInp) colorInp.value = toColorInputValue(h);
     markOn?.(h);
     paintPreview?.();
     pick(withAlpha(h, alpha));
@@ -270,7 +278,7 @@ export function openSwatchPop(anchor, pick, current, opts) {
     });
   };
 
-  // ── HEX (sempre visível) ──────────────────────────────────────────────────
+  // ── HEX + picker nativo (sempre visível) ──────────────────────────────────
   {
     const lab = document.createElement('div');
     lab.className = 'sp-label';
@@ -281,7 +289,23 @@ export function openSwatchPop(anchor, pick, current, opts) {
   inp = document.createElement('input');
   inp.type = 'text'; inp.placeholder = '#RRGGBB'; inp.value = selectedHex || '';
   inp.spellcheck = false; inp.setAttribute('aria-label', 'Cor em HEX');
-  const preview = document.createElement('span'); preview.className = 'sp-swatch';
+
+  // Preview (alpha/xadrez/papel) por cima do <input type=color>; clique passa ao nativo
+  // (pointer-events:none no overlay). Assim o SO abre o color picker e o visual de
+  // opacidade continua no mesmo chip — sem segundo controle na row.
+  const pickWrap = document.createElement('div');
+  pickWrap.className = 'sp-pick';
+  colorInp = document.createElement('input');
+  colorInp.type = 'color';
+  colorInp.className = 'sp-native';
+  colorInp.value = toColorInputValue(selectedHex);
+  colorInp.title = 'Escolher cor';
+  colorInp.setAttribute('aria-label', 'Escolher cor');
+  // input (não change): aplica ao vivo enquanto o diálogo nativo arrasta a cor
+  colorInp.oninput = () => selectColor(colorInp.value);
+  const preview = document.createElement('span');
+  preview.className = 'sp-swatch';
+  preview.setAttribute('aria-hidden', 'true');
   // pinta o preview com o hex do campo + a opacidade atual do slider.
   // <100%: xadrez (default) OU base branca (opts.paper) — no callout a base branca
   // mostra como a tinta a 10% fica no papel do PDF.
@@ -294,7 +318,10 @@ export function openSwatchPop(anchor, pick, current, opts) {
       preview.style.setProperty('--sp-ov', `rgba(${r},${g},${b},${alpha})`);
       preview.classList.add(paperBase ? 'paper' : 'checker');
     } else {
-      preview.style.background = h || 'transparent';
+      // sólido: esconde o overlay e deixa o nativo aparecer (cor real do type=color)
+      preview.style.background = h ? h : 'transparent';
+      // com hex válido o overlay cobre o nativo com a mesma cor (borda/estilo .sp-swatch);
+      // sem hex, transparente — mostra o valor default do nativo.
     }
   };
   // Enter no HEX: confirma e fecha (atalho de “pronto”)
@@ -308,6 +335,7 @@ export function openSwatchPop(anchor, pick, current, opts) {
     inp.classList.toggle('bad', inp.value.trim() !== '' && !h);
     if (h) {
       selectedHex = h;
+      if (colorInp) colorInp.value = toColorInputValue(h);
       markOn(h);
       // preview ao vivo enquanto digita; não fecha
       pick(withAlpha(h, alpha));
@@ -316,7 +344,8 @@ export function openSwatchPop(anchor, pick, current, opts) {
   };
   inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commitHex(); } };
   paintPreview();
-  row.append(preview, inp);
+  pickWrap.append(colorInp, preview);
+  row.append(pickWrap, inp);
   swatchPop.append(row);
 
   if (showOpacity) {
@@ -353,7 +382,14 @@ export function openSwatchPop(anchor, pick, current, opts) {
   swatchPop.style.top = (r.bottom + 4 + ph > innerHeight ? Math.max(6, r.top - 4 - ph) : r.bottom + 4) + 'px';
   setTimeout(() => addEventListener('pointerdown', outsideSwatch), 0);
 }
-function outsideSwatch(e) { if (swatchPop && !swatchPop.contains(e.target)) closeSwatchPop(); }
+function outsideSwatch(e) {
+  if (!swatchPop || swatchPop.contains(e.target)) return;
+  // Diálogo nativo de cor: em alguns browsers o mousedown “fora” dispara com o
+  // type=color ainda focado — não fechar o pop senão o input some e o picker some junto.
+  const native = swatchPop.querySelector('.sp-native');
+  if (native && document.activeElement === native) return;
+  closeSwatchPop();
+}
 export function closeSwatchPop() {
   if (!swatchPop) return;
   removeEventListener('pointerdown', outsideSwatch);
@@ -425,8 +461,26 @@ export function closeSwatchPop() {
   .sp-chip:hover { outline: 2px solid var(--violet); outline-offset: 1px; }
   .sp-chip.on { outline: 2px solid var(--ink); outline-offset: 1px; }
   .sp-hex { display: flex; align-items: center; gap: .4rem; }
-  .sp-hex input { flex: 1; min-width: 0; padding: .35rem .5rem; border: 1px solid var(--hair-strong); border-radius: 6px; background: var(--ground); color: var(--ink); font-family: ui-monospace, monospace; font-size: .8rem; text-transform: uppercase; }
-  .sp-hex input.bad { border-color: var(--coral, #CE5249); }
+  /* chip clicável: nativo embaixo + overlay .sp-swatch (alpha/xadrez) com pointer-events:none */
+  .sp-pick {
+    position: relative; flex: 0 0 auto; width: 1.15rem; height: 1.15rem;
+  }
+  .sp-pick .sp-native {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    padding: 0; margin: 0; border: 1px solid var(--hair-strong); border-radius: 4px;
+    cursor: pointer; background: transparent;
+    /* sobrescreve height:var(--ctrl-h) global de paradigma.css */
+    min-height: 0; box-sizing: border-box;
+  }
+  .sp-pick .sp-native::-webkit-color-swatch-wrapper { padding: 0; }
+  .sp-pick .sp-native::-webkit-color-swatch { border: none; border-radius: 3px; }
+  .sp-pick .sp-native::-moz-color-swatch { border: none; border-radius: 3px; }
+  .sp-pick .sp-swatch {
+    position: absolute; inset: 0; pointer-events: none;
+    width: auto; height: auto; /* preenche o .sp-pick, não o 1.15rem fixo sozinho */
+  }
+  .sp-hex input[type="text"] { flex: 1; min-width: 0; padding: .35rem .5rem; border: 1px solid var(--hair-strong); border-radius: 6px; background: var(--ground); color: var(--ink); font-family: ui-monospace, monospace; font-size: .8rem; text-transform: uppercase; }
+  .sp-hex input[type="text"].bad { border-color: var(--coral, #CE5249); }
   /* trilha F: slider de opacidade — valor em % alinhado à direita, largura tabular pra não
      "pular" o slider ao lado quando o número muda de dígito (9% → 10%). */
   .sp-op { display: flex; align-items: center; gap: .5rem; }
