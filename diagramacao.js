@@ -5511,10 +5511,15 @@ function addImageFile(file, placementOverride) {
       if (placement === 'right') { b.y = 0; b.page = state.addPage ?? lastEditedPage(); }
       state.addPage = null;
       closeAddImgMenu();
-      // insere logo após o bloco em foco (ou no fim)
-      const at = state.activeId ? idxOf(state.activeId) + 1 : state.doc.blocks.length;
-      state.doc.blocks.splice(at, 0, b);
+      // após o bloco em foco — ou SUBSTITUI se o ativo é o parágrafo vazio do "+" / slash
+      // (senão fica p vazio + imagem, o bug reportado do botão +)
+      const i = state.activeId ? idxOf(state.activeId) : -1;
+      const cur = i >= 0 ? state.doc.blocks[i] : null;
+      if (cur && isEmptyTextBlock(cur)) state.doc.blocks.splice(i, 1, b);
+      else if (i >= 0) state.doc.blocks.splice(i + 1, 0, b);
+      else state.doc.blocks.push(b);
       state.sel = b.id;
+      state.activeId = null;
       render(); openImgPanel();
     };
     img.src = reader.result;
@@ -7107,8 +7112,16 @@ function insertSeparatorButton(sepType) {
   if (host && b) breakAtCaret(host, b, sepType);
   else { state.doc.blocks.push(mkBlock(sepType, ''), mkBlock('p', '')); render(); }
 }
+// Bloco de texto sem conteúdo — placeholder do "+" / resto de "/tipo" no slash.
+// Usado pra SUBSTITUIR em vez de inserir-depois (senão sobra parágrafo vazio + imagem).
+function isEmptyTextBlock(b) {
+  if (!b || !TEXT_TYPES.has(b.type)) return false;
+  return !stripHtml(b.html).replace(/\s+/g, ' ').trim();
+}
+
 // trilha G: caminho pros tipos ESTRUTURAIS ('table', 'image-grid', 'icon' — image/divider/
-// pagebreak já inserem-depois pelas próprias funções acima). NUNCA converte o bloco ativo.
+// pagebreak já inserem-depois pelas próprias funções acima).
+// Com texto real no ativo: NUNCA converte (inserir depois). Com placeholder vazio: substitui.
 function insertBlockAfter(t) {
   const coverKind = activeCoverKind();
   if (coverKind) {
@@ -7118,7 +7131,9 @@ function insertBlockAfter(t) {
   }
   const nb = mkBlock(t, '');
   const i = state.activeId ? idxOf(state.activeId) : -1;
-  if (i >= 0) state.doc.blocks.splice(i + 1, 0, nb);
+  const cur = i >= 0 ? state.doc.blocks[i] : null;
+  if (cur && isEmptyTextBlock(cur)) state.doc.blocks.splice(i, 1, nb);
+  else if (i >= 0) state.doc.blocks.splice(i + 1, 0, nb);
   else state.doc.blocks.push(nb);
   state.activeId = nb.id;
   render({ id: nb.id, role: 'block', offset: 0 });
