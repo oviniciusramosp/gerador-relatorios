@@ -425,6 +425,10 @@ function setColWidths(b, fracs) {
   const s = fracs.reduce((a, x) => a + x, 0) || 1;
   b.colWidths = fracs.map((x) => x / s);
 }
+/** Exportado p/ modal / UI externa adicionar linhas sem reimplementar. */
+export function addTableRow(b, at) { addRow(b, at); }
+export function addTableCol(b, at) { addCol(b, at); }
+
 function addRow(b, at /* null = fim */) {
   ensureMatrix(b);
   const row = Array(nColsOf(b)).fill('');
@@ -1406,11 +1410,11 @@ function focusCell(tableId, r, c) {
   .tbl-dragging-row, .tbl-dragging-row * { cursor: grabbing !important; user-select: none !important; }
   .tbl-dragging-col, .tbl-dragging-col * { cursor: grabbing !important; user-select: none !important; }
 
-  /* “+” redondo 12×12 — só perto da borda (tbl-near-bot / tbl-near-right) */
+  /* “+” redondo 12×12 — no miolo só perto da borda; na modal sempre visível */
   .tbl-edge-add {
-    position: absolute; width: 12px; height: 12px; padding: 0; border: 0;
+    position: absolute; width: 14px; height: 14px; padding: 0; border: 0;
     border-radius: 50%; background: #fff; color: #4E39FF;
-    font-size: 11px; font-weight: 600; line-height: 1;
+    font-size: 12px; font-weight: 600; line-height: 1;
     display: grid; place-items: center;
     cursor: pointer; opacity: 0; transition: opacity .1s, background .1s, box-shadow .1s;
     box-shadow: 0 0 0 1px color-mix(in srgb, #4E39FF 35%, transparent);
@@ -1420,6 +1424,9 @@ function focusCell(tableId, r, c) {
   .tbl-editing.tbl-near-right .tbl-add-col,
   .tbl-edge-add:hover { opacity: 1; }
   .tbl-edge-add:hover { background: color-mix(in srgb, #4E39FF 10%, #fff); }
+  /* modal: “+” sempre à vista (overflow do host tem padding extra) */
+  #tmTableHost .tbl-editing .tbl-edge-add { opacity: .85; }
+  #tmTableHost .tbl-editing .tbl-edge-add:hover { opacity: 1; }
   /* “+” posicionados em JS sobre a borda da table (parent = wrap) */
   .tbl-add-row { transform: translate(-50%, -50%); }
   .tbl-add-col { transform: translate(-50%, -50%); }

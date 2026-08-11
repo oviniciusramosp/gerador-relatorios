@@ -543,7 +543,7 @@ aside#sidebar details.sb-det-animating > .body {
 
 /* ── fmtbar + linkedit — ui-fmtbar.js ─────────────────────────────────────── */
 #fmtbar {
-  position: fixed; z-index: 30; display: flex; gap: 2px; align-items: center;
+  position: fixed; z-index: 65; display: flex; gap: 2px; align-items: center;
   padding: 3px; border: 1px solid var(--hair-strong); border-radius: 8px;
   background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
   box-shadow: 0 12px 40px -12px #000;

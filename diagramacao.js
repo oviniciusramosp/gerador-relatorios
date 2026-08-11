@@ -27,6 +27,7 @@ import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingív
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import {
   buildTableEl, ensureTable, ensureSharedTableStyle, applyTableChrome, resolveGridTableItem,
+  addTableRow, addTableCol,
   tableHeaderBg, tableHeaderTextOf, tableTextColorOf,
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
   clampTableRadius, clampTableBorderWidth,
@@ -2104,7 +2105,12 @@ function openTableEditModal(blockId, itemIndex) {
 
   if (titleEl) titleEl.textContent = `Editar tabela ${i + 1}`;
   sideEl.innerHTML = `
-    <div class="eyebrow" style="margin:0">Cores desta tabela</div>
+    <div class="eyebrow" style="margin:0">Estrutura</div>
+    <div class="row img-tc-row" style="display:flex;gap:.4rem">
+      <button type="button" class="fieldbtn" data-a="addrow" style="flex:1;justify-content:center">+ Linha</button>
+      <button type="button" class="fieldbtn" data-a="addcol" style="flex:1;justify-content:center">+ Coluna</button>
+    </div>
+    <div class="eyebrow" style="margin:.15rem 0 0">Cores desta tabela</div>
     ${tableStyleFieldsHtml(it, 'item')}`;
 
   // estilo compartilhado do grid + cores do item (shallow copy + refs de estrutura)
@@ -2144,6 +2150,17 @@ function openTableEditModal(blockId, itemIndex) {
     after: () => { save(); scheduleCommit(); },
   });
 
+  sideEl.querySelector('[data-a="addrow"]')?.addEventListener('click', () => {
+    addTableRow(resolved, null);
+    syncStructureBack();
+    modalCtx.rerender();
+  });
+  sideEl.querySelector('[data-a="addcol"]')?.addEventListener('click', () => {
+    addTableCol(resolved, null);
+    syncStructureBack();
+    modalCtx.rerender();
+  });
+
   modal.hidden = false;
   requestAnimationFrame(() => {
     const cell = hostEl.querySelector('th, td');
@@ -2153,6 +2170,8 @@ function openTableEditModal(blockId, itemIndex) {
 function closeTableEditModal() {
   const modal = document.getElementById('tableEditModal');
   if (modal) modal.hidden = true;
+  if (fmtbar) fmtbar.hidden = true;
+  if (typeof closeLinkEdit === 'function') try { closeLinkEdit(); } catch { /* */ }
   const target = tableEditTarget;
   tableEditTarget = null;
   if (target) {
@@ -10280,17 +10299,24 @@ function clearHiliteInSelection() {
 // trilha A (t2): abre o mini-editor de URL (aplica createLink / edita / remove <a>)
 fmtbar.querySelector('.linkbtn').addEventListener('click', openLinkEdit);
 
-// sobe de um nó até o contenteditable do miolo que o contém (ou null)
+/** contenteditable editável no miolo (#pages) OU na modal de tabela do grid. */
+const EDITABLE_HOST_SEL = '#pages [contenteditable], #tableEditModal [contenteditable], #tmTableHost [contenteditable]';
+
+// sobe de um nó até o contenteditable do miolo / modal de tabela (ou null)
 function editableHostOfRange(range) {
   let n = range && range.commonAncestorContainer;
   while (n && n.nodeType === 3) n = n.parentNode;
-  return (n && n.closest && n.closest('#pages [contenteditable]')) || null;
+  return (n && n.closest && n.closest(EDITABLE_HOST_SEL)) || null;
 }
 // <a> sob a seleção/cursor (ou null)
 function anchorInSelection(sel) {
   let n = sel && sel.anchorNode;
   while (n && n.nodeType === 3) n = n.parentNode;
-  return (n && n.closest && n.closest('#pages [contenteditable] a')) || null;
+  if (!n || !n.closest) return null;
+  // link só se o contenteditable host for do miolo ou da modal
+  const host = n.closest(EDITABLE_HOST_SEL);
+  if (!host) return null;
+  return n.closest('a') || null;
 }
 
 /** Pinta os botões A (texto / highlight) com a cor atual. */
@@ -10340,7 +10366,7 @@ function colorsFromFmtSelection() {
   if (sel?.anchorNode) {
     let n = sel.anchorNode;
     if (n.nodeType === 3) n = n.parentNode;
-    while (n && n !== pagesEl) {
+    while (n && n !== pagesEl && n !== document.body) {
       if (n.nodeType === 1) {
         const bg = n.style?.backgroundColor || n.style?.background;
         if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') back = bg;
@@ -10350,7 +10376,10 @@ function colorsFromFmtSelection() {
           break;
         }
       }
-      if (n.classList?.contains('b') || n.classList?.contains('page')) break;
+      // para no envelope de bloco; NÃO para em .tbl-wrap.b (célula da modal/miolo)
+      if (n.classList?.contains('page')) break;
+      if (n.classList?.contains('b') && !n.classList?.contains('tbl-wrap') && !n.classList?.contains('tbl-editing')) break;
+      if (n.id === 'tmTableHost' || n.id === 'tableEditModal') break;
       n = n.parentNode;
     }
   }
@@ -10364,11 +10393,14 @@ function updateFmtbar() {
   if (r && !sel.isCollapsed) {
     let n = sel.anchorNode;
     while (n && n.nodeType === 3) n = n.parentNode;
-    host = n && n.closest && n.closest('#pages [contenteditable]');
+    host = n && n.closest && n.closest(EDITABLE_HOST_SEL);
   }
   if (!host) { fmtbar.hidden = true; return; }
   const role = host.dataset.role || 'block';
-  const isMiolo = !!host.dataset.id && role === 'block';   // capa/legenda/resumo → só marcas, sem tipos
+  // miolo: data-id de bloco real; modal de tabela / capa / legenda → só marcas (sem troca de tipo)
+  const inTableModal = !!(host.closest && host.closest('#tableEditModal, #tmTableHost'));
+  const isMiolo = !inTableModal && !!host.dataset.id && role === 'block'
+    && !!blockOf(host.dataset.id);
   fmtbar.classList.toggle('caption-mode', !isMiolo);
   fmtbar.querySelectorAll('.markbtn').forEach(b =>
     b.classList.toggle('on', document.queryCommandState(b.dataset.cmd)));

@@ -1280,9 +1280,10 @@
   }
   .page.editing .col-right:hover:not(:has(.rimg:hover))::after { opacity: .55; }
 
-  /* barra flutuante de formatação (estilo Notion: aparece sobre a seleção) */
+  /* barra flutuante de formatação (estilo Notion: aparece sobre a seleção).
+     z-index 65 > modal de tabela (60) e < swatch (70) — cor/highlight na modal. */
   #fmtbar {
-    position: fixed; z-index: 30; display: flex; gap: 2px; align-items: center;
+    position: fixed; z-index: 65; display: flex; gap: 2px; align-items: center;
     padding: 3px; border: 1px solid var(--hair-strong); border-radius: 8px;
     background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
     box-shadow: 0 12px 40px -12px #000;
@@ -1585,10 +1586,13 @@
     flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 232px;
   }
   #tableEditModal .tm-table-host {
-    overflow: auto; padding: 1.25rem; display: flex; align-items: flex-start; justify-content: center;
+    overflow: auto;
+    /* padding generoso: “+” de linha/coluna e alças não ficam clipados */
+    padding: 1.75rem 2rem 2.25rem;
+    display: flex; align-items: flex-start; justify-content: center;
     background: #f4f4f6;
   }
-  #tableEditModal .tm-table-host .tbl-wrap { max-width: 100%; }
+  #tableEditModal .tm-table-host .tbl-wrap { max-width: 100%; overflow: visible; }
   #tableEditModal .tm-side {
     overflow: auto; padding: .75rem; display: grid; gap: .55rem; align-content: start;
     border-left: 1px solid var(--hair);
@@ -1744,7 +1748,7 @@
   #fmtbar .linkbtn { display: inline-flex; align-items: center; justify-content: center; }
   #fmtbar .linkbtn svg { width: 15px; height: 15px; display: block; }
   #linkedit {
-    position: fixed; z-index: 31; display: flex; gap: 4px; align-items: center;
+    position: fixed; z-index: 66; display: flex; gap: 4px; align-items: center;
     padding: 4px; border: 1px solid var(--hair-strong); border-radius: 8px;
     background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
     box-shadow: 0 12px 40px -12px #000;
