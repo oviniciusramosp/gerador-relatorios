@@ -72,7 +72,7 @@ import {
 } from './material-symbols.js';
 import { initFeedback, openFeedbackReport } from './feedback.js';
 import { initAppNav } from './app-nav.js';
-import { COL_ICON, ALIGN_ICON, POS_ICON, widthSeg } from './ui-segment.js';
+import { COL_ICON, ALIGN_ICON, POS_ICON, widthSeg, textSeg } from './ui-segment.js';
 import { createBlockHandles, HANDLE_GEOM } from './ui-handles.js';
 registerIcons(IONICONS_LIB);                          // outline (default do app)
 registerIcons(IONICONS_LIB_SOLID, { style: 'solid' }); // filled (callout default)
@@ -2024,14 +2024,12 @@ function openTableGridPanel() {
     if (state.activeId === b.id || state.sel === b.id) openTableGridPanel();
   };
 
-  // ── segment Editando ────────────────────────────────────────────────────
+  // ── segment Editando (texto — widthSeg é só ícone e mostrava "undefined") ─
   const focusOpts = [{ val: 'grid', label: 'Grid' }];
   for (let i = 0; i < n; i++) focusOpts.push({ val: String(i), label: `Tabela ${i + 1}` });
-  // widthSeg com 3+ vira cols-3; com muitas tabelas usa scroll horizontal no slot
   const focusSlot = tableGridPanel.querySelector('[data-slot="focus"]');
   if (focusSlot) {
-    focusSlot.style.overflowX = 'auto';
-    focusSlot.append(widthSeg(focusVal, focusOpts, (v) => {
+    focusSlot.append(textSeg(focusVal, focusOpts, (v) => {
       tableGridFocus = v === 'grid' ? 'grid' : +v;
       openTableGridPanel();
       paintTableGridFocus(b.id, tableGridFocus);
@@ -2046,12 +2044,19 @@ function openTableGridPanel() {
       },
       after: () => { save(); scheduleCommit(); },
     });
-    body.querySelector('[data-a="addrow"]')?.addEventListener('click', () => {
-      addTableRow(it, null);
+    body.querySelector('[data-a="addrow"]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // muta o item real do bloco (mesma ref de rows)
+      addTableRow(b.items[itemIdx], null);
+      save(); scheduleCommit();
       reopen();
     });
-    body.querySelector('[data-a="addcol"]')?.addEventListener('click', () => {
-      addTableCol(it, null);
+    body.querySelector('[data-a="addcol"]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      addTableCol(b.items[itemIdx], null);
+      save(); scheduleCommit();
       reopen();
     });
   } else {

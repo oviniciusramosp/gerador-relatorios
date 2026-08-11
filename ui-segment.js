@@ -42,9 +42,36 @@ export function widthSeg(cur, opts, onPick) {
     const b = document.createElement('button');
     b.type = 'button';
     b.title = label;
-    b.innerHTML = icon;
+    b.innerHTML = icon || '';
     b.setAttribute('aria-selected', String(cur === val));
     // não rouba caret/seleção do contenteditable sob o popover
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.onclick = () => onPick(val);
+    wrap.append(b);
+  }
+  return wrap;
+}
+
+/**
+ * Segment com rótulo de texto (ex.: Grid | Tabela 1 | Tabela 2).
+ * widthSeg é só ícone — sem icon o botão fica vazio / “undefined”.
+ * @param {string} cur
+ * @param {{val:string,label:string}[]} opts
+ * @param {(val:string)=>void} onPick
+ * @returns {HTMLDivElement}
+ */
+export function textSeg(cur, opts, onPick) {
+  const wrap = document.createElement('div');
+  const n = opts.length;
+  wrap.className = 'segment textseg' + (n >= 3 ? ' cols-3' : '');
+  if (n >= 4) wrap.classList.add('cols-many');
+  wrap.setAttribute('role', 'tablist');
+  for (const { val, label } of opts) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.title = label;
+    b.textContent = label;
+    b.setAttribute('aria-selected', String(String(cur) === String(val)));
     b.addEventListener('mousedown', (e) => e.preventDefault());
     b.onclick = () => onPick(val);
     wrap.append(b);

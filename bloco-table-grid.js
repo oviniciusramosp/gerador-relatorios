@@ -178,12 +178,18 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
 
     if (editing) {
       // clique / foco numa célula → painel seleciona "Tabela N"
+      // NÃO interceptar chrome (+ linha/coluna, alças, merge) — senão o click some no rebuild
       const pick = () => ctx.selectGridItem?.(b.id, i);
       cell.addEventListener('mousedown', (e) => {
-        // não impede edição; só atualiza o segment do painel
+        if (e.target.closest?.('.tbl-edge-add, .tbl-handle, .tbl-resizer, .tbl-merge-bar, .tbl-merge-btn, .tbl-menu')) {
+          return;
+        }
         pick();
       }, true);
-      cell.addEventListener('focusin', () => pick());
+      cell.addEventListener('focusin', (e) => {
+        if (e.target.closest?.('.tbl-edge-add, .tbl-handle')) return;
+        pick();
+      });
     }
 
     grid.appendChild(cell);
@@ -201,12 +207,14 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
   s.textContent = `
   .tblgrid-wrap { position: relative; z-index: 2; overflow: visible; display: flow-root; }
   .tblgrid { width: 100%; min-width: 0; }
-  .tblgrid-cell { position: relative; min-width: 0; }
-  .tblgrid-cell .tbl-wrap { width: 100% !important; }
+  .tblgrid-cell { position: relative; min-width: 0; overflow: visible; }
+  .tblgrid-cell .tbl-wrap { width: 100% !important; overflow: visible; }
   .page.editing .tblgrid-cell.is-active .tbl-frame {
     outline: 1.5px solid color-mix(in srgb, #4E39FF 55%, transparent);
     outline-offset: 2px;
   }
+  /* tabela selecionada no grid: “+” de linha/coluna sempre visíveis */
+  .tblgrid-cell.is-active .tbl-editing .tbl-edge-add { opacity: 1; }
   `;
   document.head.appendChild(s);
 })();

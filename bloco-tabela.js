@@ -385,23 +385,31 @@ export function applyTableChrome(host, b) {
     table.classList.toggle('alt-rows', !!(b && b.altRows));
     table.classList.toggle('no-header-row', b && b.headerRow === false);
     table.classList.toggle('header-col', !!(b && b.headerCol));
-    table.querySelectorAll('th, td').forEach((cell) => {
-      cell.style.textAlign = align;
-      cell.style.verticalAlign = valign;
-      cell.style.borderWidth = bw;
-      if (cell.classList.contains('tbl-head-cell') || cell.tagName === 'TH') {
-        cell.style.background = headerBg;
-        cell.style.color = headerText;
-      } else {
-        cell.style.color = textColor;
-        if (!(b && b.altRows)) cell.style.background = '';
-      }
+    // bordas só nas internas (frame carrega a externa) — evita linha dupla no topo
+    const rows = [...table.rows];
+    const lastR = rows.length - 1;
+    rows.forEach((tr, r) => {
+      const cells = [...tr.cells];
+      const lastC = cells.length - 1;
+      cells.forEach((cell, c) => {
+        cell.style.textAlign = align;
+        cell.style.verticalAlign = valign;
+        cell.style.borderColor = inner;
+        cell.style.borderStyle = 'solid';
+        // top/left: 0 nas bordas externas; right/bottom: 0 na última linha/col
+        cell.style.borderTopWidth = r === 0 ? '0' : bw;
+        cell.style.borderLeftWidth = c === 0 ? '0' : bw;
+        cell.style.borderRightWidth = c === lastC ? '0' : bw;
+        cell.style.borderBottomWidth = r === lastR ? '0' : bw;
+        if (cell.classList.contains('tbl-head-cell') || cell.tagName === 'TH') {
+          cell.style.background = headerBg;
+          cell.style.color = headerText;
+        } else {
+          cell.style.color = textColor;
+          if (!(b && b.altRows)) cell.style.background = '';
+        }
+      });
     });
-    // re-zera bordas externas das células (frame carrega a externa)
-    table.querySelectorAll('tr:first-child > *').forEach((c) => { c.style.borderTopWidth = '0'; });
-    table.querySelectorAll('tr:last-child > *').forEach((c) => { c.style.borderBottomWidth = '0'; });
-    table.querySelectorAll('tr > :first-child').forEach((c) => { c.style.borderLeftWidth = '0'; });
-    table.querySelectorAll('tr > :last-child').forEach((c) => { c.style.borderRightWidth = '0'; });
     if (b && b.altRows) {
       [...table.rows].forEach((tr, r) => {
         const isHead = b.headerRow !== false && r === 0;
@@ -894,11 +902,15 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     addRowBtn.className = 'tbl-edge-add tbl-add-row';
     addRowBtn.title = 'Nova linha';
     addRowBtn.textContent = '+';
-    addRowBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    addRowBtn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation(); // não deixa o grid capturar e rebuildar o painel
+    });
     addRowBtn.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       addRow(b, null);
-      ctx.rerender();
+      ctx.rerender?.();
     });
     wrap.appendChild(addRowBtn);
 
@@ -907,11 +919,15 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     addColBtn.className = 'tbl-edge-add tbl-add-col';
     addColBtn.title = 'Nova coluna';
     addColBtn.textContent = '+';
-    addColBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    addColBtn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
     addColBtn.addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       addCol(b, null);
-      ctx.rerender();
+      ctx.rerender?.();
     });
     wrap.appendChild(addColBtn);
 
@@ -1306,7 +1322,12 @@ function focusCell(tableId, r, c) {
     --tbl-line-height: 1.35;
   }
   .tbl th, .tbl td {
-    border: var(--tbl-border-w, 1px) solid var(--tbl-border-inner, #C9C9C9);
+    /* só bordas internas por default; applyTableChrome zera as externas com inline */
+    border-color: var(--tbl-border-inner, #C9C9C9);
+    border-style: solid;
+    border-width: 0;
+    border-right-width: var(--tbl-border-w, 1px);
+    border-bottom-width: var(--tbl-border-w, 1px);
     padding: 4px 6px;
     text-align: var(--tbl-align, left);
     vertical-align: var(--tbl-valign, top);
@@ -1314,11 +1335,9 @@ function focusCell(tableId, r, c) {
     background: transparent;
     color: inherit;
   }
-  /* borda externa vive no .tbl-frame — remove o contorno das células pra não dobrar */
-  .tbl tr:first-child > * { border-top: none; }
-  .tbl tr:last-child > * { border-bottom: none; }
-  .tbl tr > :first-child { border-left: none; }
-  .tbl tr > :last-child { border-right: none; }
+  /* borda externa vive no .tbl-frame — última col/linha sem interna à direita/baixo */
+  .tbl tr > :last-child { border-right-width: 0; }
+  .tbl tr:last-child > * { border-bottom-width: 0; }
   /* reforço de radius nos cantos (alguns engines clipam mal <table> no pai) */
   .tbl tr:first-child > :first-child { border-top-left-radius: var(--tbl-radius, 0); }
   .tbl tr:first-child > :last-child { border-top-right-radius: var(--tbl-radius, 0); }
