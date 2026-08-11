@@ -1014,6 +1014,11 @@
   .page h1.b { font-weight: 700; font-size: 24px; line-height: 31px; color: #000; --b-gap: 12px; }
   .page h2.b { font-weight: 700; font-size: 20px; line-height: 26px; color: #000; --b-gap: 10px; }
   .page p.b  { font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: justify; }
+  /* legenda solta (tipo 'caption'): mesma tipografia da figcaption de imagem */
+  .page .caption.b {
+    font-style: italic; font-weight: 400; font-size: 8px; line-height: 14px; color: #828080;
+    text-align: justify; letter-spacing: -0.01em;
+  }
   .page blockquote.b {
     font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: left;
     border-left: 2px solid #29E899; padding-left: 8px;
@@ -1269,32 +1274,30 @@
   /* dropdown de tipo de bloco — mesma "moldura" visual dos botões (transparente + hover).
      Reseta o select global (altura fixa + chevron custom de paradigma.css): aqui o combo
      nativo do SO encaixa melhor na fmtbar compacta. */
-  #fmtbar select.typeselect,
-  #fmtbar select.colselect {
+  #fmtbar select.typeselect {
     border: 0; background: transparent; color: var(--ink);
     font: inherit; font-size: .78rem; font-weight: 600;
     padding: .28rem .3rem; border-radius: 5px; cursor: pointer;
     height: auto; background-image: none;
     -webkit-appearance: menulist; appearance: auto;
   }
-  #fmtbar select.typeselect:hover,
-  #fmtbar select.colselect:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
-  /* em legenda/título de imagem não faz sentido trocar tipo/colunas do bloco */
+  #fmtbar select.typeselect:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
+  /* em legenda/título de imagem não faz sentido trocar tipo do bloco */
   #fmtbar.caption-mode .typeselect,
-  #fmtbar.caption-mode .colselect,
   #fmtbar.caption-mode .sep { display: none; }
-  /* colselect some via hidden= quando o tipo não é header/parágrafo */
-  #fmtbar select.colselect[hidden] { display: none; }
 
   /* menus flutuantes: adicionar imagem (clique na coluna direita) + editar imagem selecionada */
-  #addImgMenu, #imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #coverPanel, #logoPanel, #downloadMenu, #blockStylePanel, #idxPanel, #resumoPanel {
+  #addImgMenu, #imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #downloadMenu, #blockStylePanel, #idxPanel, #resumoPanel {
     position: fixed; z-index: 40; display: grid; gap: .55rem; width: 232px;
     padding: .7rem; border: 1px solid var(--hair-strong); border-radius: 10px;
     background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
     box-shadow: 0 16px 50px -16px #000;
   }
-  #addImgMenu[hidden], #imgPanel[hidden], #tablePanel[hidden], #imageGridPanel[hidden], #iconPanel[hidden], #coverPanel[hidden], #logoPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden],
+  #addImgMenu[hidden], #imgPanel[hidden], #tablePanel[hidden], #imageGridPanel[hidden], #iconPanel[hidden], #textPlacePanel[hidden], #coverPanel[hidden], #logoPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden],
   #idxPanel[hidden], #resumoPanel[hidden] { display: none; }
+  #textPlacePanel .field {
+    display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted);
+  }
   #iconPanel .field-row { display: flex; justify-content: space-between; align-items: baseline; }
   #iconPanel .field-val { display: inline-flex; align-items: center; gap: .3rem; }
   #iconPanel .resetbtn {
@@ -2306,6 +2309,7 @@
             <div class="blockrow"><button data-type="h3"><span class="ico" style="font-size:11px;font-weight:700">H</span><span class="lbl">H3</span><span class="sc">###</span></button><button type="button" class="blockmenu" data-styletype="h3" title="Editar estilo do H3"></button></div>
             <div class="blockrow"><button data-type="h4"><span class="ico" style="font-size:10px;font-weight:700">H</span><span class="lbl">H4</span><span class="sc">####</span></button><button type="button" class="blockmenu" data-styletype="h4" title="Editar estilo do H4"></button></div>
             <div class="blockrow"><button data-type="p"><span class="ico">¶</span><span class="lbl">Parágrafo</span></button><button type="button" class="blockmenu" data-styletype="p" title="Editar estilo do Parágrafo"></button></div>
+            <div class="blockrow"><button data-type="caption"><span class="ico" style="font-size:11px;font-style:italic">Aa</span><span class="lbl">Legenda</span></button><button type="button" class="blockmenu" data-styletype="caption" title="Editar estilo da Legenda"></button></div>
             <div class="blockrow"><button data-type="li"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="2.5" cy="4" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r="1.1" fill="currentColor" stroke="none"/><path d="M6 4h8M6 8h8M6 12h8"/></svg></span><span class="lbl">Lista de Pontos</span><span class="sc">-</span></button><button type="button" class="blockmenu" data-styletype="li" title="Editar estilo da Lista de Pontos"></button></div>
             <div class="blockrow"><button data-type="ol"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><text x="0" y="6" font-size="6" fill="currentColor" stroke="none" font-weight="700">1</text><text x="0" y="13" font-size="6" fill="currentColor" stroke="none" font-weight="700">2</text><path d="M6 4.5h8M6 11h8"/></svg></span><span class="lbl">Lista Numérica</span><span class="sc">1.</span></button><button type="button" class="blockmenu" data-styletype="ol" title="Editar estilo da Lista Numérica"></button></div>
             <div class="blockrow"><button data-type="check"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="5" height="5" rx="1.2"/><path d="M3.2 5l1 1 1.6-2"/><path d="M9.5 5h4.5"/><rect x="2" y="9.5" width="5" height="5" rx="1.2"/><path d="M9.5 12h4.5"/></svg></span><span class="lbl">Checklist</span><span class="sc">[]</span></button><button type="button" class="blockmenu" data-styletype="check" title="Editar estilo do Checklist"></button></div>
@@ -2390,15 +2394,11 @@
     <option value="h3">H3</option>
     <option value="h4">H4</option>
     <option value="p">Parágrafo</option>
+    <option value="caption">Legenda</option>
     <option value="li">Lista de Pontos</option>
     <option value="ol">Lista Numérica</option>
     <option value="check">Checklist</option>
     <option value="quote">Citação</option>
-  </select>
-  <!-- 1 vs 2 colunas: só headers + parágrafo (ver updateFmtbar / setBlockPlacement) -->
-  <select class="colselect" title="Largura em colunas" hidden>
-    <option value="inline">1 coluna</option>
-    <option value="full">2 colunas</option>
   </select>
   <span class="sep"></span>
   <button class="markbtn" data-cmd="bold" title="Negrito (⌘B)" style="font-weight:700">B</button>

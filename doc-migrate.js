@@ -46,7 +46,7 @@ export const defaultLogo = () => ({
 
 // tipos válidos de cover-item (qualquer outro / ausente → 'p', depois migração de capa)
 const COVER_TYPES = new Set([
-  'title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'quote',
+  'title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'caption', 'quote',
   'li', 'ol', 'check', 'callout', 'image', 'table', 'divider',
 ]);
 

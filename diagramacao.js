@@ -150,10 +150,10 @@ function colRightX() { return colL() + GAP; }
 // direto — senão documentos antigos (sem o campo) perdem o default do tipo.
 const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid']);
 const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : 'inline');
-// tipos com seletor "1 coluna / 2 colunas" (sidebar; fmtbar só headers/p — ver COL_FMTBAR_TYPES)
-const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'image-grid']);
-// subset que aparece no select da fmtbar (só com seleção de texto editável)
-const COL_FMTBAR_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p']);
+// tipos com seletor "1 coluna / 2 colunas" (sidebar + painel flutuante à direita)
+const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'caption', 'image-grid']);
+// texto puro (p/legenda): painel flutuante só de Largura; H1–H4 usam o #iconPanel
+const TEXT_PLACE_TYPES = new Set(['p', 'caption']);
 
 // Espaçamento vertical ANTES de um bloco — depende do tipo do bloco de cima (prev).
 // Calculado no JS (não em CSS) porque é contextual; a paginação e o render usam o
@@ -188,7 +188,8 @@ function gapBefore(b, prev) {
 const HEAD_TYPES = new Set(['h1', 'h2', 'h3', 'h4']);
 // 'check' (checklist, trilha B t7) e 'callout' (trilha G) são editáveis e reusam buildText;
 // 'table' NÃO é text (célula própria)
-const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'li', 'ol', 'quote', 'check', 'callout']);  // blocos editáveis
+// 'caption' = legenda solta (mesma tipografia da figcaption de imagem), em qualquer ponto do fluxo
+const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'caption', 'li', 'ol', 'quote', 'check', 'callout']);  // blocos editáveis
 // listas com subitens via Tab / Shift+Tab (b.indent = 0..MAX_LIST_INDENT)
 const LIST_TYPES = new Set(['li', 'ol', 'check']);
 const MAX_LIST_INDENT = 4;   // 5 níveis (0..4)
@@ -253,7 +254,7 @@ function applyListMarkers(el, b) {
 const PH = {
   title: 'Título do relatório', subtitle: 'Subtítulo',
   h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4',
-  p: 'Escreva…', li: '', ol: '', quote: 'Citação', check: '', callout: 'Escreva…',
+  p: 'Escreva…', caption: 'Legenda…', li: '', ol: '', quote: 'Citação', check: '', callout: 'Escreva…',
 };
 const URL_RE = /^(https?:\/\/|www\.)[^\s]+$/i;
 
@@ -272,6 +273,8 @@ const TYPE_STYLE_DEFAULTS = {
   h3: { fontSize: 16, lineHeight: 21, color: '#000000', letterSpacing: -0.01, marginTop: 24 },
   h4: { fontSize: 13, lineHeight: 17, color: '#000000', letterSpacing: -0.01, marginTop: 14 },
   p: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
+  // legenda solta = mesma tipografia da figcaption de imagem (itálico 8px #828080)
+  caption: { fontSize: 8, lineHeight: 14, color: '#828080', letterSpacing: -0.01, gap: 14 },
   li: { gap: 6, marker: '•', subMarker: '◦', markerColor: '#29E899' },
   ol: { gap: 6, subStyle: 'number', markerColor: '#29E899' },   // subStyle: number | letter | bullet
   check: { gap: 6, checkColor: '#29E899', checkedOpacity: 0.55 },
@@ -712,10 +715,10 @@ function measureLines(b) {
 // página, tenta cortá-lo numa quebra de linha em vez de empurrar tudo pra próxima. Devolve a
 // ALTURA da parte que fica (bottom da última linha que coube) ou null quando não vale partir.
 // Anti-viúva/órfã: no mínimo MIN_LINES de cada lado — parágrafo de 3 linhas nunca parte.
-// ponytail: só 'p'. li/ol/quote/check/callout têm marcador ou moldura por bloco e cortar no
-// meio exigiria decidir o que acontece com a borda/o bullet; entra quando alguém pedir.
+// ponytail: só 'p' e 'caption'. li/ol/quote/check/callout têm marcador ou moldura por bloco
+// e cortar no meio exigiria decidir o que acontece com a borda/o bullet; entra quando alguém pedir.
 const MIN_LINES = 2;
-const splittable = (b) => b.type === 'p' && placementOf(b) === 'inline';
+const splittable = (b) => (b.type === 'p' || b.type === 'caption') && placementOf(b) === 'inline';
 // `from` = quanto do bloco já foi colocado em páginas anteriores (0 no 1º pedaço). Devolve o
 // bottom ABSOLUTO da última linha que cabe em `room`, ou null quando não vale partir aqui.
 function splitFit(b, lines, from, room) {
@@ -1843,6 +1846,7 @@ function render(caret /* optional {id,offset,role} */) {
   updateHeadBar();
   updateTableBar();
   updateImageGridBar();
+  updateTextPlaceBar();
   {
     const ab = state.activeId && blockOf(state.activeId);
     if (ab?.type === 'icon') openIconBlockPanel();
@@ -2412,11 +2416,11 @@ function coverColBox(span) {
 }
 // tipos de texto “simples” na capa (contenteditable no próprio .cover-item)
 // title/subtitle = componentes da capa (padrão visual do seed); h1–h4 = mesmos do miolo
-const COVER_PLAIN = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'quote']);
+const COVER_PLAIN = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'caption', 'quote']);
 // tamanhos default por tipo da paleta → cover-item (capa não herda o motor tipográfico do miolo)
 const COVER_TYPE_SIZE = {
   title: 40, subtitle: 15,
-  h1: 40, h2: 28, h3: 22, h4: 18, p: 15, quote: 18, callout: 15,
+  h1: 40, h2: 28, h3: 22, h4: 18, p: 15, caption: 8, quote: 18, callout: 15,
   li: 15, ol: 15, check: 15,
 };
 // tipos “de título” na capa: Enter cria parágrafo abaixo (igual H1–H4 no miolo)
@@ -2483,10 +2487,10 @@ function buildCoverItem(kind, it) {
     }
     return el;
   }
-  // ── texto simples (title/subtitle, h1–h4, p, quote) ──
+  // ── texto simples (title/subtitle, h1–h4, p, caption, quote) ──
   el.dataset.ph = PH[type] || 'Texto…';
   const cls = type === 'quote' ? 'quote'
-    : (COVER_HEAD_TYPES.has(type) || type === 'p') ? type : 'p';
+    : (COVER_HEAD_TYPES.has(type) || type === 'p' || type === 'caption') ? type : 'p';
   el.classList.add('b', cls);
   el.style.fontSize = (it.size || COVER_TYPE_SIZE[type] || 18) + 'px';
   if (it.color) el.style.color = it.color;
@@ -2494,8 +2498,8 @@ function buildCoverItem(kind, it) {
   if (type === 'title' || type === 'subtitle') el.style.fontWeight = String(coverItemWeight(it));
   else if (COVER_HEAD_TYPES.has(type)) el.style.fontWeight = '700';
   el.innerHTML = it.html || '';
-  // h1–h4/p/quote: estilo global do miolo; title/subtitle só usam size/cor/weight do item
-  if (HEAD_TYPES.has(type) || type === 'p' || type === 'quote') applyTypeStyle(el, type);
+  // h1–h4/p/caption/quote: estilo global do miolo; title/subtitle só usam size/cor/weight do item
+  if (HEAD_TYPES.has(type) || type === 'p' || type === 'caption' || type === 'quote') applyTypeStyle(el, type);
   // size/cor/weight do item de capa vencem o estilo global do tipo (slider do painel)
   if (it.size) el.style.fontSize = it.size + 'px';
   if (it.color) el.style.color = it.color;
@@ -3250,6 +3254,7 @@ pagesEl.addEventListener('focusin', (e) => {
   updateCalloutBar();                      // barra flutuante do callout — só aparece se b.type==='callout'
   if (b.type === 'table') tablePanelDismissed = false; // re-focar célula reabre o popover
   if (b.type === 'image-grid') imageGridPanelDismissed = false;
+  if (TEXT_PLACE_TYPES.has(b.type)) textPlacePanelDismissed = false;
   // painel de ícone: bloco type=icon OU qualquer heading (H1–H4) — não fechar o de título
   if (b.type === 'icon' || HEAD_TYPES.has(b.type)) {
     if (HEAD_TYPES.has(b.type)) updateHeadBar();
@@ -3259,6 +3264,7 @@ pagesEl.addEventListener('focusin', (e) => {
   }
   updateTableBar();
   updateImageGridBar();
+  updateTextPlaceBar();
   syncColUI();                             // coluna do bloco ativo na aba Conteúdo
 });
 
@@ -3278,6 +3284,7 @@ function setImgSel(id) {
     updateCalloutBar();
     updateHeadBar();
     updateTableBar();
+    updateTextPlaceBar();
     return;
   }
   clearIdxFocus();
@@ -3292,6 +3299,7 @@ function setImgSel(id) {
   updateCalloutBar();
   updateTableBar();
   updateImageGridBar();
+  updateTextPlaceBar();
   if (b.type === 'icon' || HEAD_TYPES.has(b.type)) {
     if (HEAD_TYPES.has(b.type)) updateHeadBar();
     else openIconBlockPanel();
@@ -3599,6 +3607,7 @@ function selectBlockFromHandle(id) {
     updateCalloutBar();
     if (b.type === 'table') tablePanelDismissed = false;
     if (b.type === 'image-grid') imageGridPanelDismissed = false;
+    if (TEXT_PLACE_TYPES.has(b.type)) textPlacePanelDismissed = false;
     // não fechar o painel de ícone de título (bug: close antes de updateHeadBar)
     if (b.type === 'icon' || HEAD_TYPES.has(b.type)) {
       if (HEAD_TYPES.has(b.type)) updateHeadBar();
@@ -3608,6 +3617,7 @@ function selectBlockFromHandle(id) {
     }
     updateTableBar();
     updateImageGridBar();
+    updateTextPlaceBar();
     showHandleAtFocused();
   }
 }
@@ -4196,7 +4206,7 @@ document.addEventListener('mousedown', (e) => {
   const t = e.target;
   if (!(t && t.closest)) return;
   // âncoras e popovers que devem permanecer abertos
-  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit')) return;
+  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit')) return;
   if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu')) return;
   if (t.closest('#btnPrint, #zoomPct, #zoomFit, #bhandle, #badd')) return;
   // imagem: clicar fora limpa a seleção (fecha o painel)
@@ -4212,6 +4222,15 @@ document.addEventListener('mousedown', (e) => {
   if (imageGridPanel && !imageGridPanel.hidden && !t.closest('.imggrid-wrap')) {
     imageGridPanelDismissed = true;
     closeImageGridPanel();
+  }
+  // parágrafo: painel de Largura (1/2 cols)
+  if (textPlacePanel && !textPlacePanel.hidden) {
+    const host = t.closest?.('[data-id]');
+    const id = host?.dataset?.id;
+    if (!id || id !== textPlacePanel.dataset.bid) {
+      textPlacePanelDismissed = true;
+      closeTextPlacePanel();
+    }
   }
   if (iconPanel && !iconPanel.hidden
     && !t.closest('.icon-block')
@@ -6529,9 +6548,76 @@ function setBlockPlacement(id, v) {
   else { delete b.y; delete b.page; delete b.anchor; }
   render(keep && keep.id === id ? keep : { id, role: 'block', offset: 0 });
   syncColUI();
+  updateTextPlaceBar();
+}
+/** Segment 1 col | 2 cols no painel flutuante (H1–H4 / p / …). */
+function mountTextPlaceSeg(slot, b, onAfter) {
+  if (!slot || !b) return;
+  let cur = placementOf(b);
+  if (cur === 'right') cur = 'inline';
+  slot.replaceChildren(widthSeg(cur === 'full' ? 'full' : 'inline', [
+    { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
+    { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
+  ], (v) => {
+    setBlockPlacement(b.id, v);
+    onAfter?.(v);
+  }));
+}
+
+// ── painel flutuante de Largura (parágrafo e textos sem painel próprio) ──────
+// H1–H4: Largura vive no #iconPanel. image-grid: no #imageGridPanel.
+let textPlacePanel;
+let textPlacePanelDismissed = false;
+function closeTextPlacePanel() { if (textPlacePanel) textPlacePanel.hidden = true; }
+function openTextPlacePanel() {
+  const b = state.activeId && blockOf(state.activeId);
+  if (!b || !editing || !TEXT_PLACE_TYPES.has(b.type)) { closeTextPlacePanel(); return; }
+  textPlacePanelDismissed = false;
+  closeImgPanel(); closeTablePanel(); closeImageGridPanel();
+  // não fecha iconPanel (não compete com p)
+  if (!textPlacePanel) {
+    textPlacePanel = document.createElement('div');
+    textPlacePanel.id = 'textPlacePanel';
+    document.body.appendChild(textPlacePanel);
+  }
+  textPlacePanel.dataset.bid = b.id;
+  const labels = { p: 'Parágrafo', caption: 'Legenda', quote: 'Citação', callout: 'Callout', li: 'Lista', ol: 'Lista', check: 'Checklist' };
+  textPlacePanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">${labels[b.type] || 'Texto'}</div>
+    <div class="field">Largura<div data-slot="place"></div></div>`;
+  textPlacePanel.hidden = false;
+  mountTextPlaceSeg(textPlacePanel.querySelector('[data-slot="place"]'), b, () => openTextPlacePanel());
+  positionTextPlacePanel();
+}
+function positionTextPlacePanel() {
+  if (!textPlacePanel || textPlacePanel.hidden) return;
+  const b = state.activeId && blockOf(state.activeId);
+  if (!b || textPlacePanel.dataset.bid !== b.id) return;
+  const el = pagesEl.querySelector(`[data-id="${b.id}"]`);
+  if (!el) return;
+  const r = (el.closest('.frag') || el).getBoundingClientRect();
+  const pw = textPlacePanel.offsetWidth || 220, ph = textPlacePanel.offsetHeight || 100;
+  let x = r.right + 10;
+  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  textPlacePanel.style.left = x + 'px'; textPlacePanel.style.top = y + 'px';
+}
+function updateTextPlaceBar() {
+  const b = state.activeId && blockOf(state.activeId);
+  if (b && editing && TEXT_PLACE_TYPES.has(b.type)) {
+    if (textPlacePanelDismissed && textPlacePanel && textPlacePanel.dataset.bid === b.id) {
+      if (!textPlacePanel.hidden) positionTextPlacePanel();
+      return;
+    }
+    if (!textPlacePanel || textPlacePanel.hidden || textPlacePanel.dataset.bid !== b.id) openTextPlacePanel();
+    else positionTextPlacePanel();
+  } else {
+    textPlacePanelDismissed = false;
+    closeTextPlacePanel();
+  }
 }
 // tipos de capa que a paleta converte in-place (preserva html), espelhando TEXT_TYPES do miolo
-const COVER_EDIT_TYPES = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'quote', 'li', 'ol', 'check', 'callout']);
+const COVER_EDIT_TYPES = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'caption', 'quote', 'li', 'ol', 'check', 'callout']);
 function setActiveType(t) {
   // capa/contracapa: paleta da aba Conteúdo age no item selecionado ou insere na capa focada
   const coverKind = activeCoverKind();
@@ -6626,7 +6712,7 @@ function openIconBlockPanel() {
     : (HEAD_TYPES.has(b.type) ? 'head' : null);
   if (!mode) { closeIconBlockPanel(); return; }
 
-  closeImgPanel(); closeTablePanel(); closeImageGridPanel();
+  closeImgPanel(); closeTablePanel(); closeImageGridPanel(); closeTextPlacePanel();
   if (!iconPanel) {
     iconPanel = document.createElement('div');
     iconPanel.id = 'iconPanel';
@@ -6639,12 +6725,14 @@ function openIconBlockPanel() {
   const plus = typeof PLUS_SVG !== 'undefined' ? PLUS_SVG : '+';
   const hasHeadIcon = mode === 'head' && headHasIcon(b);
 
-  // título sem ícone: só "Adicionar ícone" → coloca default e reabre com controles
+  // título sem ícone: Largura (1/2 cols) + "Adicionar ícone"
   if (mode === 'head' && !hasHeadIcon) {
     iconPanel.innerHTML = `
-      <div class="eyebrow" style="margin:0">Ícone do título</div>
+      <div class="eyebrow" style="margin:0">Título</div>
+      <div class="field">Largura<div data-slot="place"></div></div>
       <button type="button" class="fieldbtn" data-a="addicon">${plus}<span>Adicionar ícone</span></button>`;
     iconPanel.hidden = false;
+    mountTextPlaceSeg(iconPanel.querySelector('[data-slot="place"]'), b, () => openIconBlockPanel());
     iconPanel.querySelector('[data-a="addicon"]').addEventListener('click', () => {
       ensureHeadIcon(b);
       save(); scheduleCommit();
@@ -6657,7 +6745,7 @@ function openIconBlockPanel() {
 
   const ms = materialOptsFrom(b, mode);
   const name = iconNameOf(b, mode);
-  const title = mode === 'head' ? 'Ícone do título' : 'Ícones';
+  const title = mode === 'head' ? 'Título' : 'Ícones';
   const icoAlign = iconAlignOf(b);
   const icoPlace = placementOf(b);
   const isTabler = ms.family === 'tabler';
@@ -6666,6 +6754,7 @@ function openIconBlockPanel() {
 
   iconPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">${title}</div>
+    ${mode === 'head' ? `<div class="field">Largura<div data-slot="place"></div></div>` : ''}
     <div class="field">Símbolo
       <button type="button" class="icon-pick-btn" data-a="pick" title="Escolher símbolo (Material ou Tabler)">
         ${iconHtml(name, { ...ms, size: 22 })}
@@ -6760,7 +6849,11 @@ function openIconBlockPanel() {
       }));
   }
 
-  // bloco Ícones: alinhamento + colunas (placement)
+  // H1–H4: largura 1/2 colunas no painel (mesmo segment do miolo)
+  if (mode === 'head') {
+    mountTextPlaceSeg(iconPanel.querySelector('[data-slot="place"]'), b, () => openIconBlockPanel());
+  }
+  // bloco Ícones: alinhamento + colunas (placement 3 opções)
   if (mode === 'icon') {
     const alignSlot = iconPanel.querySelector('[data-slot="align"]');
     if (alignSlot) {
@@ -6782,7 +6875,7 @@ function openIconBlockPanel() {
     }
     const placeSlot = iconPanel.querySelector('[data-slot="place"]');
     if (placeSlot) {
-      placeSlot.append(widthSeg(icoPlace, [
+      placeSlot.append(widthSeg(icoPlace === 'right' ? 'right' : (icoPlace === 'full' ? 'full' : 'inline'), [
         { val: 'inline', label: 'Coluna Esquerda', icon: COL_ICON.left },
         { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
         { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
@@ -7511,16 +7604,29 @@ function applyCoverLogoLive(kind) {
 }
 // aplica posição + escala + fill/fit no .cover-bg (render e sliders ao vivo). Ver renderCoverPage.
 // Scale = valor do usuário. Sangria de 1px fica no CSS (.cover-bg), não no scale.
-// bgFit: 'fill' → background-size:cover (recorta); 'fit' → contain (imagem inteira).
+// bgFit:
+//   'fill' → cover + position % (crop nativo)
+//   'fit'  → contain centrado + translate em % do elemento (0/100 = ±100% da página)
+//           → permite pan além do limite e crop pelo overflow:hidden da .cover-page
 function applyCoverBgStyles(bg, cov) {
   const x = cov.bgX ?? 50, y = cov.bgY ?? 50;
   const s = (cov.bgScale ?? 100) / 100;
   const fit = cov.bgFit === 'fit';
-  bg.style.backgroundPosition = `${x}% ${y}%`;
-  bg.style.backgroundSize = fit ? 'contain' : 'cover';
   bg.classList.toggle('bg-fit', fit);
-  bg.style.transformOrigin = `${x}% ${y}%`;
-  bg.style.transform = `scale(${s})`;
+  if (fit) {
+    bg.style.backgroundSize = 'contain';
+    bg.style.backgroundPosition = 'center center';
+    bg.style.transformOrigin = 'center center';
+    // 50,50 = sem pan; 0 ou 100 = desloca 100% da própria caixa (sai da página e cropa)
+    const tx = ((x - 50) / 50) * 100;
+    const ty = ((y - 50) / 50) * 100;
+    bg.style.transform = `translate(${tx}%, ${ty}%) scale(${s})`;
+  } else {
+    bg.style.backgroundSize = 'cover';
+    bg.style.backgroundPosition = `${x}% ${y}%`;
+    bg.style.transformOrigin = `${x}% ${y}%`;
+    bg.style.transform = `scale(${s})`;
+  }
 }
 // reposiciona o fundo ao vivo (sem re-render) — Fill com controle X/Y (+ origem do zoom)
 function applyCoverBgPos(kind) {
@@ -8967,12 +9073,11 @@ addEventListener('resize', () => { if (state.zoom === 'fit') applyZoom(); });
 // ──────────────── barra flutuante de formatação (estilo Notion) ─────────────
 const fmtbar = document.getElementById('fmtbar');
 const typeSelect = fmtbar.querySelector('.typeselect');
-const colSelect = fmtbar.querySelector('.colselect');
-// mousedown na barra NÃO pode roubar o foco/seleção do texto — EXCETO nos <select>
-// (tipo / colunas): select nativo abre a lista no mousedown; preventDefault trava o
-// dropdown. setActiveType/setBlockPlacement usam state.activeId, não a Selection ao vivo.
+// mousedown na barra NÃO pode roubar o foco/seleção do texto — EXCETO no <select> de
+// tipo: select nativo abre a lista no mousedown; preventDefault trava o dropdown.
+// setActiveType usa state.activeId, não a Selection ao vivo.
 fmtbar.addEventListener('mousedown', (e) => {
-  if (e.target !== typeSelect && e.target !== colSelect) e.preventDefault();
+  if (e.target !== typeSelect) e.preventDefault();
 });
 
 fmtbar.querySelectorAll('.markbtn').forEach(btn => btn.addEventListener('click', () => {
@@ -8981,14 +9086,6 @@ fmtbar.querySelectorAll('.markbtn').forEach(btn => btn.addEventListener('click',
 }));
 typeSelect.addEventListener('change', () => {
   setActiveType(typeSelect.value);
-  updateFmtbar();
-});
-if (colSelect) colSelect.addEventListener('change', () => {
-  const id = state.activeId;
-  const b = id && blockOf(id);
-  if (!b || !COL_FMTBAR_TYPES.has(b.type)) return;
-  // 'inline' | 'full' — 1 coluna ou 2 colunas
-  setBlockPlacement(b.id, colSelect.value === 'full' ? 'full' : 'inline');
   updateFmtbar();
 });
 
@@ -9116,15 +9213,6 @@ function updateFmtbar() {
   // só troca o valor do <select> se o tipo do bloco estiver entre as opções (ex.: callout
   // não está na lista — mantém o dropdown como estava em vez de ficar num estado inválido)
   if (blk && [...typeSelect.options].some(o => o.value === blk.type)) typeSelect.value = blk.type;
-  // colunas (1 / 2): só headers + parágrafo no miolo (grid tem o painel próprio)
-  if (colSelect) {
-    const showCol = !!(blk && COL_FMTBAR_TYPES.has(blk.type));
-    colSelect.hidden = !showCol;
-    if (showCol) {
-      const pl = placementOf(blk);
-      colSelect.value = pl === 'full' ? 'full' : 'inline';
-    }
-  }
   // acima da seleção, centrada; se não couber, abaixo
   fmtbar.hidden = false;
   const rect = r.getBoundingClientRect();
@@ -9206,6 +9294,8 @@ stage.addEventListener('scroll', () => {
   if (!fmtbar.hidden) updateFmtbar();
   if (!calloutBar.hidden) updateCalloutBar();   // reposiciona (não esconde) — mesmo tratamento do fmtbar
   if (tablePanel && !tablePanel.hidden) positionTablePanel();
+  if (imageGridPanel && !imageGridPanel.hidden) positionImageGridPanel();
+  if (textPlacePanel && !textPlacePanel.hidden) positionTextPlacePanel();
   if (iconPanel && !iconPanel.hidden) positionIconBlockPanel();
   if (imgPanel && !imgPanel.hidden) positionImgPanel();
   if (coverPanel && !coverPanel.hidden) positionCoverPanel();
@@ -9218,6 +9308,9 @@ stage.addEventListener('scroll', () => {
 }, { passive: true });
 addEventListener('resize', () => {
   if (tablePanel && !tablePanel.hidden) positionTablePanel();
+  if (imageGridPanel && !imageGridPanel.hidden) positionImageGridPanel();
+  if (textPlacePanel && !textPlacePanel.hidden) positionTextPlacePanel();
+  if (iconPanel && !iconPanel.hidden) positionIconBlockPanel();
   if (imgPanel && !imgPanel.hidden) positionImgPanel();
   if (coverPanel && !coverPanel.hidden) positionCoverPanel();
   if (logoPanel && !logoPanel.hidden) positionLogoPanel();
