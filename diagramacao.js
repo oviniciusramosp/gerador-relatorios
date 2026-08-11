@@ -1312,6 +1312,20 @@ function fmtTableLineHeight(n) {
  *   shared — estilos iguais em todas as tabelas do grid
  *   item   — só o que pode diferir por tabela no grid
  */
+/**
+ * Chip de cor compacto (par fundo/texto no estilo #fmtbar).
+ * kind: 'fill' = fundo do chip; 'text' = “A” com underline da cor.
+ */
+function tblColorBtnHtml(attr, color, kind, title) {
+  const c = color || '#000000';
+  if (kind === 'text') {
+    return `<button type="button" class="tbl-cbtn tbl-cbtn-text" data-a="${attr}" title="${title}"
+      style="--c:${c};border-bottom-color:${c}">A</button>`;
+  }
+  return `<button type="button" class="tbl-cbtn tbl-cbtn-fill" data-a="${attr}" title="${title}"
+    style="--c:${c};background:${c}"></button>`;
+}
+
 function tableStyleFieldsHtml(b, mode = 'full') {
   const headerColor = tableHeaderBg(b);
   const headerText = tableHeaderTextOf(b);
@@ -1350,49 +1364,41 @@ function tableStyleFieldsHtml(b, mode = 'full') {
     </label>`;
   }
   if (showColors) {
+    // pares inline (fundo + texto) no padrão do fmtbar — cabeçalho e corpo
     html += `
-    <div class="field">Cor de fundo
-      <button type="button" class="swatch" data-a="bg" title="Cor de fundo da tabela"
-        style="background:${bg};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
-    </div>
-    <div class="field">Cor do cabeçalho
-      <button type="button" class="swatch" data-a="headerColor" title="Cor de fundo do cabeçalho"
-        style="background:${headerColor};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
-    </div>
-    <div class="field">Cor do texto do cabeçalho
-      <button type="button" class="swatch" data-a="headerTextColor" title="Cor do texto do cabeçalho"
-        style="background:${headerText};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
-    </div>
-    <div class="field">Cor do texto
-      <button type="button" class="swatch" data-a="color" title="Cor do texto do corpo"
-        style="background:${textColor};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    <div class="field tbl-color-fields">
+      <div class="field-row">Cabeçalho
+        <span class="tbl-color-pair" role="group" aria-label="Cores do cabeçalho">
+          ${tblColorBtnHtml('headerColor', headerColor, 'fill', 'Fundo do cabeçalho')}
+          ${tblColorBtnHtml('headerTextColor', headerText, 'text', 'Texto do cabeçalho')}
+        </span>
+      </div>
+      <div class="field-row">Corpo
+        <span class="tbl-color-pair" role="group" aria-label="Cores do corpo">
+          ${tblColorBtnHtml('bg', bg, 'fill', 'Fundo da tabela')}
+          ${tblColorBtnHtml('color', textColor, 'text', 'Texto do corpo')}
+        </span>
+      </div>
     </div>`;
   }
   if (showShared) {
     html += `
-    <div class="field">Cor das linhas externas
-      <button type="button" class="swatch" data-a="borderOuter" title="Cor das linhas externas"
-        style="background:${outer};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    <div class="field tbl-color-fields">
+      <div class="field-row">Linhas
+        <span class="tbl-color-pair" role="group" aria-label="Cores das linhas">
+          ${tblColorBtnHtml('borderOuter', outer, 'fill', 'Linhas externas')}
+          ${tblColorBtnHtml('borderInner', inner, 'fill', 'Linhas internas')}
+        </span>
+      </div>
     </div>
-    <div class="field">Cor das linhas internas
-      <button type="button" class="swatch" data-a="borderInner" title="Cor das linhas internas"
-        style="background:${inner};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
-    </div>
-    <label class="field"><span class="field-row">Espessura das linhas <span class="field-val"><span data-role="bwv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${borderW}</span>px<button type="button" class="resetbtn" data-a="bwreset" title="Redefinir para ${DEFAULT_BORDER_WIDTH}px">↺</button></span></span>
+    <label class="field"><span class="field-row">Espessura <span class="field-val"><span data-role="bwv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${borderW}</span>px<button type="button" class="resetbtn" data-a="bwreset" title="Redefinir para ${DEFAULT_BORDER_WIDTH}px">↺</button></span></span>
       <input type="range" data-a="borderWidth" min="${TABLE_BORDER_WIDTH_MIN}" max="${TABLE_BORDER_WIDTH_MAX}" step="0.5" value="${borderW}" data-snaps="0,0.5,1,1.5,2,3,4" data-edit="off">
     </label>
-    <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para ${DEFAULT_TABLE_RADIUS}px">↺</button></span></span>
+    <label class="field"><span class="field-row">Cantos <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para ${DEFAULT_TABLE_RADIUS}px">↺</button></span></span>
       <input type="range" data-a="radius" min="0" max="${TABLE_RADIUS_MAX}" step="1" value="${radius}" data-snaps="0,4,8,12,16,24" data-edit="off">
     </label>`;
   }
-  if (isItem) {
-    // flags por tabela (não shared) — menu da alça também grava no item via Proxy
-    html += `
-    <div class="swrow"><span>Linha de cabeçalho</span>
-      <button type="button" class="sw" data-a="headerRow" role="switch" aria-checked="${b.headerRow !== false}"></button></div>
-    <div class="swrow"><span>Coluna de cabeçalho</span>
-      <button type="button" class="sw" data-a="headerCol" role="switch" aria-checked="${!!b.headerCol}"></button></div>`;
-  }
+  // headerRow / headerCol: menu da alça da linha 0 / coluna 0 (não poluem o painel)
   return html;
 }
 
@@ -1467,42 +1473,54 @@ function wireTableStyleControls(root, b, hooks = {}) {
     mountValign();
   }
 
-  const wireSwatch = (attr, apply) => {
+  /** Atualiza visual do chip (fill = fundo; text = underline no “A”, estilo fmtbar). */
+  const paintColorBtn = (btn, color) => {
+    if (!btn) return;
+    const c = color || '#000000';
+    btn.style.setProperty('--c', c);
+    if (btn.classList.contains('tbl-cbtn-text')) {
+      btn.style.borderBottomColor = c;
+    } else {
+      btn.style.background = c;
+    }
+  };
+  const wireSwatch = (attr, apply, currentOf) => {
     const btn = root.querySelector(`[data-a="${attr}"]`);
     if (!btn) return;
     btn.addEventListener('mousedown', (e) => e.preventDefault());
     btn.addEventListener('click', () => {
+      const cur = currentOf ? currentOf() : (btn.style.getPropertyValue('--c') || btn.style.background || '#ccc');
       openSwatchPop(btn, (color) => {
         apply(color);
-        btn.style.background = color;
+        paintColorBtn(btn, color);
         paint();
-      }, btn.style.background || '#ccc', { paper: true });
+      }, cur, { paper: true });
     });
   };
   wireSwatch('headerColor', (c) => {
     if (c === DEFAULT_HEADER_BG) delete b.headerColor;
     else b.headerColor = c;
-  });
+  }, () => tableHeaderBg(b));
   wireSwatch('headerTextColor', (c) => {
     if (c === DEFAULT_HEADER_TEXT || c === '#000' || c === '#000000') delete b.headerTextColor;
     else b.headerTextColor = c;
-  });
+  }, () => tableHeaderTextOf(b));
   wireSwatch('color', (c) => {
     if (c === DEFAULT_TEXT_COLOR || c === '#000' || c === '#000000') delete b.color;
     else b.color = c;
-  });
+  }, () => tableTextColorOf(b));
   wireSwatch('bg', (c) => {
     if (c === DEFAULT_TABLE_BG || c === '#FFF' || c === '#fff') delete b.bg;
     else b.bg = c;
-  });
+  }, () => tableBgOf(b));
   wireSwatch('borderOuter', (c) => {
     if (c === DEFAULT_BORDER_OUTER) delete b.borderOuter;
     else b.borderOuter = c;
-  });
+  }, () => borderOuterOf(b));
   wireSwatch('borderInner', (c) => {
     if (c === DEFAULT_BORDER_INNER) delete b.borderInner;
     else b.borderInner = c;
-  });
+  }, () => borderInnerOf(b));
 
   // ── helpers de slider + campo editável ──────────────────────────────────
   const wireNum = ({ role, attr, resetAttr, clamp, of, def, fmt, parse }) => {

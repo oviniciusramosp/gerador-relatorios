@@ -15,6 +15,7 @@
  * Controles são flutuantes (absolute) — zero impacto no layout / paginação. */
 
 import { splitRow } from './tabela.js';
+import { openSwatchPop } from './swatch.js';
 
 export function parseMatrix(text) {
   const lines = String(text).split(/\r?\n/).filter((l) => l.trim());
@@ -653,6 +654,48 @@ function openTblMenu(anchor, items, onClose) {
       menu.appendChild(row);
       return;
     }
+    // par de chips de cor (fundo/texto) — configuração contextual na alça
+    if (it.colors && Array.isArray(it.colors)) {
+      const row = document.createElement('div');
+      row.className = 'tbl-menu-colors';
+      if (it.label) {
+        const lab = document.createElement('span');
+        lab.className = 'tbl-menu-colors-lab';
+        lab.textContent = it.label;
+        row.appendChild(lab);
+      }
+      const pair = document.createElement('span');
+      pair.className = 'tbl-color-pair';
+      it.colors.forEach((ch) => {
+        const cur = typeof ch.get === 'function' ? ch.get() : '#000';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'tbl-cbtn ' + (ch.kind === 'text' ? 'tbl-cbtn-text' : 'tbl-cbtn-fill');
+        btn.title = ch.title || '';
+        btn.style.setProperty('--c', cur);
+        if (ch.kind === 'text') {
+          btn.textContent = 'A';
+          btn.style.borderBottomColor = cur;
+        } else {
+          btn.style.background = cur;
+        }
+        btn.addEventListener('mousedown', (e) => e.preventDefault());
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const current = typeof ch.get === 'function' ? ch.get() : cur;
+          openSwatchPop(btn, (color) => {
+            ch.set?.(color);
+            btn.style.setProperty('--c', color);
+            if (ch.kind === 'text') btn.style.borderBottomColor = color;
+            else btn.style.background = color;
+          }, current || '#ccc', { paper: true });
+        });
+        pair.appendChild(btn);
+      });
+      row.appendChild(pair);
+      menu.appendChild(row);
+      return;
+    }
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = it.label;
@@ -964,7 +1007,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
         if (e.button !== 0) return;
         e.stopImmediatePropagation?.();
         if (r === 0) {
-          // header row: só menu (não reordena)
+          // header row: só menu (não reordena) — toggle + cores contextuais
           e.preventDefault();
           e.stopPropagation();
           wrap.dataset.menuRow = '0';
@@ -973,7 +1016,39 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
               label: 'Linha de cabeçalho',
               switcher: true,
               on: b.headerRow !== false,
-              fn: (on) => { b.headerRow = on; ctx.commit(); ctx.rerender(); },
+              fn: (on) => {
+                if (on) delete b.headerRow;
+                else b.headerRow = false;
+                ctx.commit();
+                ctx.rerender();
+              },
+            },
+            {
+              label: 'Cores',
+              colors: [
+                {
+                  title: 'Fundo do cabeçalho',
+                  get: () => tableHeaderBg(b),
+                  set: (c) => {
+                    if (c === DEFAULT_HEADER_BG) delete b.headerColor;
+                    else b.headerColor = c;
+                    ctx.commit();
+                    // paint live sem rebuild completo se possível
+                    applyTableChrome(wrap, b);
+                  },
+                },
+                {
+                  title: 'Texto do cabeçalho',
+                  kind: 'text',
+                  get: () => tableHeaderTextOf(b),
+                  set: (c) => {
+                    if (c === DEFAULT_HEADER_TEXT || c === '#000' || c === '#000000') delete b.headerTextColor;
+                    else b.headerTextColor = c;
+                    ctx.commit();
+                    applyTableChrome(wrap, b);
+                  },
+                },
+              ],
             },
             { label: 'Inserir abaixo', fn: () => { addRow(b, 1); ctx.rerender(); } },
           ], () => { delete wrap.dataset.menuRow; });
@@ -1252,7 +1327,7 @@ function startRowDrag(e, b, from, wrap, table, btn, ctx) {
     wrap.classList.remove('tbl-dragging-row');
     btn.classList.remove('tbl-dragging');
     if (!dragging) {
-      // click → menu
+      // click → menu estrutural da linha
       wrap.dataset.menuRow = String(from);
       openTblMenu(btn, [
         { label: 'Inserir acima', fn: () => { addRow(b, from); ctx.rerender(); } },
@@ -1302,7 +1377,39 @@ function startColDrag(e, b, from, wrap, table, btn, ctx, opts = {}) {
           label: 'Coluna de cabeçalho',
           switcher: true,
           on: !!b.headerCol,
-          fn: (on) => { b.headerCol = on; ctx.commit(); ctx.rerender(); },
+          fn: (on) => {
+            if (on) b.headerCol = true;
+            else delete b.headerCol;
+            ctx.commit();
+            ctx.rerender();
+          },
+        });
+        // cores do cabeçalho também na 1ª col (quando headerCol)
+        items.push({
+          label: 'Cores do cabeçalho',
+          colors: [
+            {
+              title: 'Fundo do cabeçalho',
+              get: () => tableHeaderBg(b),
+              set: (c) => {
+                if (c === DEFAULT_HEADER_BG) delete b.headerColor;
+                else b.headerColor = c;
+                ctx.commit();
+                applyTableChrome(wrap, b);
+              },
+            },
+            {
+              title: 'Texto do cabeçalho',
+              kind: 'text',
+              get: () => tableHeaderTextOf(b),
+              set: (c) => {
+                if (c === DEFAULT_HEADER_TEXT || c === '#000' || c === '#000000') delete b.headerTextColor;
+                else b.headerTextColor = c;
+                ctx.commit();
+                applyTableChrome(wrap, b);
+              },
+            },
+          ],
         });
       }
       items.push(
@@ -1573,17 +1680,46 @@ function focusCell(tableId, r, c) {
     background: color-mix(in srgb, var(--lilac, #a8a0ff) 10%, var(--ground, #1c1c22));
     box-shadow: 0 12px 40px -12px #000;
   }
-  .tbl-menu button {
+  .tbl-menu > button {
     display: block; width: 100%; text-align: left; border: 0; border-radius: 5px;
     padding: .42rem .55rem; background: transparent; color: var(--ink, #eee);
     cursor: pointer; font-size: .8rem; font-stretch: 85%;
   }
-  .tbl-menu button:hover { background: color-mix(in srgb, var(--violet, #4E39FF) 16%, transparent); }
-  .tbl-menu button.danger { color: #CE5249; }
-  .tbl-menu button.danger:hover { background: color-mix(in srgb, #CE5249 16%, transparent); }
+  .tbl-menu > button:hover { background: color-mix(in srgb, var(--violet, #4E39FF) 16%, transparent); }
+  .tbl-menu > button.danger { color: #CE5249; }
+  .tbl-menu > button.danger:hover { background: color-mix(in srgb, #CE5249 16%, transparent); }
   .tbl-menu-sw {
     display: flex; align-items: center; justify-content: space-between; gap: .5rem;
     padding: .35rem .55rem; font-size: .8rem; font-stretch: 85%; color: var(--ink, #eee);
+  }
+  /* par de chips fundo+texto (menu da alça e painel flutuante) */
+  .tbl-menu-colors {
+    display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+    padding: .35rem .55rem; font-size: .8rem; font-stretch: 85%; color: var(--ink, #eee);
+  }
+  .tbl-menu-colors-lab { min-width: 0; }
+  .tbl-color-pair { display: inline-flex; align-items: center; gap: .28rem; flex: none; }
+  .tbl-cbtn {
+    box-sizing: border-box;
+    width: 1.65rem; height: 1.65rem; padding: 0;
+    border: 1px solid color-mix(in srgb, #fff 18%, transparent);
+    border-radius: 5px; cursor: pointer;
+    font-weight: 700; font-size: .72rem; line-height: 1;
+    display: grid; place-items: center;
+    color: var(--ink, #eee);
+    background: transparent;
+  }
+  .tbl-cbtn:hover { filter: brightness(1.08); }
+  .tbl-cbtn-fill { background: var(--c, #ccc); }
+  /* “A” com underline da cor — espelha #fmtbar .cb-fore */
+  .tbl-cbtn-text {
+    background: transparent;
+    border: 0;
+    border-bottom: 3px solid var(--c, #000);
+    border-radius: 3px;
+    padding-bottom: 1px;
+    color: var(--ink, #eee);
+    font-size: .78rem;
   }
   /* switch compacto (mesmo visual da sidebar) */
   .tbl-menu .sw {
