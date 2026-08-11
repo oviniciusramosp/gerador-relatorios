@@ -11,6 +11,8 @@
  *               próprio controle, ex. o watermark do gráfico).
  *               { paper:true } preview/HEX com base branca sob a cor com alpha (como o papel
  *               do PDF) em vez do xadrez — use no fundo do Callout. Default: opacity=true.
+ *               { allowNone:true } botão "Nenhum" no topo — pick(false) e fecha. Use em
+ *               highlight (hiliteColor) pra remover o fundo da seleção. noneLabel opcional.
  *               { docColors:{ text?:string[], bg?:string[] } } cores usadas no documento
  *               (seção "Nesse documento", expandable aberto por padrão). Hosts sem doc
  *               (gráficos, catálogo) simplesmente omitem.
@@ -172,17 +174,23 @@ export function openSwatchPop(anchor, pick, current, opts) {
   closeSwatchPop();
   const showOpacity = !(opts && opts.opacity === false);
   const paperBase = !!(opts && opts.paper); // base branca sob alpha (papel do PDF)
+  const allowNone = !!(opts && opts.allowNone);
+  const noneLabel = (opts && opts.noneLabel) || 'Nenhum';
   const docColors = normalizeDocColors(opts && opts.docColors);
   const hasDoc = docColors.text.length > 0 || docColors.bg.length > 0;
-  const parsed = parseColor(current);
+  // current === false | 'false' | 'transparent' | 'none' → sem cor (ex.: highlight desligado)
+  const isNoneCurrent = current === false || current === 'false' || current === 'transparent'
+    || current === 'none' || current == null || current === '';
+  const parsed = isNoneCurrent ? null : parseColor(current);
   // selectedHex = matiz em edição (muda ao clicar nomeada/complementar/HEX válido)
   let selectedHex = parsed ? parsed.hex : null;
   let alpha = parsed ? parsed.alpha : 1;   // 0..1 — só o slider de Opacidade muda isso
+  let noneOn = allowNone && !selectedHex; // "Nenhum" ativo se não há cor atual
   swatchPop = document.createElement('div');
   swatchPop.className = 'swatch-pop' + (paperBase ? ' paper-base' : '');
 
   // refs preenchidos abaixo (selectColor precisa de inp/colorInp/paintPreview/markOn)
-  let inp, colorInp, paintPreview, markOn;
+  let inp, colorInp, paintPreview, markOn, noneBtn;
 
   /** type=color exige #rrggbb minúsculo; invalid/empty → fallback pro nativo não quebrar. */
   const toColorInputValue = (hex) => {
@@ -190,11 +198,17 @@ export function openSwatchPop(anchor, pick, current, opts) {
     return h ? h.toLowerCase() : '#000000';
   };
 
+  const markNone = (on) => {
+    noneOn = !!on;
+    if (noneBtn) noneBtn.classList.toggle('on', noneOn);
+  };
+
   /** Seleciona matiz: atualiza HEX + nativo + .on + preview; aplica com alpha atual; NÃO fecha. */
   const selectColor = (hex, { close = false } = {}) => {
     const h = normHex(hex);
     if (!h) return;
     selectedHex = h;
+    markNone(false);
     if (inp) {
       inp.value = h;
       inp.classList.remove('bad');
@@ -206,6 +220,16 @@ export function openSwatchPop(anchor, pick, current, opts) {
     if (close) closeSwatchPop();
   };
 
+  const pickNone = () => {
+    selectedHex = null;
+    markNone(true);
+    markOn?.(null);
+    if (inp) { inp.value = ''; inp.classList.remove('bad'); }
+    paintPreview?.();
+    pick(false);
+    closeSwatchPop();
+  };
+
   const appendChip = (parent, hex, title) => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'sp-chip'; b.style.background = hex;
@@ -215,6 +239,22 @@ export function openSwatchPop(anchor, pick, current, opts) {
     b.onclick = () => selectColor(hex);
     parent.append(b);
   };
+
+  // ── 0) Nenhum (só com allowNone — ex.: remover highlight) ─────────────────
+  if (allowNone) {
+    noneBtn = document.createElement('button');
+    noneBtn.type = 'button';
+    noneBtn.className = 'sp-none' + (noneOn ? ' on' : '');
+    noneBtn.setAttribute('aria-pressed', String(noneOn));
+    noneBtn.title = 'Sem cor / remover';
+    noneBtn.innerHTML = '<span class="sp-none-ico" aria-hidden="true">'
+      + '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">'
+      + '<circle cx="8" cy="8" r="5.2"/><path d="M4.2 11.8L11.8 4.2"/></svg></span>'
+      + `<span>${noneLabel}</span>`;
+    noneBtn.addEventListener('mousedown', (e) => e.preventDefault()); // não rouba seleção do texto
+    noneBtn.onclick = () => pickNone();
+    swatchPop.append(noneBtn);
+  }
 
   // ── 1) Nesse documento (aberto se houver cores) ───────────────────────────
   if (hasDoc) {
@@ -273,6 +313,7 @@ export function openSwatchPop(anchor, pick, current, opts) {
     const h = normHex(hex);
     swatchPop.querySelectorAll('.sp-namerow.on, .sp-chip.on').forEach((el) => el.classList.remove('on'));
     if (!h) return;
+    markNone(false);
     swatchPop.querySelectorAll('.sp-namerow, .sp-chip').forEach((el) => {
       if (normHex(el.dataset.hex) === h) el.classList.add('on');
     });
@@ -412,6 +453,21 @@ export function closeSwatchPop() {
     background: color-mix(in srgb, var(--lilac) 8%, var(--ground)); box-shadow: 0 18px 50px -20px #000;
   }
   .swatch-pop .sp-label { font-size: .6rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+  /* "Nenhum" — remove cor/highlight (opts.allowNone) */
+  .swatch-pop .sp-none {
+    display: flex; align-items: center; gap: .45rem; width: 100%;
+    padding: .35rem .45rem; border: 1px solid var(--hair); border-radius: 6px;
+    background: transparent; color: var(--ink); cursor: pointer;
+    font-size: .8rem; font-stretch: 90%; text-align: left;
+  }
+  .swatch-pop .sp-none:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); border-color: var(--hair-strong); }
+  .swatch-pop .sp-none.on {
+    border-color: var(--violet);
+    background: color-mix(in srgb, var(--violet) 16%, transparent);
+  }
+  .swatch-pop .sp-none-ico { display: grid; place-items: center; color: var(--muted); flex: none; }
+  .swatch-pop .sp-none.on .sp-none-ico { color: var(--violet); }
+  .swatch-pop .sp-none-ico svg { display: block; }
   /* expandable (nomeadas / complementares / nesse documento) */
   .sp-det { margin: 0; border: 0; }
   .sp-det-sum {

@@ -1,16 +1,20 @@
 /* Bloco Grid de Tabelas — 1 a 4 colunas; cada célula é uma tabela editável em modal.
  *
  *   buildTableGridEl(b, editing, ctx, colW) → DOM
- *     b.items[]  — tabelas { rows, colWidths?, headerColor?, borderOuter?, … }
+ *     b.items[]  — por tabela: { rows, colWidths?, merges?, bg?, headerColor?,
+ *                  headerTextColor?, color? }
+ *     Estilo COMPARTILHADO (igual em todas): fontSize, lineHeight, borderWidth,
+ *       borderOuter, borderInner, radius  → no bloco grid, não no item.
  *     b.equal    — 'width' (default) | 'height'
  *     b.gap      — px entre colunas (default TABLE_GRID_GAP)
  *     ctx        — { commit, rerender, removeBlock, openTableEditor }
  *
- * Fora da modal: gap + equal (largura/altura). Edição de células → modal.
+ * Fora da modal: gap + equal + estilo compartilhado. Edição de conteúdo → modal.
  */
 
 import {
-  ensureTable, buildTableEl, DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER,
+  ensureTable, ensureSharedTableStyle, buildTableEl, resolveGridTableItem,
+  TABLE_GRID_SHARED_KEYS,
 } from './bloco-tabela.js';
 
 export const TABLE_GRID_MAX = 4;
@@ -30,11 +34,18 @@ export function ensureTableGrid(b) {
   if (!Array.isArray(b.items) || !b.items.length) {
     b.items = [seedTableItem(), seedTableItem()];
   }
+  // promove estilos compartilhados que ainda estejam só no 1º item (docs antigos)
+  for (const k of TABLE_GRID_SHARED_KEYS) {
+    if (b[k] == null && b.items[0] && b.items[0][k] != null) {
+      b[k] = b.items[0][k];
+    }
+  }
   b.items = b.items.slice(0, TABLE_GRID_MAX).map((raw) => {
     const it = raw && typeof raw === 'object' ? { ...raw } : seedTableItem();
-    // não copiar id/type do bloco pai se vazou
     delete it.id;
     delete it.type;
+    // tira do item o que agora é compartilhado
+    for (const k of TABLE_GRID_SHARED_KEYS) delete it[k];
     ensureTable(it);
     return it;
   });
@@ -45,6 +56,7 @@ export function ensureTableGrid(b) {
     if (g === TABLE_GRID_GAP) delete b.gap;
     else b.gap = g;
   }
+  ensureSharedTableStyle(b);
   return b;
 }
 
@@ -73,9 +85,6 @@ export function setTableGridCols(b, n) {
 
 /**
  * Larguras das colunas do grid.
- * equal=width: colunas iguais.
- * equal=height: também colunas iguais (tabelas não têm aspect ratio natural);
- *   a diferença é stretch vertical no DOM (mesma altura).
  * @returns {number[]} largura px por coluna
  */
 export function layoutTableGridCols(n, totalW, gap = TABLE_GRID_GAP) {
@@ -123,8 +132,9 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     cell.style.minWidth = '0';
     if (equal === 'height') cell.style.display = 'flex';
 
-    // preview read-only; edição completa na modal
-    const tbl = buildTableEl(it, false, {}, colWidths[i]);
+    // estilo compartilhado do grid + cores próprias do item
+    const resolved = resolveGridTableItem(b, it);
+    const tbl = buildTableEl(resolved, false, {}, colWidths[i]);
     tbl.removeAttribute('data-id');
     tbl.classList.add('tblgrid-preview');
     tbl.style.width = '100%';
@@ -159,7 +169,6 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
         ctx.openTableEditor?.(b.id, i);
       });
       cell.appendChild(overlay);
-      // clique na célula também abre (exceto se o clique veio do chrome do wrap)
       cell.addEventListener('click', (e) => {
         if (e.target.closest && e.target.closest('.tblgrid-edit')) return;
         e.preventDefault();

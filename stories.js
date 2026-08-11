@@ -2952,15 +2952,20 @@ function paintFmtColorButtons({ fore, back } = {}) {
       foreBtn.dataset.color = p ? withAlpha(p.hex, p.alpha) : hex;
     }
   }
-  if (backBtn && back) {
-    const p = parseColor(back);
-    if (p) {
-      const css = withAlpha(p.hex, p.alpha);
-      backBtn.style.background = css;
-      backBtn.dataset.color = css;
-    } else if (typeof back === 'string' && back && back !== 'false' && back !== 'transparent') {
-      backBtn.style.background = back;
-      backBtn.dataset.color = back;
+  if (backBtn && back !== undefined) {
+    if (back === false || back === 'false' || back === 'transparent' || back === 'none' || back == null) {
+      backBtn.style.background = '';
+      delete backBtn.dataset.color;
+    } else {
+      const p = parseColor(back);
+      if (p) {
+        const css = withAlpha(p.hex, p.alpha);
+        backBtn.style.background = css;
+        backBtn.dataset.color = css;
+      } else if (typeof back === 'string' && back) {
+        backBtn.style.background = back;
+        backBtn.dataset.color = back;
+      }
     }
   }
 }
@@ -3077,6 +3082,7 @@ fmtbar?.querySelectorAll('.colorbtn').forEach((btn) => {
     const current = btn.dataset.color
       || (btn.dataset.cmd === 'hiliteColor' ? fromSel.back : fromSel.fore)
       || undefined;
+    const isHilite = btn.dataset.cmd === 'hiliteColor';
     openSwatchPop(btn, (hex) => {
       if (host) host.focus();
       const s = getSelection();
@@ -3086,9 +3092,15 @@ fmtbar?.querySelectorAll('.colorbtn').forEach((btn) => {
           try { s.addRange(savedFmtRange); } catch { /* */ }
         }
       }
-      if (btn.dataset.cmd === 'hiliteColor') {
-        applyHiliteToSelection(hex, state.doc.hiliteStyle);
-        paintFmtColorButtons({ back: hex });
+      if (isHilite) {
+        // pick(false) do swatch (allowNone) → remove highlight
+        if (hex === false || hex == null || hex === 'false' || hex === 'transparent' || hex === 'none') {
+          applyHiliteToSelection(null, 'none');
+          paintFmtColorButtons({ back: false });
+        } else {
+          applyHiliteToSelection(hex, state.doc.hiliteStyle);
+          paintFmtColorButtons({ back: hex });
+        }
       } else {
         // foreColor: execCommand prefere hex opaco; alpha via style se rgba
         const p = parseColor(hex);
@@ -3110,7 +3122,7 @@ fmtbar?.querySelectorAll('.colorbtn').forEach((btn) => {
       }
       syncTextBlockFromHost(host);
       updateFmtbar();
-    }, current);
+    }, current, isHilite ? { allowNone: true, noneLabel: 'Nenhum' } : undefined);
   });
 });
 

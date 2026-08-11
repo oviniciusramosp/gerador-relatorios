@@ -26,13 +26,18 @@ import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do 
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import {
-  buildTableEl, ensureTable, applyTableChrome,
-  tableHeaderBg, borderOuterOf, borderInnerOf, tableRadiusOf, clampTableRadius,
+  buildTableEl, ensureTable, ensureSharedTableStyle, applyTableChrome, resolveGridTableItem,
+  tableHeaderBg, tableHeaderTextOf, tableTextColorOf,
+  borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
+  clampTableRadius, clampTableBorderWidth,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   clampTableFontSize, clampTableLineHeight, normalizeTableAlign, normalizeTableValign,
-  DEFAULT_HEADER_BG, DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_RADIUS,
+  DEFAULT_HEADER_BG, DEFAULT_HEADER_TEXT, DEFAULT_TEXT_COLOR,
+  DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_BG,
+  DEFAULT_TABLE_RADIUS, DEFAULT_BORDER_WIDTH,
   DEFAULT_TABLE_FONT_SIZE, DEFAULT_TABLE_LINE_HEIGHT, DEFAULT_TABLE_ALIGN, DEFAULT_TABLE_VALIGN,
-  TABLE_RADIUS_MAX, TABLE_FONT_SIZE_MIN, TABLE_FONT_SIZE_MAX,
+  TABLE_RADIUS_MAX, TABLE_BORDER_WIDTH_MIN, TABLE_BORDER_WIDTH_MAX,
+  TABLE_FONT_SIZE_MIN, TABLE_FONT_SIZE_MAX,
   TABLE_LINE_HEIGHT_MIN, TABLE_LINE_HEIGHT_MAX,
 } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import {
@@ -415,6 +420,20 @@ function collectDiagramacaoDocColors(doc) {
     if (st.thickness != null || st.color) addText(st.color);
   }
 
+  /** Cores de estilo de tabela (avulsa, item de grid ou shared no grid). */
+  const fromTableStyle = (t) => {
+    if (!t || typeof t !== 'object') return;
+    addBg(t.headerColor);
+    addBg(t.bg);
+    addText(t.headerTextColor);
+    // body text — em icon/cover `color` é outra coisa; aqui só se parece tabela
+    if (t.rows || t.headerColor != null || t.bg != null || t.headerTextColor != null) {
+      addText(t.color);
+    }
+    addText(t.borderOuter);
+    addText(t.borderInner);
+  };
+
   const walkBlock = (b) => {
     if (!b || typeof b !== 'object') return;
     fromHtml(b.html);
@@ -423,7 +442,10 @@ function collectDiagramacaoDocColors(doc) {
     if (b.type === 'callout' && b.color) addBg(b.color);
     if (b.iconColor) addText(b.iconColor);
     if (b.color && b.type === 'icon') addText(b.color);
-    if (b.headerColor) addBg(b.headerColor);
+    // tabela avulsa / estilo shared de table-grid no bloco
+    if (b.type === 'table' || b.type === 'table-grid' || Array.isArray(b.rows)) {
+      fromTableStyle(b);
+    }
     // tabela: células (string ou { html })
     if (Array.isArray(b.rows)) {
       for (const row of b.rows) {
@@ -441,8 +463,22 @@ function collectDiagramacaoDocColors(doc) {
         fromHtml(it.title);
         fromHtml(it.caption);
         fromHtml(it.html);
-        if (it.color) addText(it.color);
         if (it.iconColor) addText(it.iconColor);
+        // table-grid item: cores por tabela + HTML das células
+        if (b.type === 'table-grid' || Array.isArray(it.rows)) {
+          fromTableStyle(it);
+          if (Array.isArray(it.rows)) {
+            for (const row of it.rows) {
+              if (!Array.isArray(row)) continue;
+              for (const cell of row) {
+                if (typeof cell === 'string') fromHtml(cell);
+                else if (cell && typeof cell === 'object') fromHtml(cell.html);
+              }
+            }
+          }
+        } else if (it.color) {
+          addText(it.color);
+        }
       }
     }
   };
@@ -1267,32 +1303,72 @@ function fmtTableLineHeight(n) {
   return String(v);
 }
 
-/** HTML dos controles de estilo da tabela (painel flutuante ou modal). */
-function tableStyleFieldsHtml(b) {
+/**
+ * HTML dos controles de estilo da tabela.
+ * @param {object} b
+ * @param {'full'|'shared'|'item'} mode
+ *   full   — tabela avulsa (tudo)
+ *   shared — estilos iguais em todas as tabelas do grid
+ *   item   — só o que pode diferir por tabela no grid
+ */
+function tableStyleFieldsHtml(b, mode = 'full') {
   const headerColor = tableHeaderBg(b);
+  const headerText = tableHeaderTextOf(b);
+  const textColor = tableTextColorOf(b);
   const outer = borderOuterOf(b);
   const inner = borderInnerOf(b);
+  const bg = tableBgOf(b);
   const radius = tableRadiusOf(b);
+  const borderW = tableBorderWidthOf(b);
   const fontSize = tableFontSizeOf(b);
   const lineHeight = tableLineHeightOf(b);
   const vlinesOn = b.hideVLines !== true;
-  return `
+  const isItem = mode === 'item';
+  const isShared = mode === 'shared';
+  const showStruct = mode === 'full';
+  const showShared = mode === 'full' || isShared;
+  const showColors = mode === 'full' || isItem;
+
+  let html = '';
+  if (showStruct) {
+    html += `
     <div class="swrow"><span>Linhas Verticais</span>
       <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>
     <div class="swrow"><span>Linhas alternadas</span>
       <button type="button" class="sw" data-a="alt" role="switch" aria-checked="${!!b.altRows}"></button></div>
     <div class="field">Alinhamento horizontal<div data-slot="align"></div></div>
-    <div class="field">Alinhamento vertical<div data-slot="valign"></div></div>
+    <div class="field">Alinhamento vertical<div data-slot="valign"></div></div>`;
+  }
+  if (showShared) {
+    html += `
     <label class="field"><span class="field-row">Tamanho da fonte <span class="field-val"><span data-role="fsv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${fontSize}</span>px<button type="button" class="resetbtn" data-a="fsreset" title="Redefinir para ${DEFAULT_TABLE_FONT_SIZE}px">↺</button></span></span>
       <input type="range" data-a="fontSize" min="${TABLE_FONT_SIZE_MIN}" max="${TABLE_FONT_SIZE_MAX}" step="1" value="${fontSize}" data-snaps="6,8,10,12,14,16,18,24" data-edit="off">
     </label>
     <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lhv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${fmtTableLineHeight(lineHeight)}</span><button type="button" class="resetbtn" data-a="lhreset" title="Redefinir para ${DEFAULT_TABLE_LINE_HEIGHT}">↺</button></span></span>
       <input type="range" data-a="lineHeight" min="${TABLE_LINE_HEIGHT_MIN}" max="${TABLE_LINE_HEIGHT_MAX}" step="0.05" value="${lineHeight}" data-snaps="1,1.15,1.35,1.5,1.75,2,2.5" data-edit="off">
-    </label>
+    </label>`;
+  }
+  if (showColors) {
+    html += `
+    <div class="field">Cor de fundo
+      <button type="button" class="swatch" data-a="bg" title="Cor de fundo da tabela"
+        style="background:${bg};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    </div>
     <div class="field">Cor do cabeçalho
-      <button type="button" class="swatch" data-a="headerColor" title="Cor do cabeçalho"
+      <button type="button" class="swatch" data-a="headerColor" title="Cor de fundo do cabeçalho"
         style="background:${headerColor};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
     </div>
+    <div class="field">Cor do texto do cabeçalho
+      <button type="button" class="swatch" data-a="headerTextColor" title="Cor do texto do cabeçalho"
+        style="background:${headerText};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    </div>
+    <div class="field">Cor do texto
+      <button type="button" class="swatch" data-a="color" title="Cor do texto do corpo"
+        style="background:${textColor};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    </div>`;
+  }
+  if (showShared) {
+    html += `
     <div class="field">Cor das linhas externas
       <button type="button" class="swatch" data-a="borderOuter" title="Cor das linhas externas"
         style="background:${outer};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
@@ -1301,20 +1377,29 @@ function tableStyleFieldsHtml(b) {
       <button type="button" class="swatch" data-a="borderInner" title="Cor das linhas internas"
         style="background:${inner};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
     </div>
+    <label class="field"><span class="field-row">Espessura das linhas <span class="field-val"><span data-role="bwv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${borderW}</span>px<button type="button" class="resetbtn" data-a="bwreset" title="Redefinir para ${DEFAULT_BORDER_WIDTH}px">↺</button></span></span>
+      <input type="range" data-a="borderWidth" min="${TABLE_BORDER_WIDTH_MIN}" max="${TABLE_BORDER_WIDTH_MAX}" step="0.5" value="${borderW}" data-snaps="0,0.5,1,1.5,2,3,4" data-edit="off">
+    </label>
     <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para ${DEFAULT_TABLE_RADIUS}px">↺</button></span></span>
       <input type="range" data-a="radius" min="0" max="${TABLE_RADIUS_MAX}" step="1" value="${radius}" data-snaps="0,4,8,12,16,24" data-edit="off">
     </label>`;
+  }
+  if (isItem) {
+    html += `<p class="hint" style="margin:0;font-size:.72rem;opacity:.8">Shift+clique nas células para mesclar</p>`;
+  }
+  return html;
 }
 
 /**
  * Liga switches/swatches/raio/tipografia/alinhamento de estilo de tabela num host.
  * @param {HTMLElement} root
- * @param {object} b dados da tabela
- * @param {{ paint?:()=>void, after?:()=>void }} hooks paint=live no DOM; after=save
+ * @param {object} b dados da tabela (ou bloco grid p/ shared)
+ * @param {{ paint?:()=>void, after?:()=>void, sharedOnly?:boolean }} hooks
  */
 function wireTableStyleControls(root, b, hooks = {}) {
   const paint = () => {
-    ensureTable(b);
+    if (hooks.sharedOnly) ensureSharedTableStyle(b);
+    else ensureTable(b);
     hooks.paint?.();
     hooks.after?.();
   };
@@ -1381,6 +1466,18 @@ function wireTableStyleControls(root, b, hooks = {}) {
     if (c === DEFAULT_HEADER_BG) delete b.headerColor;
     else b.headerColor = c;
   });
+  wireSwatch('headerTextColor', (c) => {
+    if (c === DEFAULT_HEADER_TEXT || c === '#000' || c === '#000000') delete b.headerTextColor;
+    else b.headerTextColor = c;
+  });
+  wireSwatch('color', (c) => {
+    if (c === DEFAULT_TEXT_COLOR || c === '#000' || c === '#000000') delete b.color;
+    else b.color = c;
+  });
+  wireSwatch('bg', (c) => {
+    if (c === DEFAULT_TABLE_BG || c === '#FFF' || c === '#fff') delete b.bg;
+    else b.bg = c;
+  });
   wireSwatch('borderOuter', (c) => {
     if (c === DEFAULT_BORDER_OUTER) delete b.borderOuter;
     else b.borderOuter = c;
@@ -1435,6 +1532,15 @@ function wireTableStyleControls(root, b, hooks = {}) {
     fmt: (n) => String(n),
     parse: (raw) => {
       const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+      return Number.isFinite(n) ? n : null;
+    },
+  });
+  wireNum({
+    role: 'bwv', attr: 'borderWidth', resetAttr: 'bwreset',
+    clamp: clampTableBorderWidth, of: tableBorderWidthOf, def: DEFAULT_BORDER_WIDTH,
+    fmt: (n) => String(n),
+    parse: (raw) => {
+      const n = Number(String(raw ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
       return Number.isFinite(n) ? n : null;
     },
   });
@@ -1830,7 +1936,9 @@ function openTableGridPanel() {
     <label class="field"><span class="field-row">Espaço entre colunas <span class="field-val"><span data-role="gapv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${gap}</span>px<button type="button" class="resetbtn" data-a="gapreset" title="Redefinir para ${TABLE_GRID_GAP}px">↺</button></span></span>
       <input type="range" data-a="gap" min="0" max="${TABLE_GRID_GAP_MAX}" step="1" value="${gap}" data-snaps="0,4,8,12,16,24,32,48" data-edit="off">
     </label>
-    <p class="hint" style="margin:0;font-size:.72rem;opacity:.8">Clique numa tabela para editar</p>
+    <div class="eyebrow" style="margin:.2rem 0 0">Estilo comum</div>
+    ${tableStyleFieldsHtml(b, 'shared')}
+    <p class="hint" style="margin:0;font-size:.72rem;opacity:.8">Clique numa tabela para editar conteúdo e cores</p>
     <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
   tableGridPanel.hidden = false;
 
@@ -1838,6 +1946,25 @@ function openTableGridPanel() {
     render();
     if (state.activeId === b.id || state.sel === b.id) openTableGridPanel();
   };
+
+  // estilo compartilhado: paint live em todas as tabelas do grid
+  wireTableStyleControls(tableGridPanel, b, {
+    sharedOnly: true,
+    paint: () => {
+      ensureTableGrid(b);
+      // re-render leve: só chrome de cada preview
+      const host = pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"]`);
+      if (!host) return;
+      host.querySelectorAll('.tblgrid-cell').forEach((cell) => {
+        const idx = +cell.dataset.item;
+        const it = b.items[idx];
+        if (!it) return;
+        const wrap = cell.querySelector('.tbl-wrap');
+        if (wrap) applyTableChrome(wrap, resolveGridTableItem(b, it));
+      });
+    },
+    after: () => { save(); scheduleCommit(); },
+  });
 
   const placeSlot = tableGridPanel.querySelector('[data-slot="place"]');
   if (placeSlot) {
@@ -1977,34 +2104,47 @@ function openTableEditModal(blockId, itemIndex) {
 
   if (titleEl) titleEl.textContent = `Editar tabela ${i + 1}`;
   sideEl.innerHTML = `
-    <div class="eyebrow" style="margin:0">Estilo</div>
-    ${tableStyleFieldsHtml(it)}`;
+    <div class="eyebrow" style="margin:0">Cores desta tabela</div>
+    ${tableStyleFieldsHtml(it, 'item')}`;
+
+  // estilo compartilhado do grid + cores do item (shallow copy + refs de estrutura)
+  const resolved = resolveGridTableItem(host, it);
+  resolved.rows = it.rows; // mesma matriz — edição de célula grava no item
+  if (it.colWidths) resolved.colWidths = it.colWidths;
+  if (it.merges) resolved.merges = it.merges;
+  const syncStructureBack = () => {
+    // merges/colWidths podem ter sido reatribuídos no resolved
+    if (resolved.merges && resolved.merges.length) it.merges = resolved.merges;
+    else delete it.merges;
+    if (resolved.colWidths) it.colWidths = resolved.colWidths;
+    else delete it.colWidths;
+  };
   const modalCtx = {
-    commit: () => { save(); scheduleCommit(); },
+    commit: () => {
+      syncStructureBack();
+      save(); scheduleCommit();
+    },
     rerender: () => {
-      // rebuild só o conteúdo da modal (estrutura mudou)
+      syncStructureBack();
       const keep = tableEditTarget;
       if (!keep) return;
       openTableEditModal(keep.blockId, keep.itemIndex);
     },
   };
-  // largura generosa na modal (≈ 2 colunas da página)
   const modalW = Math.min(640, Math.max(360, (innerWidth * 0.55) | 0));
-  hostEl.replaceChildren(buildTableEl(it, true, modalCtx, modalW));
-  // id sintético pra focusCell / chrome
+  hostEl.replaceChildren(buildTableEl(resolved, true, modalCtx, modalW));
   const wrap = hostEl.querySelector('.tbl-wrap');
   if (wrap) wrap.dataset.id = `__tm_${blockId}_${i}`;
 
   wireTableStyleControls(sideEl, it, {
     paint: () => {
       const w = hostEl.querySelector('.tbl-wrap');
-      if (w) applyTableChrome(w, it);
+      if (w) applyTableChrome(w, resolveGridTableItem(host, it));
     },
     after: () => { save(); scheduleCommit(); },
   });
 
   modal.hidden = false;
-  // foca a 1ª célula
   requestAnimationFrame(() => {
     const cell = hostEl.querySelector('th, td');
     if (cell) cell.focus();
@@ -3763,7 +3903,10 @@ function applyCoverItemType(it, type) {
   // limpa campos de outros tipos
   delete it.src; delete it.nw; delete it.nh; delete it.radius; delete it.chart;
   delete it.rows; delete it.colWidths; delete it.headerColor; delete it.hideVLines;
-  delete it.borderOuter; delete it.borderInner; delete it.altRows; delete it.headerRow; delete it.headerCol;
+  delete it.borderOuter; delete it.borderInner; delete it.bg; delete it.borderWidth;
+  delete it.headerTextColor; delete it.color; delete it.merges;
+  delete it.fontSize; delete it.lineHeight; delete it.radius; delete it.align; delete it.valign;
+  delete it.altRows; delete it.headerRow; delete it.headerCol;
   delete it.items; delete it.equal; delete it.fill; delete it.size; delete it.color; delete it.gap;
   delete it.checked; delete it.icon; delete it.iconSet; delete it.iconStyle; delete it.iconColor; delete it.iconFill;
   it.type = type;
@@ -10076,23 +10219,63 @@ fmtbar.querySelectorAll('.colorbtn').forEach(btn => btn.addEventListener('click'
   const saved = sel.getRangeAt(0).cloneRange();
   const host = editableHostOfRange(saved);
   const fromSel = colorsFromFmtSelection();
+  const isHilite = btn.dataset.cmd === 'hiliteColor';
   const current = btn.dataset.color
-    || (btn.dataset.cmd === 'hiliteColor' ? fromSel.back : fromSel.fore)
+    || (isHilite ? fromSel.back : fromSel.fore)
     || undefined;
   openSwatchPop(btn, (hex) => {
     if (host) host.focus();
     const s = getSelection(); s.removeAllRanges(); s.addRange(saved);
     // foreColor sai como <font color>; hiliteColor como <span style="background-color">
     // — ambos disparam 'input' e sincronizam o bloco (mesmo caminho dos .markbtn).
+    // highlight: pick(false) do swatch (allowNone) → remove o fundo.
+    if (isHilite && (hex === false || hex == null || hex === 'false' || hex === 'transparent' || hex === 'none')) {
+      clearHiliteInSelection();
+      paintFmtColorButtons({ back: false });
+      updateFmtbar();
+      return;
+    }
     const p = parseColor(hex);
     const applyHex = p?.hex || hex;
     const ok = document.execCommand(btn.dataset.cmd, false, applyHex);
-    if (btn.dataset.cmd === 'hiliteColor' && !ok) document.execCommand('backColor', false, applyHex);
-    if (btn.dataset.cmd === 'hiliteColor') paintFmtColorButtons({ back: hex });
+    if (isHilite && !ok) document.execCommand('backColor', false, applyHex);
+    if (isHilite) paintFmtColorButtons({ back: hex });
     else paintFmtColorButtons({ fore: hex });
     updateFmtbar();
-  }, current);
+  }, current, isHilite ? { allowNone: true, noneLabel: 'Nenhum' } : undefined);
 }));
+
+/** Remove background-color / hilite da seleção (swatch "Nenhum"). */
+function clearHiliteInSelection() {
+  // browsers: hiliteColor/backColor com transparent costuma limpar o fundo
+  try { document.execCommand('hiliteColor', false, 'transparent'); } catch { /* */ }
+  try { document.execCommand('backColor', false, 'transparent'); } catch { /* */ }
+  const sel = getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  // limpa spans/marks com background inline que o execCommand deixou pra trás
+  const root = range.commonAncestorContainer;
+  const rootEl = root.nodeType === 1 ? root : root.parentElement;
+  if (!rootEl?.querySelectorAll) return;
+  const candidates = rootEl.querySelectorAll('span[style*="background"], mark, font[style*="background"]');
+  candidates.forEach((el) => {
+    try {
+      if (!range.intersectsNode(el) && !el.contains(range.commonAncestorContainer)) return;
+    } catch { return; }
+    el.style.backgroundColor = '';
+    el.style.background = '';
+    el.style.backgroundImage = '';
+    // se o span só tinha background, desembrulha (não mexe em spans com outras marcas)
+    const style = (el.getAttribute('style') || '').replace(/\s+/g, ' ').trim();
+    if (!style || /^;*$/.test(style)) {
+      const parent = el.parentNode;
+      if (!parent) return;
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+      parent.normalize?.();
+    }
+  });
+}
 
 // trilha A (t2): abre o mini-editor de URL (aplica createLink / edita / remove <a>)
 fmtbar.querySelector('.linkbtn').addEventListener('click', openLinkEdit);
@@ -10122,15 +10305,21 @@ function paintFmtColorButtons({ fore, back } = {}) {
       foreBtn.dataset.color = p ? withAlpha(p.hex, p.alpha) : hex;
     }
   }
-  if (backBtn && back) {
-    const p = parseColor(back);
-    if (p) {
-      const css = withAlpha(p.hex, p.alpha);
-      backBtn.style.background = css;
-      backBtn.dataset.color = css;
-    } else if (typeof back === 'string' && back && back !== 'false' && back !== 'transparent') {
-      backBtn.style.background = back;
-      backBtn.dataset.color = back;
+  if (backBtn && back !== undefined) {
+    // false / transparent / none = sem highlight
+    if (back === false || back === 'false' || back === 'transparent' || back === 'none' || back == null) {
+      backBtn.style.background = '';
+      delete backBtn.dataset.color;
+    } else {
+      const p = parseColor(back);
+      if (p) {
+        const css = withAlpha(p.hex, p.alpha);
+        backBtn.style.background = css;
+        backBtn.dataset.color = css;
+      } else if (typeof back === 'string' && back) {
+        backBtn.style.background = back;
+        backBtn.dataset.color = back;
+      }
     }
   }
 }

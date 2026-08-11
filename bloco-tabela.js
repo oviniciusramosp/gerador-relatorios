@@ -31,10 +31,16 @@ const seed = () => [['Coluna 1', 'Coluna 2'], ['', '']];
 
 /** Defaults de estilo visual (borda, raio, tipografia, alinhamento). Só persistem se ≠ default. */
 export const DEFAULT_HEADER_BG = '#F1F1F4';
+export const DEFAULT_HEADER_TEXT = '#000000';
+export const DEFAULT_TEXT_COLOR = '#000000';
 export const DEFAULT_BORDER_OUTER = '#C9C9C9';
 export const DEFAULT_BORDER_INNER = '#C9C9C9';
+export const DEFAULT_TABLE_BG = '#FFFFFF';
 export const DEFAULT_TABLE_RADIUS = 0;
 export const TABLE_RADIUS_MAX = 24;
+export const DEFAULT_BORDER_WIDTH = 1;         // px — externa e internas
+export const TABLE_BORDER_WIDTH_MIN = 0;
+export const TABLE_BORDER_WIDTH_MAX = 4;
 export const DEFAULT_TABLE_FONT_SIZE = 10;   // px — bate com o CSS histórico do .tbl
 export const TABLE_FONT_SIZE_MIN = 6;
 export const TABLE_FONT_SIZE_MAX = 24;
@@ -43,6 +49,14 @@ export const TABLE_LINE_HEIGHT_MIN = 1;
 export const TABLE_LINE_HEIGHT_MAX = 2.5;
 export const DEFAULT_TABLE_ALIGN = 'left';     // left | center | right
 export const DEFAULT_TABLE_VALIGN = 'top';     // top | middle | bottom
+
+/**
+ * Estilos compartilhados no Grid de Tabelas (iguais em todas as colunas).
+ * Por tabela no grid só mudam: bg, headerColor, headerTextColor, color.
+ */
+export const TABLE_GRID_SHARED_KEYS = [
+  'fontSize', 'lineHeight', 'borderWidth', 'borderOuter', 'borderInner', 'radius',
+];
 
 function nColsOf(b) {
   return Math.max(1, ...(b.rows || []).map((r) => r.length), 1);
@@ -61,18 +75,29 @@ function ensureMatrix(b) {
 export function ensureTable(b) {
   if (!b || typeof b !== 'object') return b;
   ensureMatrix(b);
+  ensureMerges(b);
   if (b.headerRow === true) delete b.headerRow; // true é o default
   if (b.headerCol === false) delete b.headerCol;
   if (b.hideVLines === false) delete b.hideVLines;
   if (b.altRows === false) delete b.altRows;
   if (b.headerColor === DEFAULT_HEADER_BG) delete b.headerColor;
+  if (b.headerTextColor === DEFAULT_HEADER_TEXT || b.headerTextColor === '#000' || b.headerTextColor === '#000000') {
+    delete b.headerTextColor;
+  }
+  if (b.color === DEFAULT_TEXT_COLOR || b.color === '#000' || b.color === '#000000') delete b.color;
   if (b.borderOuter === DEFAULT_BORDER_OUTER) delete b.borderOuter;
   if (b.borderInner === DEFAULT_BORDER_INNER) delete b.borderInner;
+  if (b.bg === DEFAULT_TABLE_BG || b.bg === '#FFF' || b.bg === '#fff') delete b.bg;
   // radius 0 = default → some do JSON
   if (b.radius != null) {
     const r = clampTableRadius(b.radius);
     if (r === DEFAULT_TABLE_RADIUS) delete b.radius;
     else b.radius = r;
+  }
+  if (b.borderWidth != null) {
+    const w = clampTableBorderWidth(b.borderWidth);
+    if (w === DEFAULT_BORDER_WIDTH) delete b.borderWidth;
+    else b.borderWidth = w;
   }
   // alinhamento: só persiste se ≠ default
   if (b.align != null) {
@@ -98,10 +123,169 @@ export function ensureTable(b) {
   return b;
 }
 
+/** Limpa defaults dos campos compartilhados do grid (no bloco table-grid). */
+export function ensureSharedTableStyle(b) {
+  if (!b || typeof b !== 'object') return b;
+  if (b.borderOuter === DEFAULT_BORDER_OUTER) delete b.borderOuter;
+  if (b.borderInner === DEFAULT_BORDER_INNER) delete b.borderInner;
+  if (b.radius != null) {
+    const r = clampTableRadius(b.radius);
+    if (r === DEFAULT_TABLE_RADIUS) delete b.radius;
+    else b.radius = r;
+  }
+  if (b.borderWidth != null) {
+    const w = clampTableBorderWidth(b.borderWidth);
+    if (w === DEFAULT_BORDER_WIDTH) delete b.borderWidth;
+    else b.borderWidth = w;
+  }
+  if (b.fontSize != null) {
+    const fs = clampTableFontSize(b.fontSize);
+    if (fs === DEFAULT_TABLE_FONT_SIZE) delete b.fontSize;
+    else b.fontSize = fs;
+  }
+  if (b.lineHeight != null) {
+    const lh = clampTableLineHeight(b.lineHeight);
+    if (Math.abs(lh - DEFAULT_TABLE_LINE_HEIGHT) < 1e-9) delete b.lineHeight;
+    else b.lineHeight = lh;
+  }
+  return b;
+}
+
+/** Copia estilos compartilhados do grid para um clone de item (render/edição). */
+export function resolveGridTableItem(grid, item) {
+  const t = item && typeof item === 'object' ? { ...item } : { rows: seed() };
+  if (!Array.isArray(t.rows)) t.rows = seed();
+  for (const k of TABLE_GRID_SHARED_KEYS) {
+    if (grid && grid[k] != null) t[k] = grid[k];
+    else delete t[k];
+  }
+  delete t.id;
+  delete t.type;
+  ensureTable(t);
+  return t;
+}
+
+// ── merges (agrupar células) ────────────────────────────────────────────────
+// b.merges = [{ r, c, cs, rs }] — origem (r,c) com colspan/rowspan; células cobertas
+// não são renderizadas. Conteúdo fica só na origem.
+
+export function getMerges(b) {
+  return Array.isArray(b?.merges) ? b.merges : [];
+}
+
+/** Valida e limpa merges (bounds, overlaps, 1×1). */
+export function ensureMerges(b) {
+  if (!b || !Array.isArray(b.merges) || !b.merges.length) {
+    if (b) delete b.merges;
+    return b;
+  }
+  ensureMatrix(b);
+  const nR = b.rows.length;
+  const nC = nColsOf(b);
+  const cleaned = [];
+  for (const raw of b.merges) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = Math.max(0, raw.r | 0);
+    const c = Math.max(0, raw.c | 0);
+    const cs = Math.max(1, (raw.cs | 0) || (raw.colspan | 0) || 1);
+    const rs = Math.max(1, (raw.rs | 0) || (raw.rowspan | 0) || 1);
+    if (r >= nR || c >= nC) continue;
+    if (cs <= 1 && rs <= 1) continue;
+    cleaned.push({
+      r, c,
+      cs: Math.min(cs, nC - c),
+      rs: Math.min(rs, nR - r),
+    });
+  }
+  // remove overlaps — mantém o primeiro
+  const out = [];
+  const taken = new Set();
+  for (const m of cleaned) {
+    let ok = true;
+    for (let dr = 0; dr < m.rs && ok; dr++) {
+      for (let dc = 0; dc < m.cs; dc++) {
+        if (taken.has(`${m.r + dr},${m.c + dc}`)) { ok = false; break; }
+      }
+    }
+    if (!ok) continue;
+    for (let dr = 0; dr < m.rs; dr++) {
+      for (let dc = 0; dc < m.cs; dc++) taken.add(`${m.r + dr},${m.c + dc}`);
+    }
+    out.push(m);
+  }
+  if (!out.length) delete b.merges;
+  else b.merges = out;
+  return b;
+}
+
+/** Célula coberta por um merge (não é a origem). */
+export function isCellCovered(b, r, c) {
+  for (const m of getMerges(b)) {
+    if (r >= m.r && r < m.r + m.rs && c >= m.c && c < m.c + m.cs) {
+      if (r !== m.r || c !== m.c) return true;
+    }
+  }
+  return false;
+}
+
+export function mergeOriginAt(b, r, c) {
+  return getMerges(b).find((m) => m.r === r && m.c === c) || null;
+}
+
+export function findMergeCovering(b, r, c) {
+  return getMerges(b).find((m) =>
+    r >= m.r && r < m.r + m.rs && c >= m.c && c < m.c + m.cs) || null;
+}
+
+/** Mescla o retângulo inclusivo. Conteúdo coberto some; origem mantém o seu. */
+export function mergeCells(b, r0, c0, r1, c1) {
+  ensureMatrix(b);
+  const rMin = Math.min(r0 | 0, r1 | 0);
+  const rMax = Math.max(r0 | 0, r1 | 0);
+  const cMin = Math.min(c0 | 0, c1 | 0);
+  const cMax = Math.max(c0 | 0, c1 | 0);
+  const cs = cMax - cMin + 1;
+  const rs = rMax - rMin + 1;
+  if (cs <= 1 && rs <= 1) return false;
+  // remove merges que intersectam o retângulo
+  const kept = getMerges(b).filter((m) => {
+    const overlap = !(m.r + m.rs - 1 < rMin || m.r > rMax || m.c + m.cs - 1 < cMin || m.c > cMax);
+    return !overlap;
+  });
+  for (let r = rMin; r <= rMax; r++) {
+    for (let c = cMin; c <= cMax; c++) {
+      if (r === rMin && c === cMin) continue;
+      if (b.rows[r]) b.rows[r][c] = '';
+    }
+  }
+  kept.push({ r: rMin, c: cMin, cs, rs });
+  b.merges = kept;
+  ensureMerges(b);
+  return true;
+}
+
+export function unmergeCells(b, r, c) {
+  const m = findMergeCovering(b, r, c);
+  if (!m) return false;
+  b.merges = getMerges(b).filter((x) => !(x.r === m.r && x.c === m.c && x.cs === m.cs && x.rs === m.rs));
+  ensureMerges(b);
+  return true;
+}
+
+
 export function clampTableRadius(n) {
   const v = Math.round(Number(n));
   if (!Number.isFinite(v)) return DEFAULT_TABLE_RADIUS;
   return Math.max(0, Math.min(TABLE_RADIUS_MAX, v));
+}
+
+/** Espessura das linhas (0–4 px). Aceita 0.5 (meio-pixel). */
+export function clampTableBorderWidth(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return DEFAULT_BORDER_WIDTH;
+  const clamped = Math.max(TABLE_BORDER_WIDTH_MIN, Math.min(TABLE_BORDER_WIDTH_MAX, v));
+  // quantiza em 0.5
+  return Math.round(clamped * 2) / 2;
 }
 
 export function clampTableFontSize(n) {
@@ -127,10 +311,16 @@ export function normalizeTableValign(v) {
 }
 
 export function tableHeaderBg(b) { return (b && b.headerColor) || DEFAULT_HEADER_BG; }
+export function tableHeaderTextOf(b) { return (b && b.headerTextColor) || DEFAULT_HEADER_TEXT; }
+export function tableTextColorOf(b) { return (b && b.color) || DEFAULT_TEXT_COLOR; }
 export function borderOuterOf(b) { return (b && b.borderOuter) || DEFAULT_BORDER_OUTER; }
 export function borderInnerOf(b) { return (b && b.borderInner) || DEFAULT_BORDER_INNER; }
+export function tableBgOf(b) { return (b && b.bg) || DEFAULT_TABLE_BG; }
 export function tableRadiusOf(b) {
   return b && b.radius != null ? clampTableRadius(b.radius) : DEFAULT_TABLE_RADIUS;
+}
+export function tableBorderWidthOf(b) {
+  return b && b.borderWidth != null ? clampTableBorderWidth(b.borderWidth) : DEFAULT_BORDER_WIDTH;
 }
 export function tableAlignOf(b) {
   return b && b.align != null ? normalizeTableAlign(b.align) : DEFAULT_TABLE_ALIGN;
@@ -152,38 +342,45 @@ export function applyTableChrome(host, b) {
   const table = host.matches?.('table.tbl') ? host : host.querySelector?.('table.tbl');
   const outer = borderOuterOf(b);
   const inner = borderInnerOf(b);
+  const bg = tableBgOf(b);
   const radius = tableRadiusOf(b);
+  const borderW = tableBorderWidthOf(b);
   const headerBg = tableHeaderBg(b);
+  const headerText = tableHeaderTextOf(b);
+  const textColor = tableTextColorOf(b);
   const align = tableAlignOf(b);
   const valign = tableValignOf(b);
   const fontSize = tableFontSizeOf(b);
   const lineHeight = tableLineHeightOf(b);
+  const bw = borderW + 'px';
+  const setVars = (el) => {
+    if (!el?.style) return;
+    el.style.setProperty('--tbl-border-outer', outer);
+    el.style.setProperty('--tbl-border-inner', inner);
+    el.style.setProperty('--tbl-bg', bg);
+    el.style.setProperty('--tbl-radius', radius + 'px');
+    el.style.setProperty('--tbl-border-w', bw);
+    el.style.setProperty('--tbl-header-bg', headerBg);
+    el.style.setProperty('--tbl-header-text', headerText);
+    el.style.setProperty('--tbl-text', textColor);
+    el.style.setProperty('--tbl-align', align);
+    el.style.setProperty('--tbl-valign', valign);
+    el.style.setProperty('--tbl-font-size', fontSize + 'px');
+    el.style.setProperty('--tbl-line-height', String(lineHeight));
+  };
   const target = frame || table || host;
-  if (target && target.style) {
-    target.style.setProperty('--tbl-border-outer', outer);
-    target.style.setProperty('--tbl-border-inner', inner);
-    target.style.setProperty('--tbl-radius', radius + 'px');
-    target.style.setProperty('--tbl-header-bg', headerBg);
-    target.style.setProperty('--tbl-align', align);
-    target.style.setProperty('--tbl-valign', valign);
-    target.style.setProperty('--tbl-font-size', fontSize + 'px');
-    target.style.setProperty('--tbl-line-height', String(lineHeight));
-  }
+  setVars(target);
   if (frame && frame.style) {
     frame.style.borderRadius = radius + 'px';
     frame.style.borderColor = outer;
+    frame.style.borderWidth = bw;
+    frame.style.background = bg;
   }
   if (table) {
-    table.style.setProperty('--tbl-header-bg', headerBg);
-    table.style.setProperty('--tbl-border-outer', outer);
-    table.style.setProperty('--tbl-border-inner', inner);
-    table.style.setProperty('--tbl-radius', radius + 'px');
-    table.style.setProperty('--tbl-align', align);
-    table.style.setProperty('--tbl-valign', valign);
-    table.style.setProperty('--tbl-font-size', fontSize + 'px');
-    table.style.setProperty('--tbl-line-height', String(lineHeight));
+    setVars(table);
     table.style.fontSize = fontSize + 'px';
     table.style.lineHeight = String(lineHeight);
+    table.style.color = textColor;
     table.classList.toggle('no-vlines', b && b.hideVLines === true);
     table.classList.toggle('alt-rows', !!(b && b.altRows));
     table.classList.toggle('no-header-row', b && b.headerRow === false);
@@ -191,10 +388,20 @@ export function applyTableChrome(host, b) {
     table.querySelectorAll('th, td').forEach((cell) => {
       cell.style.textAlign = align;
       cell.style.verticalAlign = valign;
+      cell.style.borderWidth = bw;
+      if (cell.classList.contains('tbl-head-cell') || cell.tagName === 'TH') {
+        cell.style.background = headerBg;
+        cell.style.color = headerText;
+      } else {
+        cell.style.color = textColor;
+        if (!(b && b.altRows)) cell.style.background = '';
+      }
     });
-    table.querySelectorAll('th, .tbl-head-cell').forEach((cell) => {
-      cell.style.background = headerBg;
-    });
+    // re-zera bordas externas das células (frame carrega a externa)
+    table.querySelectorAll('tr:first-child > *').forEach((c) => { c.style.borderTopWidth = '0'; });
+    table.querySelectorAll('tr:last-child > *').forEach((c) => { c.style.borderBottomWidth = '0'; });
+    table.querySelectorAll('tr > :first-child').forEach((c) => { c.style.borderLeftWidth = '0'; });
+    table.querySelectorAll('tr > :last-child').forEach((c) => { c.style.borderRightWidth = '0'; });
     if (b && b.altRows) {
       [...table.rows].forEach((tr, r) => {
         const isHead = b.headerRow !== false && r === 0;
@@ -221,8 +428,18 @@ function setColWidths(b, fracs) {
 function addRow(b, at /* null = fim */) {
   ensureMatrix(b);
   const row = Array(nColsOf(b)).fill('');
-  if (at == null || at >= b.rows.length) b.rows.push(row);
-  else b.rows.splice(Math.max(1, at), 0, row); // nunca antes do header se at=0 use 1
+  const i = (at == null || at >= b.rows.length) ? b.rows.length : Math.max(1, at);
+  if (i >= b.rows.length) b.rows.push(row);
+  else b.rows.splice(i, 0, row);
+  // merges: origens em/abaixo de i descem; merges que cruzam i são descartados
+  if (b.merges?.length) {
+    b.merges = getMerges(b).map((m) => {
+      if (m.r >= i) return { ...m, r: m.r + 1 };
+      if (m.r + m.rs - 1 >= i) return null;
+      return m;
+    }).filter(Boolean);
+    ensureMerges(b);
+  }
 }
 function addCol(b, at /* null = fim */) {
   ensureMatrix(b);
@@ -235,11 +452,27 @@ function addCol(b, at /* null = fim */) {
   const scaled = w.map((x) => x * (1 - slice));
   scaled.splice(i, 0, slice);
   setColWidths(b, scaled);
+  if (b.merges?.length) {
+    b.merges = getMerges(b).map((m) => {
+      if (m.c >= i) return { ...m, c: m.c + 1 };
+      if (m.c + m.cs - 1 >= i) return null;
+      return m;
+    }).filter(Boolean);
+    ensureMerges(b);
+  }
 }
 function delRow(b, r) {
   ensureMatrix(b);
   if (b.rows.length <= 2 || r <= 0) return false; // protege header + 1 linha
   b.rows.splice(r, 1);
+  if (b.merges?.length) {
+    b.merges = getMerges(b).map((m) => {
+      if (m.r === r || (m.r < r && m.r + m.rs - 1 >= r)) return null;
+      if (m.r > r) return { ...m, r: m.r - 1 };
+      return m;
+    }).filter(Boolean);
+    ensureMerges(b);
+  }
   return true;
 }
 function delCol(b, c) {
@@ -249,6 +482,14 @@ function delCol(b, c) {
   const w = colWidthsOf(b);
   w.splice(c, 1);
   setColWidths(b, w);
+  if (b.merges?.length) {
+    b.merges = getMerges(b).map((m) => {
+      if (m.c === c || (m.c < c && m.c + m.cs - 1 >= c)) return null;
+      if (m.c > c) return { ...m, c: m.c - 1 };
+      return m;
+    }).filter(Boolean);
+    ensureMerges(b);
+  }
   return true;
 }
 /** reordena linha de dados (header r=0 fica fixo) */
@@ -258,6 +499,21 @@ function moveRow(b, from, to) {
   if (to >= b.rows.length) to = b.rows.length - 1;
   const [row] = b.rows.splice(from, 1);
   b.rows.splice(to, 0, row);
+  // reordenar com merges é frágil — descarta merges que tocam as linhas movidas
+  if (b.merges?.length) {
+    b.merges = getMerges(b).filter((m) =>
+      !(m.r === from || m.r === to || (m.r < from && m.r + m.rs - 1 >= from)
+        || (m.r < to && m.r + m.rs - 1 >= to)));
+    // remapeia origens simples (1 linha) se sobraram
+    b.merges = getMerges(b).map((m) => {
+      let r = m.r;
+      if (from < to) {
+        if (r > from && r <= to) r -= 1;
+      } else if (r >= to && r < from) r += 1;
+      return { ...m, r };
+    });
+    ensureMerges(b);
+  }
   return true;
 }
 function moveCol(b, from, to) {
@@ -272,6 +528,19 @@ function moveCol(b, from, to) {
   const [fw] = w.splice(from, 1);
   w.splice(to, 0, fw);
   setColWidths(b, w);
+  if (b.merges?.length) {
+    b.merges = getMerges(b).filter((m) =>
+      !(m.c === from || m.c === to || (m.c < from && m.c + m.cs - 1 >= from)
+        || (m.c < to && m.c + m.cs - 1 >= to)));
+    b.merges = getMerges(b).map((m) => {
+      let c = m.c;
+      if (from < to) {
+        if (c > from && c <= to) c -= 1;
+      } else if (c >= to && c < from) c += 1;
+      return { ...m, c };
+    });
+    ensureMerges(b);
+  }
   return true;
 }
 
@@ -375,15 +644,27 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
   });
   table.appendChild(cg);
 
+  // seleção de range pra mesclar (anchor + focus); null = nenhuma
+  let cellSel = null; // { r0, c0, r1, c1 }
+  // paintCellSel é preenchido no bloco editing (handlers de mousedown fecham sobre ele)
+  let paintCellSel = () => {};
+
   b.rows.forEach((row, r) => {
     const tr = document.createElement('tr');
     tr.dataset.row = String(r);
     if (b.altRows && !isHeaderRow(b, r) && r % 2 === 0) tr.classList.add('alt');
     row.forEach((cell, c) => {
+      if (isCellCovered(b, r, c)) return; // coberta por merge — não renderiza
       const head = isHeaderCell(b, r, c);
       const td = document.createElement(head && isHeaderRow(b, r) ? 'th' : 'td');
       td.dataset.col = String(c);
       td.dataset.row = String(r);
+      const origin = mergeOriginAt(b, r, c);
+      if (origin) {
+        if (origin.cs > 1) td.colSpan = origin.cs;
+        if (origin.rs > 1) td.rowSpan = origin.rs;
+        td.classList.add('tbl-merged');
+      }
       if (head) {
         td.classList.add('tbl-head-cell');
         td.style.background = tableHeaderBg(b);
@@ -407,9 +688,21 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
           e.stopPropagation();
           b.rows = m;
           delete b.colWidths;
+          delete b.merges;
           ctx.rerender?.();
         });
         td.addEventListener('keydown', (e) => onCellKey(e, b, r, c, ctx, table));
+        // Shift+clique = estende seleção de merge; clique simples redefine âncora
+        td.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          if (e.shiftKey && cellSel) {
+            e.preventDefault(); // não move caret — só range
+            cellSel = { ...cellSel, r1: r, c1: c };
+          } else {
+            cellSel = { r0: r, c0: c, r1: r, c1: c };
+          }
+          paintCellSel();
+        });
       }
       tr.appendChild(td);
     });
@@ -417,9 +710,78 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
   });
   applyTableChrome(frame, b);
   applyTableChrome(table, b);
+  // frame SÓ com a table — overflow:hidden clipa header/cantos; chrome fica no wrap
   frame.appendChild(table);
+  wrap.appendChild(frame);
 
   if (editing) {
+    // barra de mesclar / desagrupar (visível com seleção) — fora do frame (não clipa)
+    const mergeBar = document.createElement('div');
+    mergeBar.className = 'tbl-merge-bar';
+    mergeBar.hidden = true;
+    const mergeBtn = document.createElement('button');
+    mergeBtn.type = 'button';
+    mergeBtn.className = 'tbl-merge-btn';
+    mergeBtn.textContent = 'Mesclar células';
+    mergeBtn.title = 'Agrupa o retângulo selecionado (Shift+clique pra estender)';
+    const unmergeBtn = document.createElement('button');
+    unmergeBtn.type = 'button';
+    unmergeBtn.className = 'tbl-merge-btn';
+    unmergeBtn.textContent = 'Desagrupar';
+    unmergeBtn.title = 'Remove o agrupamento da célula';
+    mergeBar.append(mergeBtn, unmergeBtn);
+
+    paintCellSel = () => {
+      table.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
+      if (!cellSel) {
+        mergeBar.hidden = true;
+        return;
+      }
+      const rMin = Math.min(cellSel.r0, cellSel.r1);
+      const rMax = Math.max(cellSel.r0, cellSel.r1);
+      const cMin = Math.min(cellSel.c0, cellSel.c1);
+      const cMax = Math.max(cellSel.c0, cellSel.c1);
+      const multi = rMin !== rMax || cMin !== cMax;
+      let hasMerge = false;
+      table.querySelectorAll('th, td').forEach((el) => {
+        const rr = +el.dataset.row;
+        const cc = +el.dataset.col;
+        const m = mergeOriginAt(b, rr, cc) || findMergeCovering(b, rr, cc);
+        const cs = m && m.r === rr && m.c === cc ? m.cs : 1;
+        const rs = m && m.r === rr && m.c === cc ? m.rs : 1;
+        // célula na seleção se intersecta o retângulo
+        const hit = !(rr + rs - 1 < rMin || rr > rMax || cc + cs - 1 < cMin || cc > cMax);
+        if (hit) el.classList.add('tbl-sel');
+        if (hit && m && (m.cs > 1 || m.rs > 1)) hasMerge = true;
+      });
+      mergeBtn.disabled = !multi;
+      // se a seleção é 1 célula mesclada, permite desagrupar
+      if (!multi) {
+        const m = findMergeCovering(b, rMin, cMin);
+        unmergeBtn.disabled = !m || (m.cs <= 1 && m.rs <= 1);
+      } else {
+        unmergeBtn.disabled = !hasMerge;
+      }
+      mergeBar.hidden = !multi && unmergeBtn.disabled;
+    };
+
+    mergeBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    unmergeBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    mergeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!cellSel) return;
+      if (mergeCells(b, cellSel.r0, cellSel.c0, cellSel.r1, cellSel.c1)) {
+        ctx.rerender?.();
+      }
+    });
+    unmergeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!cellSel) return;
+      const r = Math.min(cellSel.r0, cellSel.r1);
+      const c = Math.min(cellSel.c0, cellSel.c1);
+      if (unmergeCells(b, r, c)) ctx.rerender?.();
+    });
+
     // hover contextual: alça da row/col sob o cursor; “+” só perto da borda
     const EDGE = 18; // px de proximidade da borda p/ mostrar +
     const updateEdgeProximity = (clientX, clientY) => {
@@ -463,7 +825,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       h.addEventListener('pointerdown', (e) => startResize(e, b, c, wrap, table, ctx));
       resizers.appendChild(h);
     }
-    frame.appendChild(resizers);
+    wrap.appendChild(resizers);
 
     // ── alças de linha: drag = reordenar; click = menu ─────────────────────
     const rowHandles = document.createElement('div');
@@ -499,7 +861,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       });
       rowHandles.appendChild(btn);
     });
-    frame.appendChild(rowHandles);
+    wrap.appendChild(rowHandles);
 
     // ── alças de coluna: drag = reordenar; click = menu ────────────────────
     const colHandles = document.createElement('div');
@@ -520,7 +882,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       });
       colHandles.appendChild(btn);
     }
-    frame.appendChild(colHandles);
+    wrap.appendChild(colHandles);
 
     // ── “+” redondos, só perto da borda ────────────────────────────────────
     const addRowBtn = document.createElement('button');
@@ -534,7 +896,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       addRow(b, null);
       ctx.rerender();
     });
-    frame.appendChild(addRowBtn);
+    wrap.appendChild(addRowBtn);
 
     const addColBtn = document.createElement('button');
     addColBtn.type = 'button';
@@ -547,23 +909,34 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       addCol(b, null);
       ctx.rerender();
     });
-    frame.appendChild(addColBtn);
+    wrap.appendChild(addColBtn);
 
     // linha-guia de drop durante drag de reordenação
     const dropLine = document.createElement('div');
     dropLine.className = 'tbl-drop-line';
     dropLine.hidden = true;
-    frame.appendChild(dropLine);
+    wrap.appendChild(dropLine);
+
+    // merge bar abaixo do frame (fluxo normal)
+    wrap.appendChild(mergeBar);
 
     requestAnimationFrame(() => {
       resizers.querySelectorAll('.tbl-resizer').forEach((h) => placeResizer(h, table, +h.dataset.after));
       layoutRowHandles(rowHandles, table);
       layoutColHandles(colHandles, table);
+      placeEdgeAdds(wrap, table);
     });
   }
 
-  wrap.appendChild(frame);
   return wrap;
+}
+
+/** Posição de um ponto (viewport) relativa ao offsetParent do handle. */
+function relToParent(el, clientX, clientY) {
+  const parent = el.offsetParent || el.parentElement;
+  if (!parent) return { x: clientX, y: clientY };
+  const pr = parent.getBoundingClientRect();
+  return { x: clientX - pr.left, y: clientY - pr.top };
 }
 
 function placeResizer(handle, table, afterCol) {
@@ -572,19 +945,23 @@ function placeResizer(handle, table, afterCol) {
   const cell = rows[0].cells[afterCol];
   const tr = table.getBoundingClientRect();
   const cr = cell.getBoundingClientRect();
-  handle.style.left = (cr.right - tr.left - 3) + 'px';
+  const topLeft = relToParent(handle, tr.left, tr.top);
+  handle.style.left = (relToParent(handle, cr.right, cr.top).x - 3) + 'px';
+  handle.style.top = topLeft.y + 'px';
   handle.style.height = tr.height + 'px';
 }
 
 function layoutRowHandles(box, table) {
   const tr = table.getBoundingClientRect();
+  const origin = relToParent(box, tr.left, tr.top);
+  box.style.top = origin.y + 'px';
   box.style.height = tr.height + 'px';
   [...box.children].forEach((btn) => {
     const r = +btn.dataset.row;
     const row = table.rows[r];
     if (!row) return;
     const rr = row.getBoundingClientRect();
-    // centra o botão 12px na altura da linha
+    // centra o botão 12px na altura da linha (relativo ao box)
     btn.style.top = (rr.top - tr.top + rr.height / 2 - 6) + 'px';
   });
 }
@@ -592,13 +969,35 @@ function layoutRowHandles(box, table) {
 function layoutColHandles(box, table) {
   if (!table.rows[0]) return;
   const tr = table.getBoundingClientRect();
+  const origin = relToParent(box, tr.left, tr.top);
+  box.style.top = origin.y + 'px';
+  box.style.left = origin.x + 'px';
+  box.style.width = tr.width + 'px';
   [...box.children].forEach((btn) => {
     const c = +btn.dataset.col;
-    const cell = table.rows[0].cells[c];
+    // cells[] ignora cobertas — usa query por data-col na 1ª linha
+    const cell = table.querySelector(`tr[data-row="0"] [data-col="${c}"]`)
+      || table.rows[0].cells[c];
     if (!cell) return;
     const cr = cell.getBoundingClientRect();
     btn.style.left = (cr.left - tr.left + cr.width / 2 - 6) + 'px';
   });
+}
+
+/** Posiciona os “+” de borda relativos ao wrap, alinhados à tabela. */
+function placeEdgeAdds(wrap, table) {
+  const tr = table.getBoundingClientRect();
+  const wr = wrap.getBoundingClientRect();
+  const addRow = wrap.querySelector('.tbl-add-row');
+  const addCol = wrap.querySelector('.tbl-add-col');
+  if (addRow) {
+    addRow.style.left = (tr.left - wr.left + tr.width / 2) + 'px';
+    addRow.style.top = (tr.bottom - wr.top) + 'px';
+  }
+  if (addCol) {
+    addCol.style.left = (tr.right - wr.left) + 'px';
+    addCol.style.top = (tr.top - wr.top + tr.height / 2) + 'px';
+  }
 }
 
 function startResize(e, b, afterCol, wrap, table, ctx) {
@@ -664,6 +1063,7 @@ function colIndexAtX(table, clientX) {
 function showDropLine(wrap, table, kind, index, from) {
   const line = wrap.querySelector('.tbl-drop-line');
   if (!line) return;
+  const wr = wrap.getBoundingClientRect();
   const tr = table.getBoundingClientRect();
   line.hidden = false;
   line.className = 'tbl-drop-line tbl-drop-' + kind;
@@ -672,21 +1072,21 @@ function showDropLine(wrap, table, kind, index, from) {
     if (!row) { line.hidden = true; return; }
     const rr = row.getBoundingClientRect();
     const atEnd = from != null && from < index; // descendo → linha embaixo do alvo
-    line.style.left = '0';
-    line.style.right = '0';
-    line.style.top = ((atEnd ? rr.bottom : rr.top) - tr.top - 1) + 'px';
-    line.style.width = '';
+    line.style.left = (tr.left - wr.left) + 'px';
+    line.style.width = tr.width + 'px';
+    line.style.right = 'auto';
+    line.style.top = ((atEnd ? rr.bottom : rr.top) - wr.top - 1) + 'px';
     line.style.height = '2px';
   } else {
-    const cell = table.rows[0]?.cells[index];
+    const cell = table.querySelector(`tr[data-row="0"] [data-col="${index}"]`)
+      || table.rows[0]?.cells[index];
     if (!cell) { line.hidden = true; return; }
     const cr = cell.getBoundingClientRect();
-    // ex.: col 1 → pos 2: alvo é a col 2, linha à DIREITA dela (não entre 1 e 2)
     const atEnd = from != null && from < index;
-    line.style.top = '0';
-    line.style.bottom = '0';
-    line.style.left = ((atEnd ? cr.right : cr.left) - tr.left - 1) + 'px';
-    line.style.height = '';
+    line.style.top = (tr.top - wr.top) + 'px';
+    line.style.height = tr.height + 'px';
+    line.style.bottom = 'auto';
+    line.style.left = ((atEnd ? cr.right : cr.left) - wr.left - 1) + 'px';
     line.style.width = '2px';
   }
 }
@@ -791,34 +1191,56 @@ function startColDrag(e, b, from, wrap, table, btn, ctx, opts = {}) {
   document.addEventListener('pointerup', onUp);
 }
 
+function nextVisibleCell(b, r, c, dRow, dCol) {
+  ensureMatrix(b);
+  const nR = b.rows.length;
+  const nC = nColsOf(b);
+  let nr = r + dRow;
+  let nc = c + dCol;
+  // Tab: avança col; Enter: avança row
+  if (dCol !== 0) {
+    while (nr >= 0 && nr < nR) {
+      while (nc >= 0 && nc < nC) {
+        if (!isCellCovered(b, nr, nc)) return { r: nr, c: nc };
+        nc += dCol;
+      }
+      nr += dCol > 0 ? 1 : -1;
+      nc = dCol > 0 ? 0 : nC - 1;
+    }
+    return null;
+  }
+  while (nr >= 0 && nr < nR) {
+    if (!isCellCovered(b, nr, c)) return { r: nr, c };
+    nr += dRow;
+  }
+  return null;
+}
+
 function onCellKey(e, b, r, c, ctx, table) {
   if (e.key === 'Tab') {
     e.preventDefault();
-    const cols = nColsOf(b);
-    let nr = r, nc = c + (e.shiftKey ? -1 : 1);
-    if (nc >= cols) { nc = 0; nr++; }
-    if (nc < 0) { nc = cols - 1; nr--; }
-    if (nr >= b.rows.length) {
+    const dir = e.shiftKey ? -1 : 1;
+    let next = nextVisibleCell(b, r, c, 0, dir);
+    if (!next && dir > 0) {
       addRow(b, null);
-      ctx.rerender();
-      // foco na nova célula após rebuild — host re-renderiza; tenta no próximo frame
+      ctx.rerender?.();
       requestAnimationFrame(() => focusCell(b.id, b.rows.length - 1, 0));
       return;
     }
-    if (nr < 0) return;
-    focusCell(b.id, nr, nc);
+    if (!next) return;
+    focusCell(b.id, next.r, next.c);
     return;
   }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    const nr = r + 1;
-    if (nr >= b.rows.length) {
+    let next = nextVisibleCell(b, r, c, 1, 0);
+    if (!next) {
       addRow(b, null);
-      ctx.rerender();
+      ctx.rerender?.();
       requestAnimationFrame(() => focusCell(b.id, b.rows.length - 1, c));
       return;
     }
-    focusCell(b.id, nr, c);
+    focusCell(b.id, next.r, next.c);
   }
 }
 
@@ -853,53 +1275,96 @@ function focusCell(tableId, r, c) {
   /* flow-root: BFC próprio — a margem do bloco seguinte (p com margin-top) não colapsa
      com nada dentro da tabela e o vão padrão da página (PARA_LH) aparece de verdade. */
   .tbl-wrap { position: relative; z-index: 2; overflow: visible; display: flow-root; }
-  /* frame: borda EXTERNA + radius (overflow clipa cantos; células só pintam internas) */
+  /* frame: borda EXTERNA + radius; overflow:hidden clipa cabeçalho e corpo nos cantos.
+     Chrome de edição (alças, +) fica no .tbl-wrap — não dentro do frame. */
   .tbl-frame {
     position: relative; overflow: hidden;
-    border: 1px solid var(--tbl-border-outer, #C9C9C9);
+    border: var(--tbl-border-w, 1px) solid var(--tbl-border-outer, #C9C9C9);
     border-radius: var(--tbl-radius, 0px);
     box-sizing: border-box;
-    background: #fff;
+    background: var(--tbl-bg, #fff);
   }
-  .tbl-editing .tbl-frame { overflow: visible; }
   .tbl { width: 100%; table-layout: fixed; border-collapse: collapse;
-    font-size: var(--tbl-font-size, 10px); line-height: var(--tbl-line-height, 1.35); color: #000;
+    font-size: var(--tbl-font-size, 10px); line-height: var(--tbl-line-height, 1.35);
+    color: var(--tbl-text, #000);
+    background: transparent;
     --tbl-border-outer: #C9C9C9;
     --tbl-border-inner: #C9C9C9;
+    --tbl-bg: #FFFFFF;
     --tbl-radius: 0px;
+    --tbl-border-w: 1px;
+    --tbl-header-bg: #F1F1F4;
+    --tbl-header-text: #000000;
+    --tbl-text: #000000;
     --tbl-align: left;
     --tbl-valign: top;
     --tbl-font-size: 10px;
     --tbl-line-height: 1.35;
   }
   .tbl th, .tbl td {
-    border: 1px solid var(--tbl-border-inner, #C9C9C9);
+    border: var(--tbl-border-w, 1px) solid var(--tbl-border-inner, #C9C9C9);
     padding: 4px 6px;
     text-align: var(--tbl-align, left);
     vertical-align: var(--tbl-valign, top);
     word-wrap: break-word; overflow-wrap: break-word;
+    background: transparent;
+    color: inherit;
   }
   /* borda externa vive no .tbl-frame — remove o contorno das células pra não dobrar */
   .tbl tr:first-child > * { border-top: none; }
   .tbl tr:last-child > * { border-bottom: none; }
   .tbl tr > :first-child { border-left: none; }
   .tbl tr > :last-child { border-right: none; }
-  .tbl th, .tbl .tbl-head-cell { background: var(--tbl-header-bg, #F1F1F4); font-weight: 700; }
+  /* reforço de radius nos cantos (alguns engines clipam mal <table> no pai) */
+  .tbl tr:first-child > :first-child { border-top-left-radius: var(--tbl-radius, 0); }
+  .tbl tr:first-child > :last-child { border-top-right-radius: var(--tbl-radius, 0); }
+  .tbl tr:last-child > :first-child { border-bottom-left-radius: var(--tbl-radius, 0); }
+  .tbl tr:last-child > :last-child { border-bottom-right-radius: var(--tbl-radius, 0); }
+  .tbl th, .tbl .tbl-head-cell {
+    background: var(--tbl-header-bg, #F1F1F4);
+    color: var(--tbl-header-text, #000);
+    font-weight: 700;
+  }
   .tbl td:empty::after, .tbl th:empty::after { content: "\\200b"; }
   .tbl.no-vlines th, .tbl.no-vlines td {
     border-left-color: transparent; border-right-color: transparent; }
   .tbl.alt-rows tr.alt > td:not(.tbl-head-cell) {
-    background: color-mix(in srgb, var(--tbl-header-bg, #F1F1F4) 35%, #fff); }
+    background: color-mix(in srgb, var(--tbl-header-bg, #F1F1F4) 35%, var(--tbl-bg, #fff)); }
   .page.editing .tbl th:focus, .page.editing .tbl td:focus,
   .tm-table-host .tbl th:focus, .tm-table-host .tbl td:focus {
     outline: 2px solid var(--violet, #4E39FF); outline-offset: -2px; }
+  /* seleção de range pra mesclar (Shift+clique) */
+  .tbl-editing th.tbl-sel, .tbl-editing td.tbl-sel {
+    outline: 2px solid color-mix(in srgb, #4E39FF 70%, transparent);
+    outline-offset: -2px;
+    background: color-mix(in srgb, #4E39FF 10%, var(--tbl-bg, #fff)) !important;
+  }
+  .tbl-editing th.tbl-sel.tbl-head-cell {
+    background: color-mix(in srgb, #4E39FF 14%, var(--tbl-header-bg, #F1F1F4)) !important;
+  }
+  .tbl-merge-bar {
+    display: flex; gap: .35rem; flex-wrap: wrap;
+    margin-top: 6px; padding: 0; position: relative; z-index: 2;
+  }
+  .tbl-merge-bar[hidden] { display: none !important; }
+  .tbl-merge-btn {
+    border: 1px solid color-mix(in srgb, #4E39FF 35%, transparent);
+    border-radius: 6px; padding: .28rem .55rem;
+    background: #fff; color: #4E39FF;
+    font-size: 11px; font-weight: 600; font-stretch: 90%;
+    cursor: pointer;
+  }
+  .tbl-merge-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, #4E39FF 10%, #fff);
+  }
+  .tbl-merge-btn:disabled { opacity: .4; cursor: default; }
 
-  /* camadas de chrome: 4px mais perto da tabela (era -14 → -10) */
+  /* chrome no wrap (não no frame) — top/left ajustados em JS pra alinhar à table */
   .tbl-row-handles, .tbl-col-handles, .tbl-resizers {
     position: absolute; pointer-events: none; z-index: 4; }
-  .tbl-row-handles { left: -10px; top: 0; width: 12px; }
-  .tbl-col-handles { left: 0; top: -10px; height: 12px; right: 0; }
-  .tbl-resizers { inset: 0; z-index: 3; }
+  .tbl-row-handles { left: -10px; width: 12px; }
+  .tbl-col-handles { height: 12px; margin-top: -10px; }
+  .tbl-resizers { z-index: 3; left: 0; top: 0; width: 0; height: 0; overflow: visible; }
 
   /* botões 12×12 redondos; dots 2px */
   .tbl-handle {
@@ -955,12 +1420,9 @@ function focusCell(tableId, r, c) {
   .tbl-editing.tbl-near-right .tbl-add-col,
   .tbl-edge-add:hover { opacity: 1; }
   .tbl-edge-add:hover { background: color-mix(in srgb, #4E39FF 10%, #fff); }
-  /* metade sobre a borda da tabela — NÃO ocupa o vão de PARA_LH até o próximo bloco
-     (antes bottom:-14px comia o respiro inteiro e o parágrafo parecia colado) */
-  .tbl-add-row {
-    left: 50%; bottom: 0; transform: translate(-50%, 50%); }
-  .tbl-add-col {
-    top: 50%; right: 0; transform: translate(50%, -50%); }
+  /* “+” posicionados em JS sobre a borda da table (parent = wrap) */
+  .tbl-add-row { transform: translate(-50%, -50%); }
+  .tbl-add-col { transform: translate(-50%, -50%); }
 
   /* guia de drop no reordenamento */
   .tbl-drop-line {
