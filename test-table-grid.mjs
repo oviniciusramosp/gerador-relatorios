@@ -19,6 +19,7 @@ import {
 import {
   ensureTable, resolveGridTableItem, mergeCells, unmergeCells, isCellCovered,
   mergeOriginAt, ensureMerges, addTableRow, addTableCol,
+  setTableHeaderRow, setTableHeaderCol, unwrapTableData,
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   tableHeaderTextOf, tableTextColorOf,
@@ -302,9 +303,11 @@ import {
   ensureTableGrid(b);
   const it = b.items[0];
   const resolved = resolveGridTableItem(b, it);
+  assert.equal(unwrapTableData(resolved), it);
 
-  resolved.headerRow = false;
-  assert.equal(it.headerRow, false, 'headerRow grava no item');
+  // API usada pelo painel / menu da alça
+  setTableHeaderRow(resolved, false);
+  assert.equal(it.headerRow, false, 'setTableHeaderRow grava no item');
 
   assert.equal(mergeCells(resolved, 0, 0, 0, 1), true);
   assert.ok(it.merges?.length === 1, 'merges no item');
@@ -321,10 +324,13 @@ import {
   assert.equal(isCellCovered(again, 0, 1), true);
   assert.equal(mergeOriginAt(again, 0, 0)?.cs, 2);
 
-  // desligar header via delete no item (switch “on”)
-  delete again.headerRow;
+  // religar cabeçalho
+  setTableHeaderRow(again, true);
   assert.equal(b.items[0].headerRow, undefined);
-  assert.equal(resolveGridTableItem(b, b.items[0]).headerRow, undefined);
+  setTableHeaderCol(again, true);
+  assert.equal(b.items[0].headerCol, true);
+  setTableHeaderCol(again, false);
+  assert.equal(b.items[0].headerCol, undefined);
 }
 
 console.log('test-table-grid: ok');

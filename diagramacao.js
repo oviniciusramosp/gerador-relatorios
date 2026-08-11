@@ -33,6 +33,7 @@ import {
   clampTableRadius, clampTableBorderWidth,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   clampTableFontSize, clampTableLineHeight, normalizeTableAlign, normalizeTableValign,
+  setTableHeaderRow, setTableHeaderCol, tableLiveActive, tableLiveFromEl,
   DEFAULT_HEADER_BG, DEFAULT_HEADER_TEXT, DEFAULT_TEXT_COLOR,
   DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_BG,
   DEFAULT_TABLE_RADIUS, DEFAULT_BORDER_WIDTH,
@@ -1398,7 +1399,19 @@ function tableStyleFieldsHtml(b, mode = 'full') {
       <input type="range" data-a="radius" min="0" max="${TABLE_RADIUS_MAX}" step="1" value="${radius}" data-snaps="0,4,8,12,16,24" data-edit="off">
     </label>`;
   }
-  // headerRow / headerCol: menu da alça da linha 0 / coluna 0 (não poluem o painel)
+  // flags estruturais: no painel full + item (e também no menu da alça)
+  if (showStruct || isItem) {
+    const data = b;
+    html += `
+    <div class="swrow"><span>Linha de cabeçalho</span>
+      <button type="button" class="sw" data-a="headerRow" role="switch" aria-checked="${data.headerRow !== false}"></button></div>
+    <div class="swrow"><span>Coluna de cabeçalho</span>
+      <button type="button" class="sw" data-a="headerCol" role="switch" aria-checked="${!!data.headerCol}"></button></div>
+    <div class="row img-tc-row" style="display:flex;gap:.4rem">
+      <button type="button" class="fieldbtn" data-a="merge" style="flex:1;justify-content:center" title="Arraste ou Shift+clique nas células, depois mescle">Mesclar</button>
+      <button type="button" class="fieldbtn" data-a="unmerge" style="flex:1;justify-content:center" title="Desfaz o merge da célula ativa">Desagrupar</button>
+    </div>`;
+  }
   return html;
 }
 
@@ -1423,15 +1436,16 @@ function wireTableStyleControls(root, b, hooks = {}) {
       if (sw.dataset.a === 'vlines') b.hideVLines = !on;
       else if (sw.dataset.a === 'alt') b.altRows = on;
       else if (sw.dataset.a === 'headerRow') {
-        // true = default → some do JSON; false persiste
-        if (on) delete b.headerRow;
-        else b.headerRow = false;
+        setTableHeaderRow(b, on);
         // th↔td precisa rebuild, não só paint de CSS vars
         if (hooks.rebuild) { hooks.rebuild(); hooks.after?.(); return; }
+        paint();
+        return;
       } else if (sw.dataset.a === 'headerCol') {
-        if (on) b.headerCol = true;
-        else delete b.headerCol;
+        setTableHeaderCol(b, on);
         if (hooks.rebuild) { hooks.rebuild(); hooks.after?.(); return; }
+        paint();
+        return;
       }
       paint();
     });
@@ -1601,6 +1615,27 @@ function wireTableStyleControls(root, b, hooks = {}) {
   root.querySelectorAll('.resetbtn').forEach((btn) => {
     btn.addEventListener('mousedown', (e) => e.preventDefault());
   });
+
+  // Mesclar / Desagrupar — usa a seleção viva da tabela ativa (arraste ou Shift+clique)
+  const liveFor = () => {
+    if (hooks.tableHost) return tableLiveFromEl(hooks.tableHost()) || tableLiveActive();
+    return tableLiveActive();
+  };
+  root.querySelector('[data-a="merge"]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const live = liveFor();
+    if (!live?.merge) return;
+    if (!live.merge()) {
+      // sem range multi: nada a fazer (usuário precisa arrastar / Shift+clique)
+    }
+  });
+  root.querySelector('[data-a="unmerge"]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    liveFor()?.unmerge?.();
+  });
+
   enhanceAll(root);
 }
 
@@ -1636,6 +1671,7 @@ function openTablePanel() {
       render();
       if (state.activeId === b.id || state.sel === b.id) openTablePanel();
     },
+    tableHost: () => pagesEl.querySelector(`.tbl-wrap[data-id="${b.id}"]`),
     after: () => { save(); scheduleCommit(); },
   });
   tablePanel.querySelector('[data-a="del"]').addEventListener('click', () => {
@@ -2090,6 +2126,9 @@ function openTableGridPanel() {
       },
       // headerRow/Col mudam th↔td — re-monta o grid
       rebuild: () => reopen(),
+      tableHost: () => pagesEl.querySelector(
+        `.tblgrid-wrap[data-id="${b.id}"] .tblgrid-cell[data-item="${itemIdx}"] .tbl-wrap`,
+      ),
       after: () => { save(); scheduleCommit(); },
     });
     body.querySelector('[data-a="addrow"]')?.addEventListener('click', (e) => {

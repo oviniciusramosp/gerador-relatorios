@@ -167,6 +167,36 @@ export function ensureSharedTableStyle(b) {
 }
 
 /**
+ * Desembrulha o Proxy de resolveGridTableItem → item/bloco real.
+ * Use em mutações estruturais (headerRow, merges) pra gravar sempre no alvo certo.
+ */
+export function unwrapTableData(b) {
+  if (!b || typeof b !== 'object') return b;
+  return b.__gridItem || b;
+}
+
+/** API de edição ao vivo por .tbl-wrap (seleção/merge acessível do painel flutuante). */
+const liveByWrap = new WeakMap();
+
+/** Live edit da tabela sob o elemento (ou da tabela ativa na página). */
+export function tableLiveFromEl(el) {
+  const wrap = el?.closest?.('.tbl-wrap') || (el?.classList?.contains('tbl-wrap') ? el : null);
+  return wrap ? liveByWrap.get(wrap) : null;
+}
+
+export function tableLiveActive() {
+  const ae = typeof document !== 'undefined' ? document.activeElement : null;
+  const fromFocus = tableLiveFromEl(ae);
+  if (fromFocus) return fromFocus;
+  if (typeof document === 'undefined') return null;
+  const host =
+    document.querySelector('.tblgrid-cell.is-active .tbl-wrap.tbl-editing')
+    || document.querySelector('.tbl-wrap.tbl-editing.active-block')
+    || document.querySelector('.page.editing .tbl-wrap.tbl-editing');
+  return host ? liveByWrap.get(host) : null;
+}
+
+/**
  * Vista de edição de um item do Grid de Tabelas.
  *
  * Retorna um Proxy sobre o **item real**:
@@ -224,6 +254,21 @@ export function resolveGridTableItem(grid, item) {
       return prop in target;
     },
   });
+}
+
+/** Liga/desliga linha de cabeçalho no objeto real (não no Proxy “fantasma”). */
+export function setTableHeaderRow(b, on) {
+  const t = unwrapTableData(b);
+  if (!t) return;
+  if (on) delete t.headerRow;
+  else t.headerRow = false;
+}
+
+export function setTableHeaderCol(b, on) {
+  const t = unwrapTableData(b);
+  if (!t) return;
+  if (on) t.headerCol = true;
+  else delete t.headerCol;
 }
 
 // ── merges (agrupar células) ────────────────────────────────────────────────
@@ -300,7 +345,8 @@ export function findMergeCovering(b, r, c) {
 
 /** Mescla o retângulo inclusivo. Conteúdo coberto some; origem mantém o seu. */
 export function mergeCells(b, r0, c0, r1, c1) {
-  ensureMatrix(b);
+  const t = unwrapTableData(b) || b;
+  ensureMatrix(t);
   const rMin = Math.min(r0 | 0, r1 | 0);
   const rMax = Math.max(r0 | 0, r1 | 0);
   const cMin = Math.min(c0 | 0, c1 | 0);
@@ -309,27 +355,28 @@ export function mergeCells(b, r0, c0, r1, c1) {
   const rs = rMax - rMin + 1;
   if (cs <= 1 && rs <= 1) return false;
   // remove merges que intersectam o retângulo
-  const kept = getMerges(b).filter((m) => {
+  const kept = getMerges(t).filter((m) => {
     const overlap = !(m.r + m.rs - 1 < rMin || m.r > rMax || m.c + m.cs - 1 < cMin || m.c > cMax);
     return !overlap;
   });
   for (let r = rMin; r <= rMax; r++) {
     for (let c = cMin; c <= cMax; c++) {
       if (r === rMin && c === cMin) continue;
-      if (b.rows[r]) b.rows[r][c] = '';
+      if (t.rows[r]) t.rows[r][c] = '';
     }
   }
   kept.push({ r: rMin, c: cMin, cs, rs });
-  b.merges = kept;
-  ensureMerges(b);
-  return true;
+  t.merges = kept;
+  ensureMerges(t);
+  return !!(t.merges && t.merges.length);
 }
 
 export function unmergeCells(b, r, c) {
-  const m = findMergeCovering(b, r, c);
+  const t = unwrapTableData(b) || b;
+  const m = findMergeCovering(t, r, c);
   if (!m) return false;
-  b.merges = getMerges(b).filter((x) => !(x.r === m.r && x.c === m.c && x.cs === m.cs && x.rs === m.rs));
-  ensureMerges(b);
+  t.merges = getMerges(t).filter((x) => !(x.r === m.r && x.c === m.c && x.cs === m.cs && x.rs === m.rs));
+  ensureMerges(t);
   return true;
 }
 
@@ -727,8 +774,17 @@ function openTblMenu(anchor, items, onClose) {
   return menu;
 }
 
-function isHeaderRow(b, r) { return b.headerRow !== false && r === 0; }
-function isHeaderCol(b, c) { return !!b.headerCol && c === 0; }
+function isHeaderRow(b, r) {
+  if (r !== 0) return false;
+  const t = unwrapTableData(b) || b;
+  // só false explícito desliga (undefined/true = cabeçalho ligado)
+  return t.headerRow !== false;
+}
+function isHeaderCol(b, c) {
+  if (c !== 0) return false;
+  const t = unwrapTableData(b) || b;
+  return !!t.headerCol;
+}
 function isHeaderCell(b, r, c) { return isHeaderRow(b, r) || isHeaderCol(b, c); }
 
 /**
@@ -783,8 +839,15 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       td.dataset.row = String(r);
       const origin = mergeOriginAt(b, r, c);
       if (origin) {
-        if (origin.cs > 1) td.colSpan = origin.cs;
-        if (origin.rs > 1) td.rowSpan = origin.rs;
+        // propriedade + atributo — alguns engines só refletem o attr no layout
+        if (origin.cs > 1) {
+          td.colSpan = origin.cs;
+          td.setAttribute('colspan', String(origin.cs));
+        }
+        if (origin.rs > 1) {
+          td.rowSpan = origin.rs;
+          td.setAttribute('rowspan', String(origin.rs));
+        }
         td.classList.add('tbl-merged');
       }
       if (head) {
@@ -876,13 +939,22 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       mergeBar.hidden = !multi && unmergeBtn.disabled;
     };
 
-    // seleção de range: arrastar entre células OU Shift+clique (estende âncora)
-    // table-level — um único estado cellSel, não depende de closure por célula
+    // seleção de range (estilo planilha):
+    // - clique = âncora
+    // - arrastar (pointermove / mouseover com botão) = estende
+    // - Shift+clique = estende sem arrastar
     let selDragging = false;
     const cellAt = (clientX, clientY) => {
       const el = document.elementFromPoint(clientX, clientY);
-      const td = el && el.closest && el.closest('th, td');
+      const node = el && el.nodeType === 3 ? el.parentElement : el;
+      const td = node && node.closest && node.closest('th, td');
       return td && table.contains(td) ? td : null;
+    };
+    const extendSelTo = (r, c) => {
+      if (!cellSel || !Number.isFinite(r) || !Number.isFinite(c)) return;
+      if (r === cellSel.r1 && c === cellSel.c1) return;
+      cellSel = { ...cellSel, r1: r, c1: c };
+      paintCellSel();
     };
     table.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
@@ -893,24 +965,30 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       if (!Number.isFinite(r) || !Number.isFinite(c)) return;
       if (e.shiftKey && cellSel) {
         e.preventDefault(); // não move caret — só range
-        cellSel = { ...cellSel, r1: r, c1: c };
-        paintCellSel();
+        extendSelTo(r, c);
         return;
       }
       cellSel = { r0: r, c0: c, r1: r, c1: c };
       selDragging = true;
       paintCellSel();
-      // capture no document p/ arraste sair da célula
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let armed = false;
+      const arm = (ev) => {
+        if (armed) return;
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 3) return;
+        armed = true;
+        // evita seleção de texto no contenteditable durante o arraste de range
+        ev.preventDefault();
+        try { td.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+      };
       const onMove = (ev) => {
         if (!selDragging || !cellSel) return;
+        arm(ev);
+        if (!armed) return;
         const hit = cellAt(ev.clientX, ev.clientY);
         if (!hit) return;
-        const rr = +hit.dataset.row;
-        const cc = +hit.dataset.col;
-        if (!Number.isFinite(rr) || !Number.isFinite(cc)) return;
-        if (rr === cellSel.r1 && cc === cellSel.c1) return;
-        cellSel = { ...cellSel, r1: rr, c1: cc };
-        paintCellSel();
+        extendSelTo(+hit.dataset.row, +hit.dataset.col);
       };
       const onUp = () => {
         selDragging = false;
@@ -920,31 +998,63 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
     });
+    // reforço: mouseover com botão pressionado (alguns browsers engolem pointermove no caret)
+    table.addEventListener('mouseover', (e) => {
+      if (!selDragging || !cellSel || (e.buttons & 1) === 0) return;
+      const td = e.target.closest && e.target.closest('th, td');
+      if (!td || !table.contains(td)) return;
+      extendSelTo(+td.dataset.row, +td.dataset.col);
+    });
 
+    const runMerge = () => {
+      if (!cellSel) return false;
+      const data = unwrapTableData(b) || b;
+      const ok = mergeCells(data, cellSel.r0, cellSel.c0, cellSel.r1, cellSel.c1);
+      // se b é Proxy, merges já foram pro item; se for clone antigo, copia
+      if (ok && data !== b && data.merges) b.merges = data.merges;
+      if (ok) {
+        cellSel = null;
+        ctx.rerender?.();
+      }
+      return ok;
+    };
+    const runUnmerge = () => {
+      if (!cellSel) return false;
+      const data = unwrapTableData(b) || b;
+      const r = Math.min(cellSel.r0, cellSel.r1);
+      const c = Math.min(cellSel.c0, cellSel.c1);
+      const ok = unmergeCells(data, r, c);
+      if (ok) {
+        cellSel = null;
+        ctx.rerender?.();
+      }
+      return ok;
+    };
     const doMerge = (e) => {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation?.();
-      if (!cellSel) return;
-      if (mergeCells(b, cellSel.r0, cellSel.c0, cellSel.r1, cellSel.c1)) {
-        cellSel = null;
-        ctx.rerender?.();
-      }
+      runMerge();
     };
     const doUnmerge = (e) => {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation?.();
-      if (!cellSel) return;
-      const r = Math.min(cellSel.r0, cellSel.r1);
-      const c = Math.min(cellSel.c0, cellSel.c1);
-      if (unmergeCells(b, r, c)) {
-        cellSel = null;
-        ctx.rerender?.();
-      }
+      runUnmerge();
     };
     mergeBtn.addEventListener('pointerdown', doMerge);
     unmergeBtn.addEventListener('pointerdown', doUnmerge);
+
+    // painel flutuante chama merge/unmerge da tabela ativa via WeakMap
+    liveByWrap.set(wrap, {
+      wrap,
+      getSelection: () => cellSel,
+      setSelection: (s) => { cellSel = s; paintCellSel(); },
+      merge: runMerge,
+      unmerge: runUnmerge,
+      data: () => unwrapTableData(b) || b,
+      paintSel: paintCellSel,
+    });
 
     // hover contextual: alça da row/col sob o cursor; “+” só perto da borda
     const EDGE = 18; // px de proximidade da borda p/ mostrar +
@@ -1015,12 +1125,11 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
             {
               label: 'Linha de cabeçalho',
               switcher: true,
-              on: b.headerRow !== false,
+              on: isHeaderRow(b, 0),
               fn: (on) => {
-                if (on) delete b.headerRow;
-                else b.headerRow = false;
-                ctx.commit();
-                ctx.rerender();
+                setTableHeaderRow(b, on);
+                ctx.commit?.();
+                ctx.rerender?.();
               },
             },
             {
@@ -1030,10 +1139,10 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
                   title: 'Fundo do cabeçalho',
                   get: () => tableHeaderBg(b),
                   set: (c) => {
-                    if (c === DEFAULT_HEADER_BG) delete b.headerColor;
-                    else b.headerColor = c;
-                    ctx.commit();
-                    // paint live sem rebuild completo se possível
+                    const t = unwrapTableData(b) || b;
+                    if (c === DEFAULT_HEADER_BG) delete t.headerColor;
+                    else t.headerColor = c;
+                    ctx.commit?.();
                     applyTableChrome(wrap, b);
                   },
                 },
@@ -1042,15 +1151,16 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
                   kind: 'text',
                   get: () => tableHeaderTextOf(b),
                   set: (c) => {
-                    if (c === DEFAULT_HEADER_TEXT || c === '#000' || c === '#000000') delete b.headerTextColor;
-                    else b.headerTextColor = c;
-                    ctx.commit();
+                    const t = unwrapTableData(b) || b;
+                    if (c === DEFAULT_HEADER_TEXT || c === '#000' || c === '#000000') delete t.headerTextColor;
+                    else t.headerTextColor = c;
+                    ctx.commit?.();
                     applyTableChrome(wrap, b);
                   },
                 },
               ],
             },
-            { label: 'Inserir abaixo', fn: () => { addRow(b, 1); ctx.rerender(); } },
+            { label: 'Inserir abaixo', fn: () => { addRow(unwrapTableData(b) || b, 1); ctx.rerender?.(); } },
           ], () => { delete wrap.dataset.menuRow; });
           return;
         }
@@ -1376,15 +1486,13 @@ function startColDrag(e, b, from, wrap, table, btn, ctx, opts = {}) {
         items.push({
           label: 'Coluna de cabeçalho',
           switcher: true,
-          on: !!b.headerCol,
+          on: isHeaderCol(b, 0),
           fn: (on) => {
-            if (on) b.headerCol = true;
-            else delete b.headerCol;
-            ctx.commit();
-            ctx.rerender();
+            setTableHeaderCol(b, on);
+            ctx.commit?.();
+            ctx.rerender?.();
           },
         });
-        // cores do cabeçalho também na 1ª col (quando headerCol)
         items.push({
           label: 'Cores do cabeçalho',
           colors: [
@@ -1392,9 +1500,10 @@ function startColDrag(e, b, from, wrap, table, btn, ctx, opts = {}) {
               title: 'Fundo do cabeçalho',
               get: () => tableHeaderBg(b),
               set: (c) => {
-                if (c === DEFAULT_HEADER_BG) delete b.headerColor;
-                else b.headerColor = c;
-                ctx.commit();
+                const t = unwrapTableData(b) || b;
+                if (c === DEFAULT_HEADER_BG) delete t.headerColor;
+                else t.headerColor = c;
+                ctx.commit?.();
                 applyTableChrome(wrap, b);
               },
             },
@@ -1403,9 +1512,10 @@ function startColDrag(e, b, from, wrap, table, btn, ctx, opts = {}) {
               kind: 'text',
               get: () => tableHeaderTextOf(b),
               set: (c) => {
-                if (c === DEFAULT_HEADER_TEXT || c === '#000' || c === '#000000') delete b.headerTextColor;
-                else b.headerTextColor = c;
-                ctx.commit();
+                const t = unwrapTableData(b) || b;
+                if (c === DEFAULT_HEADER_TEXT || c === '#000' || c === '#000000') delete t.headerTextColor;
+                else t.headerTextColor = c;
+                ctx.commit?.();
                 applyTableChrome(wrap, b);
               },
             },
@@ -1563,6 +1673,13 @@ function focusCell(tableId, r, c) {
     background: var(--tbl-header-bg, #F1F1F4);
     color: var(--tbl-header-text, #000);
     font-weight: 700;
+  }
+  /* sem linha de cabeçalho: 1ª linha é corpo (sem th / sem fundo de header) */
+  .tbl.no-header-row tr:first-child > th,
+  .tbl.no-header-row tr:first-child > .tbl-head-cell {
+    background: transparent;
+    color: inherit;
+    font-weight: inherit;
   }
   .tbl td:empty::after, .tbl th:empty::after { content: "\\200b"; }
   .tbl.no-vlines th, .tbl.no-vlines td {
