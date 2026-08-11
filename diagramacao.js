@@ -15,7 +15,9 @@
  * parágrafos por linha via Range.getClientRects() quando precisar de fluxo denso.
  */
 
-import { openSwatchPop, parseColor, withAlpha } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
+import {
+  openSwatchPop as openSwatchPopBase, parseColor, withAlpha, harvestColorsFromHtml,
+} from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
 import { enhanceAll, wireFieldEditKeys } from './range-snap.js';  // snap + digitação (Enter aplica, sem quebrar linha)
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
@@ -369,6 +371,93 @@ const state = {
   sel: null,          // id da imagem selecionada
   zoom: 'fit',
 };
+
+/**
+ * Cores em uso no .pdgm atual → swatch "Nesse documento".
+ * text = tipografia/marcadores/ícones; bg = papel, callout, header de tabela, highlights.
+ * Puro sobre o objeto doc (sem DOM), reusa harvestColorsFromHtml do swatch.
+ */
+function collectDiagramacaoDocColors(doc) {
+  const text = new Set();
+  const bg = new Set();
+  if (!doc || typeof doc !== 'object') return { text: [], bg: [] };
+  const addText = (c) => { const p = parseColor(c); if (p?.hex) text.add(p.hex); };
+  const addBg = (c) => { const p = parseColor(c); if (p?.hex) bg.add(p.hex); };
+  const fromHtml = (html) => harvestColorsFromHtml(html, { text, bg });
+
+  addBg(doc.pageBg);
+  addText(doc.pnumColor);
+  addText(doc.footColor);
+
+  for (const st of Object.values(doc.blockStyles || {})) {
+    if (!st || typeof st !== 'object') continue;
+    addText(st.color);
+    addText(st.markerColor);
+    addText(st.checkColor);
+    addText(st.borderColor);
+    // divisor: cor da linha (mais “traço” que tipografia, mas é cor de chrome do miolo)
+    if (st.thickness != null || st.color) addText(st.color);
+  }
+
+  const walkBlock = (b) => {
+    if (!b || typeof b !== 'object') return;
+    fromHtml(b.html);
+    fromHtml(b.title);
+    fromHtml(b.caption);
+    if (b.type === 'callout' && b.color) addBg(b.color);
+    if (b.iconColor) addText(b.iconColor);
+    if (b.color && b.type === 'icon') addText(b.color);
+    if (b.headerColor) addBg(b.headerColor);
+    // tabela: células (string ou { html })
+    if (Array.isArray(b.rows)) {
+      for (const row of b.rows) {
+        if (!Array.isArray(row)) continue;
+        for (const cell of row) {
+          if (typeof cell === 'string') fromHtml(cell);
+          else if (cell && typeof cell === 'object') fromHtml(cell.html);
+        }
+      }
+    }
+    // grid / cover items aninhados
+    if (Array.isArray(b.items)) {
+      for (const it of b.items) {
+        if (!it || typeof it !== 'object') continue;
+        fromHtml(it.title);
+        fromHtml(it.caption);
+        fromHtml(it.html);
+        if (it.color) addText(it.color);
+        if (it.iconColor) addText(it.iconColor);
+      }
+    }
+  };
+
+  for (const b of doc.blocks || []) walkBlock(b);
+  for (const kind of ['cover', 'back']) {
+    const cov = doc[kind];
+    if (!cov) continue;
+    for (const it of cov.items || []) {
+      walkBlock(it);
+      // item de capa de texto livre: cor do item
+      if (it && it.color) addText(it.color);
+    }
+  }
+  if (doc.index) {
+    const c = doc.index.colors;
+    if (c) { addText(c.num); addText(c.text); addText(c.page); }
+    fromHtml(doc.index.resumo);
+  }
+
+  const sortHex = (a, b) => a.localeCompare(b);
+  return { text: [...text].sort(sortHex), bg: [...bg].sort(sortHex) };
+}
+
+/** Wrapper: todo swatch do diagramador recebe as cores do doc atual. */
+function openSwatchPop(anchor, pick, current, opts) {
+  return openSwatchPopBase(anchor, pick, current, {
+    ...opts,
+    docColors: collectDiagramacaoDocColors(state.doc),
+  });
+}
 
 const mkBlock = (type, html = '') => {
   const b = { id: uid(), type, html };
@@ -1976,11 +2065,14 @@ function pageBgOf() {
   const p = parseColor(state.doc?.pageBg);
   return p ? withAlpha(p.hex, p.alpha) : DEFAULT_PAGE_BG;
 }
-/** Aplica o fundo da página: com alpha, papel branco por baixo (editor = PDF). */
+/** Aplica o fundo da página: com alpha, papel branco por baixo (editor = PDF).
+ *  --page-bg: cor sólida p/ filhos que mascaram sobre o papel (label da quebra de página). */
 function applyPageBg(pageEl) {
   if (!pageEl) return;
   const c = pageBgOf();
   const p = parseColor(c);
+  // label da quebra precisa da cor “de papel” opaca (não o rgba); com alpha usa o hex
+  pageEl.style.setProperty('--page-bg', (p && p.hex) ? p.hex : DEFAULT_PAGE_BG);
   if (p && p.alpha < 1) {
     pageEl.style.backgroundImage = `linear-gradient(${c}, ${c}), linear-gradient(#fff, #fff)`;
     pageEl.style.backgroundColor = '#fff';

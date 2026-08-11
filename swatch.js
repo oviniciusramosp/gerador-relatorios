@@ -11,14 +11,17 @@
  *               próprio controle, ex. o watermark do gráfico).
  *               { paper:true } preview/HEX com base branca sob a cor com alpha (como o papel
  *               do PDF) em vez do xadrez — use no fundo do Callout. Default: opacity=true.
+ *               { docColors:{ text?:string[], bg?:string[] } } cores usadas no documento
+ *               (seção "Nesse documento", expandable aberto por padrão). Hosts sem doc
+ *               (gráficos, catálogo) simplesmente omitem.
  *
- * Fluxo: clicar nomeada/complementar SELECIONA a cor (atualiza HEX + .on + preview) e aplica
- * via pick com a opacidade atual do slider — NÃO fecha o popover, pra o slider modular a cor
- * recém-escolhida. Fecha com Enter no HEX ou clique fora.
+ * Fluxo: clicar nomeada/complementar/documento SELECIONA a cor (atualiza HEX + .on + preview)
+ * e aplica via pick com a opacidade atual do slider — NÃO fecha o popover, pra o slider
+ * modular a cor recém-escolhida. Fecha com Enter no HEX ou clique fora.
  *
- * Quatro seções: (1) cores nomeadas da marca, (2) complementares por tom, (3) HEX manual,
- * (4) opacidade (opcional). O CSS é injetado uma vez pelo próprio módulo — nenhum host precisa
- * declarar nada. */
+ * Seções (expandable): (1) Nesse documento (open se houver cores), (2) Cores nomeadas
+ * (fechado), (3) Complementares (fechado). Fixas: HEX + Opacidade.
+ * O CSS é injetado uma vez pelo próprio módulo — nenhum host precisa declarar nada. */
 
 import { enhanceRange } from './range-snap.js';
 
@@ -85,19 +88,97 @@ export function withAlpha(hex, alpha) {
   return `rgba(${r},${g},${b},${a})`;
 }
 
+/** Cores ignoradas ao varrer HTML/CSS (não são “cor do documento”). */
+const SKIP_COLOR_WORDS = new Set([
+  'transparent', 'inherit', 'initial', 'unset', 'currentcolor', 'none',
+]);
+
+/**
+ * Extrai hex de declarações color / background(-color) e <font color> em HTML.
+ * Puro (sem DOM) — testável em node.
+ * @param {string} html
+ * @param {{ text?:Set<string>, bg?:Set<string> }} buckets  — muta Sets de hex
+ */
+export function harvestColorsFromHtml(html, buckets = {}) {
+  if (!html || typeof html !== 'string') return buckets;
+  const text = buckets.text || (buckets.text = new Set());
+  const bg = buckets.bg || (buckets.bg = new Set());
+  const add = (set, raw) => {
+    if (raw == null) return;
+    const s = String(raw).trim();
+    if (!s || SKIP_COLOR_WORDS.has(s.toLowerCase())) return;
+    // ignora gradientes / vars / urls
+    if (/gradient\s*\(|url\s*\(|var\s*\(/i.test(s)) return;
+    const p = parseColor(s);
+    if (p?.hex) set.add(p.hex);
+  };
+  let m;
+  const reColor = /(?:^|[;"'\s{])color\s*:\s*([^;"'}]+)/gi;
+  const reBg = /background(?:-color)?\s*:\s*([^;"'}]+)/gi;
+  const reFont = /<font\b[^>]*\bcolor\s*=\s*["']?([^"'\s>]+)/gi;
+  while ((m = reColor.exec(html))) add(text, m[1]);
+  while ((m = reBg.exec(html))) add(bg, m[1]);
+  while ((m = reFont.exec(html))) add(text, m[1]);
+  return buckets;
+}
+
+/**
+ * Normaliza opts.docColors → { text: hex[], bg: hex[] } únicos e ordenados.
+ * Aceita string[] (tudo em text) ou { text, bg }.
+ */
+export function normalizeDocColors(raw) {
+  const text = new Set();
+  const bg = new Set();
+  const add = (set, list) => {
+    if (!list) return;
+    const arr = Array.isArray(list) ? list : [list];
+    for (const c of arr) {
+      const p = parseColor(c);
+      if (p?.hex) set.add(p.hex);
+    }
+  };
+  if (Array.isArray(raw)) add(text, raw);
+  else if (raw && typeof raw === 'object') {
+    add(text, raw.text);
+    add(bg, raw.bg);
+  }
+  const sortHex = (a, b) => a.localeCompare(b);
+  return { text: [...text].sort(sortHex), bg: [...bg].sort(sortHex) };
+}
+
+/** Expandable do popover (details nativo). open=true inicia aberto. */
+function makeExpandable(label, { open = false } = {}) {
+  const det = document.createElement('details');
+  det.className = 'sp-det';
+  if (open) det.open = true;
+  const sum = document.createElement('summary');
+  sum.className = 'sp-det-sum';
+  const chev = document.createElement('span');
+  chev.className = 'sp-det-chev';
+  chev.setAttribute('aria-hidden', 'true');
+  const lab = document.createElement('span');
+  lab.className = 'sp-label';
+  lab.textContent = label;
+  sum.append(chev, lab);
+  const body = document.createElement('div');
+  body.className = 'sp-det-body';
+  det.append(sum, body);
+  return { det, body };
+}
+
 let swatchPop = null;
 export function openSwatchPop(anchor, pick, current, opts) {
   closeSwatchPop();
   const showOpacity = !(opts && opts.opacity === false);
   const paperBase = !!(opts && opts.paper); // base branca sob alpha (papel do PDF)
+  const docColors = normalizeDocColors(opts && opts.docColors);
+  const hasDoc = docColors.text.length > 0 || docColors.bg.length > 0;
   const parsed = parseColor(current);
   // selectedHex = matiz em edição (muda ao clicar nomeada/complementar/HEX válido)
   let selectedHex = parsed ? parsed.hex : null;
   let alpha = parsed ? parsed.alpha : 1;   // 0..1 — só o slider de Opacidade muda isso
   swatchPop = document.createElement('div');
   swatchPop.className = 'swatch-pop' + (paperBase ? ' paper-base' : '');
-
-  const section = (label) => { const h = document.createElement('div'); h.className = 'sp-label'; h.textContent = label; swatchPop.append(h); };
 
   // refs preenchidos abaixo (selectColor precisa de inp/paintPreview/markOn)
   let inp, paintPreview, markOn;
@@ -117,35 +198,68 @@ export function openSwatchPop(anchor, pick, current, opts) {
     if (close) closeSwatchPop();
   };
 
-  section('Cores nomeadas');
-  const named = document.createElement('div'); named.className = 'sp-named';
-  NAMED_COLORS.forEach(({ name, hex }) => {
-    const row = document.createElement('button');
-    row.type = 'button'; row.className = 'sp-namerow'; row.title = hex;
-    row.dataset.hex = normHex(hex) || hex;
-    if (selectedHex === normHex(hex)) row.classList.add('on');
-    const c = document.createElement('span'); c.className = 'sp-swatch'; c.style.background = hex;
-    const t = document.createElement('span'); t.textContent = name;
-    row.append(c, t);
-    row.onclick = () => selectColor(hex);
-    named.append(row);
-  });
-  swatchPop.append(named);
+  const appendChip = (parent, hex, title) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'sp-chip'; b.style.background = hex;
+    b.dataset.hex = normHex(hex) || hex;
+    b.title = title || hex;
+    if (selectedHex === normHex(hex)) b.classList.add('on');
+    b.onclick = () => selectColor(hex);
+    parent.append(b);
+  };
 
-  section('Complementares');
-  const grid = document.createElement('div'); grid.className = 'sp-grid';
-  SWATCH_FAMILIES.forEach(({ name, colors }) => {
-    colors.forEach((hex, i) => {
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'sp-chip'; b.style.background = hex;
-      b.dataset.hex = normHex(hex) || hex;
-      b.title = `${name} ${SWATCH_VARIANTS[i]} · ${hex}`;
-      if (selectedHex === normHex(hex)) b.classList.add('on');
-      b.onclick = () => selectColor(hex);
-      grid.append(b);
+  // ── 1) Nesse documento (aberto se houver cores) ───────────────────────────
+  if (hasDoc) {
+    const { det, body } = makeExpandable('Nesse documento', { open: true });
+    const addGroup = (label, hexes) => {
+      if (!hexes.length) return;
+      const g = document.createElement('div');
+      g.className = 'sp-docgroup';
+      const lab = document.createElement('div');
+      lab.className = 'sp-doclab';
+      lab.textContent = label;
+      const row = document.createElement('div');
+      row.className = 'sp-docrow';
+      for (const hex of hexes) appendChip(row, hex, `${label} · ${hex}`);
+      g.append(lab, row);
+      body.append(g);
+    };
+    addGroup('Texto', docColors.text);
+    addGroup('Fundo', docColors.bg);
+    swatchPop.append(det);
+  }
+
+  // ── 2) Cores nomeadas (fechado por padrão) ────────────────────────────────
+  {
+    const { det, body } = makeExpandable('Cores nomeadas', { open: false });
+    const named = document.createElement('div'); named.className = 'sp-named';
+    NAMED_COLORS.forEach(({ name, hex }) => {
+      const row = document.createElement('button');
+      row.type = 'button'; row.className = 'sp-namerow'; row.title = hex;
+      row.dataset.hex = normHex(hex) || hex;
+      if (selectedHex === normHex(hex)) row.classList.add('on');
+      const c = document.createElement('span'); c.className = 'sp-swatch'; c.style.background = hex;
+      const t = document.createElement('span'); t.textContent = name;
+      row.append(c, t);
+      row.onclick = () => selectColor(hex);
+      named.append(row);
     });
-  });
-  swatchPop.append(grid);
+    body.append(named);
+    swatchPop.append(det);
+  }
+
+  // ── 3) Complementares (fechado por padrão) ────────────────────────────────
+  {
+    const { det, body } = makeExpandable('Complementares', { open: false });
+    const grid = document.createElement('div'); grid.className = 'sp-grid';
+    SWATCH_FAMILIES.forEach(({ name, colors }) => {
+      colors.forEach((hex, i) => {
+        appendChip(grid, hex, `${name} ${SWATCH_VARIANTS[i]} · ${hex}`);
+      });
+    });
+    body.append(grid);
+    swatchPop.append(det);
+  }
 
   markOn = (hex) => {
     const h = normHex(hex);
@@ -156,7 +270,13 @@ export function openSwatchPop(anchor, pick, current, opts) {
     });
   };
 
-  section('HEX');
+  // ── HEX (sempre visível) ──────────────────────────────────────────────────
+  {
+    const lab = document.createElement('div');
+    lab.className = 'sp-label';
+    lab.textContent = 'HEX';
+    swatchPop.append(lab);
+  }
   const row = document.createElement('div'); row.className = 'sp-hex';
   inp = document.createElement('input');
   inp.type = 'text'; inp.placeholder = '#RRGGBB'; inp.value = selectedHex || '';
@@ -200,7 +320,10 @@ export function openSwatchPop(anchor, pick, current, opts) {
   swatchPop.append(row);
 
   if (showOpacity) {
-    section('Opacidade');
+    const lab = document.createElement('div');
+    lab.className = 'sp-label';
+    lab.textContent = 'Opacidade';
+    swatchPop.append(lab);
     const oprow = document.createElement('div'); oprow.className = 'sp-op';
     const slider = document.createElement('input');
     slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1';
@@ -252,7 +375,25 @@ export function closeSwatchPop() {
     padding: .6rem; border: 1px solid var(--hair-strong); border-radius: 8px;
     background: color-mix(in srgb, var(--lilac) 8%, var(--ground)); box-shadow: 0 18px 50px -20px #000;
   }
-  .swatch-pop .sp-label { font-size: .6rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: .25rem 0 .05rem; }
+  .swatch-pop .sp-label { font-size: .6rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+  /* expandable (nomeadas / complementares / nesse documento) */
+  .sp-det { margin: 0; border: 0; }
+  .sp-det-sum {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: .35rem;
+    padding: .2rem 0; user-select: none;
+  }
+  .sp-det-sum::-webkit-details-marker { display: none; }
+  .sp-det-chev {
+    width: 0; height: 0; flex: 0 0 auto;
+    border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+    border-left: 5px solid var(--muted);
+    transition: transform .12s ease;
+  }
+  .sp-det[open] > .sp-det-sum .sp-det-chev { transform: rotate(90deg); }
+  .sp-det-body { display: grid; gap: .35rem; padding: .2rem 0 .15rem; }
+  .sp-docgroup { display: grid; gap: .2rem; }
+  .sp-doclab { font-size: .62rem; color: var(--muted); font-stretch: 85%; }
+  .sp-docrow { display: flex; flex-wrap: wrap; gap: .3rem; }
   .sp-named { display: flex; flex-direction: column; gap: .1rem; }
   .sp-namerow { display: flex; align-items: center; gap: .5rem; padding: .28rem .35rem; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; font-size: .78rem; text-align: left; }
   .sp-namerow:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); }
@@ -313,6 +454,17 @@ function demo() {
   // 3) opacidade < 100% aplicada no slider → pick recebe rgba(r,g,b,a) com os componentes certos
   eq(withAlpha('#29E899', 0.5), 'rgba(41,232,153,0.5)', '50% → rgba com os componentes certos');
   eq(withAlpha('#000000', 0), 'rgba(0,0,0,0)', '0% → rgba com alpha 0 (não hex)');
+
+  // 4) harvest HTML + normalizeDocColors
+  const buckets = harvestColorsFromHtml(
+    '<p style="color:#4E4E4E;background-color:rgba(255,0,0,0.5)">x</p><font color="#00ff00">y</font>',
+  );
+  eq([...buckets.text].sort(), ['#00FF00', '#4E4E4E'], 'harvest texto de style+font');
+  eq([...buckets.bg], ['#FF0000'], 'harvest fundo (alpha ignorado no hex)');
+
+  const norm = normalizeDocColors({ text: ['#abc', 'not-a-color', '#AABBCC'], bg: ['#000'] });
+  eq(norm, { text: ['#AABBCC'], bg: ['#000000'] }, 'normalize dedupe + ignora inválido');
+  eq(normalizeDocColors(['#29E899', '#29e899']), { text: ['#29E899'], bg: [] }, 'array plano → text');
 
   console.log('swatch: todos os asserts passaram');
 }
