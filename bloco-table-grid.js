@@ -131,26 +131,16 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     cell.style.minWidth = '0';
     if (equal === 'height') cell.style.display = 'flex';
 
-    // estilo shared no clone; rows/merges/colWidths compartilhados com o item
-    // (resolveGridTableItem já reata as refs — syncStructure é cinto de segurança
-    // se ensureMatrix precisar reatribuir a matriz)
+    // Proxy sobre o item real (+ estilos shared do grid). Mutar resolved = mutar it.
     const resolved = resolveGridTableItem(b, it);
-
-    const syncStructure = () => {
-      it.rows = resolved.rows;
-      if (resolved.merges && resolved.merges.length) it.merges = resolved.merges;
-      else delete it.merges;
-      if (resolved.colWidths) it.colWidths = resolved.colWidths;
-      else delete it.colWidths;
-    };
 
     const itemCtx = {
       commit: () => {
-        syncStructure();
+        ensureTable(it);
         ctx.commit?.();
       },
       rerender: () => {
-        syncStructure();
+        ensureTable(it);
         ctx.rerender?.();
       },
     };
@@ -163,16 +153,21 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     tbl.classList.add('tblgrid-table');
     tbl.style.width = '100%';
     if (equal === 'height') {
+      // height 100% sem display:flex no frame — flex no pai de <table>
+      // quebra colSpan/rowSpan em alguns engines (células “não mesclam” visualmente).
       tbl.style.flex = '1 1 auto';
       tbl.style.height = '100%';
+      tbl.style.minHeight = '0';
       const frame = tbl.querySelector('.tbl-frame');
       if (frame) {
         frame.style.height = '100%';
-        frame.style.display = 'flex';
-        frame.style.flexDirection = 'column';
+        frame.style.boxSizing = 'border-box';
       }
       const table = tbl.querySelector('table.tbl');
-      if (table) table.style.height = '100%';
+      if (table) {
+        table.style.height = '100%';
+        table.style.boxSizing = 'border-box';
+      }
     }
     cell.appendChild(tbl);
 

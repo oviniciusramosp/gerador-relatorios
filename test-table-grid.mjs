@@ -261,8 +261,8 @@ import {
   assert.equal(t.merges, undefined);
 }
 
-// ── mutate via clone resolvido = muta o item real (caminho do “+”/alças no grid) ─
-// Antes: ensureMatrix reatribuía resolved.rows e desligava do item → addRow sumia no rerender.
+// ── resolveGridTableItem = Proxy no item real (mutações sobrevivem ao rerender) ─
+// Sem isto: headerRow/merges no “clone” sumiam; + linha/reordenar também.
 {
   const b = {
     type: 'table-grid',
@@ -272,29 +272,59 @@ import {
   ensureTableGrid(b);
   const it = b.items[0];
   const resolved = resolveGridTableItem(b, it);
-  assert.equal(resolved.rows, it.rows, 'rows compartilhado após resolve');
-  assert.equal(resolved.fontSize, 12, 'estilo shared no clone');
+  assert.equal(resolved.rows, it.rows, 'rows do item via proxy');
+  assert.equal(resolved.fontSize, 12, 'estilo shared lido do grid');
+  assert.equal(resolved.bg, '#FAFAFA', 'cor por item');
+  assert.equal(resolved.__gridItem, it, 'proxy aponta pro item');
 
   const n0 = it.rows.length;
   addTableRow(resolved, null);
-  assert.equal(it.rows.length, n0 + 1, 'addRow no clone grava no item');
-  assert.equal(resolved.rows, it.rows, 'ref rows permanece após addRow');
+  assert.equal(it.rows.length, n0 + 1, 'addRow no proxy grava no item');
 
   const cols0 = it.rows[0].length;
   addTableCol(resolved, null);
-  assert.equal(it.rows[0].length, cols0 + 1, 'addCol no clone grava no item');
-  // colWidths é reatribuído no clone — o itemCtx.rerender do grid faz o sync
-  assert.ok(resolved.colWidths && resolved.colWidths.length === cols0 + 1);
-  it.colWidths = resolved.colWidths; // espelha syncStructure
-  assert.equal(it.colWidths, resolved.colWidths);
+  assert.equal(it.rows[0].length, cols0 + 1, 'addCol no proxy grava no item');
+  assert.ok(it.colWidths && it.colWidths.length === cols0 + 1, 'colWidths no item');
 
-  // reordenar: splice in-place no array compartilhado (como moveRow)
-  const r2 = resolveGridTableItem(b, it);
-  assert.equal(r2.rows, it.rows, 're-resolve mantém ref de rows');
-  const [row] = r2.rows.splice(2, 1);
-  r2.rows.splice(1, 0, row);
-  assert.equal(it.rows[1][0], 'c', 'reorder no clone reflete no item');
+  // reordenar via proxy
+  const [row] = resolved.rows.splice(2, 1);
+  resolved.rows.splice(1, 0, row);
+  assert.equal(it.rows[1][0], 'c');
   assert.equal(it.rows[2][0], 'a');
+}
+
+// ── headerRow=false e merge no proxy → persistem após ensureTableGrid ─────────
+{
+  const b = {
+    type: 'table-grid',
+    items: [{ rows: [['A', 'B', 'C'], ['1', '2', '3'], ['4', '5', '6']] }],
+  };
+  ensureTableGrid(b);
+  const it = b.items[0];
+  const resolved = resolveGridTableItem(b, it);
+
+  resolved.headerRow = false;
+  assert.equal(it.headerRow, false, 'headerRow grava no item');
+
+  assert.equal(mergeCells(resolved, 0, 0, 0, 1), true);
+  assert.ok(it.merges?.length === 1, 'merges no item');
+  assert.deepEqual(it.merges[0], { r: 0, c: 0, cs: 2, rs: 1 });
+  assert.equal(isCellCovered(it, 0, 1), true);
+  assert.equal(it.rows[0][1], '', 'célula coberta limpa');
+
+  // ciclo de render do diagramador
+  ensureTableGrid(b);
+  const again = resolveGridTableItem(b, b.items[0]);
+  assert.equal(again.headerRow, false, 'header off sobrevive ensure+resolve');
+  assert.equal(b.items[0].headerRow, false);
+  assert.deepEqual(b.items[0].merges[0], { r: 0, c: 0, cs: 2, rs: 1 });
+  assert.equal(isCellCovered(again, 0, 1), true);
+  assert.equal(mergeOriginAt(again, 0, 0)?.cs, 2);
+
+  // desligar header via delete no item (switch “on”)
+  delete again.headerRow;
+  assert.equal(b.items[0].headerRow, undefined);
+  assert.equal(resolveGridTableItem(b, b.items[0]).headerRow, undefined);
 }
 
 console.log('test-table-grid: ok');

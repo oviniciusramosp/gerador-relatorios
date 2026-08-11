@@ -166,39 +166,63 @@ export function ensureSharedTableStyle(b) {
 }
 
 /**
- * Copia estilos compartilhados do grid para um clone de item (render/edição).
- * Estrutura (rows/merges/colWidths) fica compartilhada com o item real — mutações
- * do editor ( + linha, reordenar, etc.) precisam sobreviver ao rerender.
+ * Vista de edição de um item do Grid de Tabelas.
+ *
+ * Retorna um Proxy sobre o **item real**:
+ * - rows / merges / colWidths / headerRow / cores → leem e gravam no item
+ * - estilos shared (fontSize, bordas, radius…) → leem/escrevem no bloco grid
+ *
+ * Assim “Linha de cabeçalho”, mesclar, + linha, reordenar etc. não se perdem
+ * no rerender (antes um clone raso desconectava headerRow e reatribuições).
  */
 export function resolveGridTableItem(grid, item) {
-  const t = item && typeof item === 'object' ? { ...item } : { rows: seed() };
-  if (!Array.isArray(t.rows)) t.rows = seed();
-  for (const k of TABLE_GRID_SHARED_KEYS) {
-    if (grid && grid[k] != null) t[k] = grid[k];
-    else delete t[k];
-  }
-  delete t.id;
-  delete t.type;
-  ensureTable(t);
-  // ensureTable pode ter normalizado rows → devolve a ref ao item e reusa nela
-  if (item && typeof item === 'object') {
-    item.rows = t.rows;
-    t.rows = item.rows;
-    if (t.colWidths) {
-      item.colWidths = t.colWidths;
-      t.colWidths = item.colWidths;
-    } else {
-      delete item.colWidths;
+  if (!item || typeof item !== 'object') {
+    const t = { rows: seed() };
+    for (const k of TABLE_GRID_SHARED_KEYS) {
+      if (grid && grid[k] != null) t[k] = grid[k];
     }
-    if (t.merges?.length) {
-      item.merges = t.merges;
-      t.merges = item.merges;
-    } else {
-      delete item.merges;
-      delete t.merges;
-    }
+    ensureTable(t);
+    return t;
   }
-  return t;
+  // normaliza o item real (não o proxy) — shared keys já foram tirados do item
+  // em ensureTableGrid; ensureTable aqui limpa defaults do item.
+  if (!Array.isArray(item.rows)) item.rows = seed();
+  ensureTable(item);
+
+  const shared = new Set(TABLE_GRID_SHARED_KEYS);
+  return new Proxy(item, {
+    get(target, prop, receiver) {
+      if (prop === '__gridItem') return target;
+      if (typeof prop === 'string' && shared.has(prop)) {
+        if (grid && grid[prop] != null) return grid[prop];
+        return undefined;
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+    set(target, prop, value) {
+      if (typeof prop === 'string' && shared.has(prop)) {
+        if (!grid || typeof grid !== 'object') return true;
+        if (value == null) delete grid[prop];
+        else grid[prop] = value;
+        return true;
+      }
+      target[prop] = value;
+      return true;
+    },
+    deleteProperty(target, prop) {
+      if (typeof prop === 'string' && shared.has(prop)) {
+        if (grid && typeof grid === 'object') delete grid[prop];
+        return true;
+      }
+      return Reflect.deleteProperty(target, prop);
+    },
+    has(target, prop) {
+      if (typeof prop === 'string' && shared.has(prop)) {
+        return !!(grid && grid[prop] != null);
+      }
+      return prop in target;
+    },
+  });
 }
 
 // ── merges (agrupar células) ────────────────────────────────────────────────
@@ -421,22 +445,27 @@ export function applyTableChrome(host, b) {
     table.classList.toggle('alt-rows', !!(b && b.altRows));
     table.classList.toggle('no-header-row', b && b.headerRow === false);
     table.classList.toggle('header-col', !!(b && b.headerCol));
-    // bordas só nas internas (frame carrega a externa) — evita linha dupla no topo
+    // bordas só nas internas (frame carrega a externa) — evita linha dupla no topo.
+    // Usa data-row/col + colSpan/rowSpan (não índice DOM) p/ células mescladas.
     const rows = [...table.rows];
-    const lastR = rows.length - 1;
-    rows.forEach((tr, r) => {
-      const cells = [...tr.cells];
-      const lastC = cells.length - 1;
-      cells.forEach((cell, c) => {
+    const lastR = Math.max(0, (b?.rows?.length || rows.length) - 1);
+    const lastC = Math.max(0, nColsOf(b || { rows: [['']] }) - 1);
+    rows.forEach((tr) => {
+      [...tr.cells].forEach((cell) => {
+        const r = +cell.dataset.row;
+        const c = +cell.dataset.col;
+        const cs = Math.max(1, cell.colSpan | 0);
+        const rs = Math.max(1, cell.rowSpan | 0);
+        const rr = Number.isFinite(r) ? r : 0;
+        const cc = Number.isFinite(c) ? c : 0;
         cell.style.textAlign = align;
         cell.style.verticalAlign = valign;
         cell.style.borderColor = inner;
         cell.style.borderStyle = 'solid';
-        // top/left: 0 nas bordas externas; right/bottom: 0 na última linha/col
-        cell.style.borderTopWidth = r === 0 ? '0' : bw;
-        cell.style.borderLeftWidth = c === 0 ? '0' : bw;
-        cell.style.borderRightWidth = c === lastC ? '0' : bw;
-        cell.style.borderBottomWidth = r === lastR ? '0' : bw;
+        cell.style.borderTopWidth = rr === 0 ? '0' : bw;
+        cell.style.borderLeftWidth = cc === 0 ? '0' : bw;
+        cell.style.borderRightWidth = (cc + cs - 1) >= lastC ? '0' : bw;
+        cell.style.borderBottomWidth = (rr + rs - 1) >= lastR ? '0' : bw;
         if (cell.classList.contains('tbl-head-cell') || cell.tagName === 'TH') {
           cell.style.background = headerBg;
           cell.style.color = headerText;
@@ -742,17 +771,6 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
           ctx.rerender?.();
         });
         td.addEventListener('keydown', (e) => onCellKey(e, b, r, c, ctx, table));
-        // Shift+clique = estende seleção de merge; clique simples redefine âncora
-        td.addEventListener('mousedown', (e) => {
-          if (e.button !== 0) return;
-          if (e.shiftKey && cellSel) {
-            e.preventDefault(); // não move caret — só range
-            cellSel = { ...cellSel, r1: r, c1: c };
-          } else {
-            cellSel = { r0: r, c0: c, r1: r, c1: c };
-          }
-          paintCellSel();
-        });
       }
       tr.appendChild(td);
     });
@@ -773,7 +791,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     mergeBtn.type = 'button';
     mergeBtn.className = 'tbl-merge-btn';
     mergeBtn.textContent = 'Mesclar células';
-    mergeBtn.title = 'Agrupa o retângulo selecionado (Shift+clique pra estender)';
+    mergeBtn.title = 'Agrupa o retângulo selecionado (arraste ou Shift+clique)';
     const unmergeBtn = document.createElement('button');
     unmergeBtn.type = 'button';
     unmergeBtn.className = 'tbl-merge-btn';
@@ -815,22 +833,75 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       mergeBar.hidden = !multi && unmergeBtn.disabled;
     };
 
-    mergeBtn.addEventListener('mousedown', (e) => e.preventDefault());
-    unmergeBtn.addEventListener('mousedown', (e) => e.preventDefault());
-    mergeBtn.addEventListener('click', (e) => {
+    // seleção de range: arrastar entre células OU Shift+clique (estende âncora)
+    // table-level — um único estado cellSel, não depende de closure por célula
+    let selDragging = false;
+    const cellAt = (clientX, clientY) => {
+      const el = document.elementFromPoint(clientX, clientY);
+      const td = el && el.closest && el.closest('th, td');
+      return td && table.contains(td) ? td : null;
+    };
+    table.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      const td = e.target.closest && e.target.closest('th, td');
+      if (!td || !table.contains(td)) return;
+      const r = +td.dataset.row;
+      const c = +td.dataset.col;
+      if (!Number.isFinite(r) || !Number.isFinite(c)) return;
+      if (e.shiftKey && cellSel) {
+        e.preventDefault(); // não move caret — só range
+        cellSel = { ...cellSel, r1: r, c1: c };
+        paintCellSel();
+        return;
+      }
+      cellSel = { r0: r, c0: c, r1: r, c1: c };
+      selDragging = true;
+      paintCellSel();
+      // capture no document p/ arraste sair da célula
+      const onMove = (ev) => {
+        if (!selDragging || !cellSel) return;
+        const hit = cellAt(ev.clientX, ev.clientY);
+        if (!hit) return;
+        const rr = +hit.dataset.row;
+        const cc = +hit.dataset.col;
+        if (!Number.isFinite(rr) || !Number.isFinite(cc)) return;
+        if (rr === cellSel.r1 && cc === cellSel.c1) return;
+        cellSel = { ...cellSel, r1: rr, c1: cc };
+        paintCellSel();
+      };
+      const onUp = () => {
+        selDragging = false;
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    });
+
+    const doMerge = (e) => {
+      e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation?.();
       if (!cellSel) return;
       if (mergeCells(b, cellSel.r0, cellSel.c0, cellSel.r1, cellSel.c1)) {
+        cellSel = null;
         ctx.rerender?.();
       }
-    });
-    unmergeBtn.addEventListener('click', (e) => {
+    };
+    const doUnmerge = (e) => {
+      e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation?.();
       if (!cellSel) return;
       const r = Math.min(cellSel.r0, cellSel.r1);
       const c = Math.min(cellSel.c0, cellSel.c1);
-      if (unmergeCells(b, r, c)) ctx.rerender?.();
-    });
+      if (unmergeCells(b, r, c)) {
+        cellSel = null;
+        ctx.rerender?.();
+      }
+    };
+    mergeBtn.addEventListener('pointerdown', doMerge);
+    unmergeBtn.addEventListener('pointerdown', doUnmerge);
 
     // hover contextual: alça da row/col sob o cursor; “+” só perto da borda
     const EDGE = 18; // px de proximidade da borda p/ mostrar +

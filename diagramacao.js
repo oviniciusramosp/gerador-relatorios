@@ -1386,7 +1386,12 @@ function tableStyleFieldsHtml(b, mode = 'full') {
     </label>`;
   }
   if (isItem) {
-    html += `<p class="hint" style="margin:0;font-size:.72rem;opacity:.8">Shift+clique nas células para mesclar</p>`;
+    // flags por tabela (não shared) — menu da alça também grava no item via Proxy
+    html += `
+    <div class="swrow"><span>Linha de cabeçalho</span>
+      <button type="button" class="sw" data-a="headerRow" role="switch" aria-checked="${b.headerRow !== false}"></button></div>
+    <div class="swrow"><span>Coluna de cabeçalho</span>
+      <button type="button" class="sw" data-a="headerCol" role="switch" aria-checked="${!!b.headerCol}"></button></div>`;
   }
   return html;
 }
@@ -1411,6 +1416,17 @@ function wireTableStyleControls(root, b, hooks = {}) {
       sw.setAttribute('aria-checked', String(on));
       if (sw.dataset.a === 'vlines') b.hideVLines = !on;
       else if (sw.dataset.a === 'alt') b.altRows = on;
+      else if (sw.dataset.a === 'headerRow') {
+        // true = default → some do JSON; false persiste
+        if (on) delete b.headerRow;
+        else b.headerRow = false;
+        // th↔td precisa rebuild, não só paint de CSS vars
+        if (hooks.rebuild) { hooks.rebuild(); hooks.after?.(); return; }
+      } else if (sw.dataset.a === 'headerCol') {
+        if (on) b.headerCol = true;
+        else delete b.headerCol;
+        if (hooks.rebuild) { hooks.rebuild(); hooks.after?.(); return; }
+      }
       paint();
     });
   });
@@ -1598,6 +1614,10 @@ function openTablePanel() {
   };
   wireTableStyleControls(tablePanel, b, {
     paint: paintTable,
+    rebuild: () => {
+      render();
+      if (state.activeId === b.id || state.sel === b.id) openTablePanel();
+    },
     after: () => { save(); scheduleCommit(); },
   });
   tablePanel.querySelector('[data-a="del"]').addEventListener('click', () => {
@@ -2050,6 +2070,8 @@ function openTableGridPanel() {
         const host = pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"] .tblgrid-cell[data-item="${itemIdx}"] .tbl-wrap`);
         if (host) applyTableChrome(host, resolveGridTableItem(b, it));
       },
+      // headerRow/Col mudam th↔td — re-monta o grid
+      rebuild: () => reopen(),
       after: () => { save(); scheduleCommit(); },
     });
     body.querySelector('[data-a="addrow"]')?.addEventListener('click', (e) => {
