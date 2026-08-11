@@ -162,11 +162,13 @@ export function ensureMioloRules(doc) {
 export const PNUM_COLOR_DEFAULT = '#3DE8A0';
 export const FOOT_COLOR_DEFAULT = '#828080';
 
-/** Cores default do esquema "Padrão" do índice (num mint / texto corpo / nº da página). */
+/** Cores default do esquema "Padrão" do índice (num mint / texto corpo / nº da página /
+ *  linha-guia até a página). `line` = preto a 5% — legível em fundos claros e escuros. */
 export const INDEX_COLOR_DEFAULTS = {
   num: '#29E899',
   text: '#4E4E4E',
   page: '#828080',
+  line: 'rgba(0,0,0,0.05)',
 };
 
 /** Preenche index.colors com defaults (mutates). Aceita color scheme 'padrao'|'cinza'|'custom'. */
@@ -178,6 +180,7 @@ export function ensureIndexColors(idx) {
     num: cur.num || d.num,
     text: cur.text || d.text,
     page: cur.page || d.page,
+    line: cur.line || d.line,
   };
   if (idx.color !== 'padrao' && idx.color !== 'cinza' && idx.color !== 'custom') {
     idx.color = 'padrao';

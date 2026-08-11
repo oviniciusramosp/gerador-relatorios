@@ -167,7 +167,10 @@ assert.equal(capaFit.cover.items[0].weight, 900, 'weight 900 do título da capa 
 assert.equal(capaFit.cover.items[0].letterSpacing, 0.02, 'letterSpacing do título sobrevive ao open');
 assert.equal(capaFit.cover.items[0].lineHeight, 1.3, 'lineHeight do título sobrevive ao open');
 assert.equal(capaFit.index.color, 'custom');
-assert.deepEqual(capaFit.index.colors, { num: '#FF0000', text: '#111111', page: '#999999' });
+assert.deepEqual(capaFit.index.colors, {
+  num: '#FF0000', text: '#111111', page: '#999999',
+  line: INDEX_COLOR_DEFAULTS.line, // aditivo: docs antigos sem line ganham preto 5%
+});
 
 // ensureIndexColors / ensureCoverBgFit / ensureMioloRules: helpers puros
 const idxBare = {};

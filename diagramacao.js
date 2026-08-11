@@ -18,6 +18,9 @@
 import {
   openSwatchPop as openSwatchPopBase, parseColor, withAlpha, harvestColorsFromHtml,
 } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
+import {
+  rotateOf, setBlockRotate, snapRotate, ROTATE_SNAPS,
+} from './stories-core.js';   // rotação de imagem (mesmo contrato dos Stories)
 import { enhanceAll, wireFieldEditKeys } from './range-snap.js';  // snap + digitação (Enter aplica, sem quebrar linha)
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
@@ -443,7 +446,7 @@ function collectDiagramacaoDocColors(doc) {
   }
   if (doc.index) {
     const c = doc.index.colors;
-    if (c) { addText(c.num); addText(c.text); addText(c.page); }
+    if (c) { addText(c.num); addText(c.text); addText(c.page); addText(c.line); }
     fromHtml(doc.index.resumo);
   }
 
@@ -530,8 +533,8 @@ function seedDoc() {
     // resumoOn é o switcher novo; ambos vivem na mesma página física (index.on segue
     // sendo o gate de existência da página, ver assemblePages/renderIndexPage).
     // levels: quais níveis de título entram no índice · color: 'padrao' | 'cinza' | 'custom' ·
-    // colors: { num, text, page } quando color==='custom' · width: 'curto'|'full' ·
-    // resumoWidth: 'full' | 'left'
+    // colors: { num, text, page, line } quando color==='custom' · width: 'curto'|'full' ·
+    // resumoWidth: 'full' | 'left' · leaders: linha-guia até o nº da página
     index: {
       on: true, resumoOn: true, levels: { h1: true, h2: true, h3: false, h4: false },
       color: 'padrao', colors: { ...INDEX_COLOR_DEFAULTS },
@@ -1632,6 +1635,14 @@ function applyImgScaleStyles(img, b, colW) {
     img.style.marginLeft = '';
     img.style.marginRight = '';
   }
+  applyImgRotate(img, b);
+}
+/** Giro plano da foto (b.rotate, graus). 0 = sem transform. Só o <img>, não título/legenda. */
+function applyImgRotate(img, b) {
+  if (!img) return;
+  const r = rotateOf(b);
+  img.style.transformOrigin = 'center center';
+  img.style.transform = r ? `rotate(${r}deg)` : '';
 }
 
 // título/legenda: com capFit e scale < 100%, max-width = largura da imagem (+ mesmo alinhamento).
@@ -2174,7 +2185,12 @@ function renderContentPage(pg, contentIdx, number) {
     add.innerHTML = '<button type="button" class="col-add-btn" title="Adicionar bloco">+</button>';
     colLeftEl.appendChild(add);
   }
-  for (const r of pg.right) colRightEl.appendChild(buildRight(r));
+  // ordem em pg.right = trás → frente (último no array pinta por cima); z-index reforça
+  pg.right.forEach((r, i) => {
+    const el = buildRight(r);
+    el.style.zIndex = String(i + 1);
+    colRightEl.appendChild(el);
+  });
   content.append(colLeftEl, colRightEl);
   page.appendChild(content);
   return page;
@@ -2715,6 +2731,13 @@ function applyIndexCustomColors(listEl, idx) {
   listEl.style.setProperty('--toc-num', c.num);
   listEl.style.setProperty('--toc-text', c.text);
   listEl.style.setProperty('--toc-pg', c.page);
+  listEl.style.setProperty('--toc-line', c.line || INDEX_COLOR_DEFAULTS.line);
+}
+
+/** Pinta o .colorfield de uma cor do índice (line aceita alpha → paper). */
+function paintIdxColorField(el, color) {
+  if (!el) return;
+  paintPageBgChip(el, color || INDEX_COLOR_DEFAULTS.line);
 }
 
 // âncora (cadeado): escolhe, entre candidatos {._top}, o mais próximo do Y informado. Pura —
@@ -4168,6 +4191,8 @@ function openImgPanel() {
   const RADIUS_SLIDER_MAX = 24;
   const scalePct = imgScalePct(b);
   const scaleLabel = fmtImgScalePct(scalePct);
+  const rot = rotateOf(b);
+  const rotateSnaps = ROTATE_SNAPS.join(',');
   // largura da coluna onde a imagem está (mesma regra de buildFigure/buildRight)
   const figColW = placementOf(b) === 'full' ? COL_FULL : placementOf(b) === 'right' ? colR() : colL();
   // travar exige um bloco do FLUXO que comece nesta página. Uma página que só mostra a
@@ -4193,6 +4218,9 @@ function openImgPanel() {
         <button type="button" class="sw" data-a="capfit" role="switch" aria-checked="${b.capFit ? 'true' : 'false'}"></button>
       </div>
     </div>
+    <label class="field" title="Giro plano da foto (mesmo contrato dos Stories)"><span class="field-row">Rotação <span class="field-val"><span data-role="rotatev">${rot}</span>°<button type="button" class="resetbtn" data-a="rotatereset" title="Sem rotação">↺</button></span></span>
+      <input type="range" data-a="rotate" min="-180" max="180" step="1" value="${rot}" data-snaps="${rotateSnaps}">
+    </label>
     <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para 4px">↺</button></span></span>
       <input type="range" data-a="radius" min="0" max="${RADIUS_SLIDER_MAX}" step="1" value="${Math.min(radius, RADIUS_SLIDER_MAX)}" data-snaps="0,4,8,12,16,24" data-edit="off">
     </label>
@@ -4273,6 +4301,18 @@ function openImgPanel() {
     if (range && document.activeElement !== range) range.value = String(n);
     save(); scheduleCommit();
   };
+  // rotação: ao vivo no <img> (ímã nos ângulos dos Stories); 0 apaga o campo
+  const paintRotate = (n) => {
+    setBlockRotate(b, snapRotate(n));
+    const r = rotateOf(b);
+    const img = liveFig()?.querySelector('img');
+    applyImgRotate(img, b);
+    const v = imgPanel.querySelector('[data-role="rotatev"]');
+    if (v) v.textContent = String(r);
+    const range = imgPanel.querySelector('input[data-a="rotate"]');
+    if (range && document.activeElement !== range) range.value = String(r);
+    save(); scheduleCommit();
+  };
   if (radv) {
     wireFieldEditKeys(radv, {
       onInput: (raw) => {
@@ -4310,6 +4350,10 @@ function openImgPanel() {
           render(); // fluxo: pode mudar de página; direita: reconstrói clamp de altura
           if (state.sel) openImgPanel();
         }
+        return;
+      }
+      if (a === 'rotate' || a === 'rotatereset') {
+        paintRotate(a === 'rotatereset' ? 0 : +el.value);
         return;
       }
       // switcher: título/legenda com max-width = largura da imagem (só relevante com scale < 100%)
@@ -4360,6 +4404,146 @@ function positionImgPanel() {
   imgPanel.style.left = x + 'px'; imgPanel.style.top = y + 'px';
 }
 function closeImgPanel() { if (imgPanel) imgPanel.hidden = true; }
+
+// ── camadas da coluna direita (botão direito) ───────────────────────────────
+// Só quando há >1 elemento `placement=right` na MESMA página. Ordem no array
+// entre esses rights = trás → frente (último pinta por cima; z-index no render).
+function rightBlocksOnPage(page) {
+  const p = page | 0;
+  return (state.doc.blocks || []).filter(
+    (b) => b && b.type !== 'pagebreak' && placementOf(b) === 'right' && (b.page | 0) === p,
+  );
+}
+/** Rótulo curto pro menu de camadas. */
+function rightLayerLabel(b) {
+  if (!b) return 'Bloco';
+  if (b.type === 'image') {
+    const t = stripHtml(b.title || '').replace(/\s+/g, ' ').trim();
+    if (t) return t.length > 32 ? t.slice(0, 31) + '…' : t;
+    if (b.chart?.kind === 'timeline') return 'Linha do tempo';
+    if (b.chart) return 'Gráfico';
+    return 'Imagem';
+  }
+  if (b.type === 'icon') return 'Ícone';
+  if (b.type === 'table') return 'Tabela';
+  if (b.type === 'image-grid') return 'Grid de imagens';
+  if (b.type === 'callout') return 'Callout';
+  if (HEAD_TYPES.has(b.type)) return b.type.toUpperCase();
+  const raw = stripHtml(b.html || '').replace(/\s+/g, ' ').trim();
+  if (raw) return raw.length > 32 ? raw.slice(0, 31) + '…' : raw;
+  const map = { p: 'Parágrafo', caption: 'Legenda', quote: 'Citação', li: 'Lista', ol: 'Lista', check: 'Checklist' };
+  return map[b.type] || b.type || 'Bloco';
+}
+/** delta +1 = para a frente (depois no array), −1 = para trás. */
+function nudgeRightLayer(id, delta) {
+  const b = blockOf(id);
+  if (!b || placementOf(b) !== 'right') return false;
+  const rights = rightBlocksOnPage(b.page | 0);
+  const i = rights.findIndex((r) => r.id === id);
+  const j = i + (Math.trunc(+delta) || 0);
+  if (i < 0 || j < 0 || j >= rights.length) return false;
+  const ia = idxOf(rights[i].id);
+  const ib = idxOf(rights[j].id);
+  if (ia < 0 || ib < 0) return false;
+  const arr = state.doc.blocks;
+  const tmp = arr[ia];
+  arr[ia] = arr[ib];
+  arr[ib] = tmp;
+  return true;
+}
+
+let rightLayerMenu = null;
+function closeRightLayerMenu() {
+  if (rightLayerMenu) rightLayerMenu.hidden = true;
+}
+function openRightLayerMenu(id, clientX, clientY) {
+  const b = blockOf(id);
+  if (!b || placementOf(b) !== 'right' || !editing) return;
+  const page = b.page | 0;
+  const rights = rightBlocksOnPage(page);
+  if (rights.length < 2) return; // só com sobreposição possível
+
+  if (!rightLayerMenu) {
+    rightLayerMenu = document.createElement('div');
+    rightLayerMenu.id = 'rightLayerMenu';
+    rightLayerMenu.className = 'float-menu';
+    document.body.appendChild(rightLayerMenu);
+  }
+  const i = rights.findIndex((r) => r.id === id);
+  // lista UI: topo = frente (inverso do array), como Figma / Stories
+  const rows = [...rights].reverse().map((r, revI) => {
+    const frontRank = revI + 1; // 1 = mais na frente
+    const on = r.id === id;
+    return `<button type="button" class="rlm-layer${on ? ' on' : ''}" data-a="sel" data-id="${r.id}" title="${escapeHtml(rightLayerLabel(r))}">
+      <span class="rlm-rank">${frontRank}</span>
+      <span class="rlm-lab">${escapeHtml(rightLayerLabel(r))}</span>
+      ${on ? '<span class="rlm-now">agora</span>' : ''}
+    </button>`;
+  }).join('');
+
+  rightLayerMenu.innerHTML = `
+    <div class="eyebrow" style="margin:0;padding:.2rem .45rem 0">Camadas · coluna direita</div>
+    <button type="button" data-a="front" ${i >= rights.length - 1 ? 'disabled' : ''} title="Um nível para a frente">
+      <span class="dl-label">Trazer para a frente</span>
+    </button>
+    <button type="button" data-a="back" ${i <= 0 ? 'disabled' : ''} title="Um nível para trás">
+      <span class="dl-label">Enviar para trás</span>
+    </button>
+    <div class="dl-sep" role="separator"></div>
+    <div class="rlm-list">${rows}</div>`;
+  rightLayerMenu.hidden = false;
+
+  const mw = rightLayerMenu.offsetWidth || 220;
+  const mh = rightLayerMenu.offsetHeight || 160;
+  let x = clientX;
+  let y = clientY;
+  if (x + mw > innerWidth - 8) x = Math.max(8, clientX - mw);
+  if (y + mh > innerHeight - 8) y = Math.max(8, clientY - mh);
+  rightLayerMenu.style.left = x + 'px';
+  rightLayerMenu.style.top = y + 'px';
+
+  rightLayerMenu.querySelectorAll('[data-a]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (btn.disabled) return;
+      const a = btn.dataset.a;
+      if (a === 'front') {
+        if (nudgeRightLayer(id, +1)) { closeRightLayerMenu(); render(); setImgSel(id); }
+        return;
+      }
+      if (a === 'back') {
+        if (nudgeRightLayer(id, -1)) { closeRightLayerMenu(); render(); setImgSel(id); }
+        return;
+      }
+      if (a === 'sel') {
+        const sid = btn.dataset.id;
+        closeRightLayerMenu();
+        setImgSel(sid);
+      }
+    });
+  });
+}
+
+// botão direito no elemento da coluna direita → camadas (só se >1 na página)
+pagesEl.addEventListener('contextmenu', (e) => {
+  if (!editing) return;
+  const wrap = e.target.closest && e.target.closest('.rimg');
+  if (!wrap || !wrap.dataset.id) return;
+  const id = wrap.dataset.id;
+  const b = blockOf(id);
+  if (!b || placementOf(b) !== 'right') return;
+  if (rightBlocksOnPage(b.page | 0).length < 2) return;
+  e.preventDefault();
+  e.stopPropagation();
+  setImgSel(id);
+  openRightLayerMenu(id, e.clientX, e.clientY);
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!rightLayerMenu || rightLayerMenu.hidden) return;
+  if (e.target.closest && e.target.closest('#rightLayerMenu')) return;
+  closeRightLayerMenu();
+}, true);
 // closeTablePanel já definido junto do popover da tabela
 
 // ─────────────────────────── menu flutuante: Imagem | Gráfico ────────────────
@@ -4398,7 +4582,7 @@ document.addEventListener('mousedown', (e) => {
   const t = e.target;
   if (!(t && t.closest)) return;
   // âncoras e popovers que devem permanecer abertos
-  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit')) return;
+  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit, #rightLayerMenu')) return;
   if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu')) return;
   if (t.closest('#btnPrint, #zoomPct, #zoomFit, #bhandle, #badd')) return;
   // imagem: clicar fora limpa a seleção (fecha o painel)
@@ -4909,6 +5093,7 @@ function openIdxPanel() {
       <label class="field">Número <button type="button" class="colorfield" data-idxc="num" style="background:${cc.num}"></button></label>
       <label class="field">Texto <button type="button" class="colorfield" data-idxc="text" style="background:${cc.text}"></button></label>
       <label class="field">Página <button type="button" class="colorfield" data-idxc="page" style="background:${cc.page}"></button></label>
+      <label class="field">Linha <button type="button" class="colorfield" data-idxc="line" title="Cor da linha até a página"></button></label>
     </div>
     <div class="field">Largura<div data-slot="w"></div></div>
     <div class="swrow"><span>Linha até a página</span><button type="button" class="sw" data-a="leaders" role="switch" aria-checked="${idx.leaders ? 'true' : 'false'}"></button></div>
@@ -4934,16 +5119,21 @@ function openIdxPanel() {
     render();
     if (idxFocus === 'index') openIdxPanel();
   });
+  // line: default com alpha — paint com paper; num/text/page costumam ser opacos
+  paintIdxColorField(idxPanel.querySelector('.colorfield[data-idxc="line"]'), cc.line);
   idxPanel.querySelectorAll('.colorfield[data-idxc]').forEach(cf => {
     const key = cf.dataset.idxc;
+    const cur = state.doc.index.colors[key] || INDEX_COLOR_DEFAULTS[key];
+    const swatchOpts = key === 'line' ? { paper: true } : undefined;
     cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
       ensureIndexColors(state.doc.index);
       state.doc.index.colors[key] = hex;
-      cf.style.background = hex;
+      if (key === 'line') paintIdxColorField(cf, hex);
+      else cf.style.background = hex;
       pagesEl.querySelectorAll('.toc.toc-custom').forEach(list => applyIndexCustomColors(list, state.doc.index));
       syncSpecialUI();
       save(); scheduleCommit();
-    }, state.doc.index.colors[key]));
+    }, cur, swatchOpts));
   });
   // linha-guia entre título e nº da página (leaders)
   idxPanel.querySelector('.sw[data-a="leaders"]').addEventListener('click', (e) => {
@@ -7737,7 +7927,12 @@ function syncSpecialUI() {
   document.querySelectorAll('[data-idxcolor]').forEach(cf => {
     const key = cf.dataset.idxcolor;
     const hex = state.doc.index.colors[key] || INDEX_COLOR_DEFAULTS[key];
-    cf.style.background = hex;
+    if (key === 'line') paintIdxColorField(cf, hex);
+    else {
+      cf.classList.remove('paper');
+      cf.style.removeProperty('--sp-ov');
+      cf.style.background = hex;
+    }
   });
   // largura do índice e do resumo: segment de ícone, não <select> — rebuild é mais barato que
   // um setter (mesmo idioma do #blockcol/widthSeg: o componente não guarda estado próprio).
@@ -7927,17 +8122,23 @@ document.querySelectorAll('[data-idxcolor]').forEach(cf => {
   cf.addEventListener('click', () => {
     ensureIndexColors(state.doc.index);
     const key = cf.dataset.idxcolor;
+    const cur = state.doc.index.colors[key] || INDEX_COLOR_DEFAULTS[key];
+    const swatchOpts = key === 'line' ? { paper: true } : undefined;
     openSwatchPop(cf, (hex) => {
       state.doc.index.colors[key] = hex;
-      cf.style.background = hex;
+      if (key === 'line') paintIdxColorField(cf, hex);
+      else cf.style.background = hex;
       pagesEl.querySelectorAll('.toc.toc-custom').forEach(list => applyIndexCustomColors(list, state.doc.index));
       // espelha no painel flutuante se aberto
       if (idxPanel && !idxPanel.hidden) {
         const p = idxPanel.querySelector(`.colorfield[data-idxc="${key}"]`);
-        if (p) p.style.background = hex;
+        if (p) {
+          if (key === 'line') paintIdxColorField(p, hex);
+          else p.style.background = hex;
+        }
       }
       save(); scheduleCommit();
-    }, state.doc.index.colors[key] || INDEX_COLOR_DEFAULTS[key]);
+    }, cur, swatchOpts);
   });
 });
 // t2.10: tooltip nativo (title=) no ícone "ⓘ" ao lado de "Índice + Resumo" — preventDefault
