@@ -33,6 +33,8 @@ import {
   COL_L_DEFAULT, COL_L_MIN, COL_L_MAX, clampColL,
   hasOwn, clampFootAlign, clampRuleW, defaultLogo, ensureCoverType,
   migrateSpecialPages, normalizeOpenedDoc,
+  INDEX_COLOR_DEFAULTS, ensureIndexColors, ensureCoverBgFit,
+  PNUM_COLOR_DEFAULT, FOOT_COLOR_DEFAULT,
 } from './doc-migrate.js';  // defaults/migração ao abrir .pdgm (puro; compartilhado com test-pdgm-compat)
 import { projectFormatFromName, projectBaseName, shouldReloadLinkedProject } from './project-link.js';
 import { registerIcons, findIcon, iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
@@ -140,14 +142,16 @@ function colR() { return COL_FULL - GAP - colL(); }
 function colRightX() { return colL() + GAP; }
 
 // b.placement ('inline' | 'full' | 'right') vale pra QUALQUER bloco, não só imagem:
-// inline = coluna esquerda (fluxo), full = as duas colunas (fluxo), right = coluna
-// direita (fora do fluxo, Y livre/arrastável, ancorado a uma página — o mesmo
-// mecanismo que as imagens da direita sempre usaram).
-// Sem placement explícito o default vem do TIPO: títulos H1–H3 e tabela ocupam as duas
+// inline = coluna esquerda (fluxo) = 1 col · full = as duas colunas = 2 cols ·
+// right = coluna direita (fora do fluxo, Y livre/arrastável, ancorado a uma página —
+// o mesmo mecanismo que as imagens da direita sempre usaram).
+// Sem placement explícito o default vem do TIPO: títulos H1–H4 e tabela ocupam as duas
 // colunas; o resto fica na esquerda. Ler sempre por placementOf() — nunca b.placement
 // direto — senão documentos antigos (sem o campo) perdem o default do tipo.
-const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'table', 'image-grid']);
+const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid']);
 const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : 'inline');
+// tipos com seletor "1 coluna / 2 colunas" na fmtbar e segment de 2 opções na sidebar
+const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p']);
 
 // Espaçamento vertical ANTES de um bloco — depende do tipo do bloco de cima (prev).
 // Calculado no JS (não em CSS) porque é contextual; a paginação e o render usam o
@@ -357,6 +361,8 @@ function seedDoc() {
     ruleTop: RULE_W_DEFAULT, ruleBot: RULE_W_DEFAULT,
     // alinhamento do texto do cabeçalho, do nº e do texto do rodapé (left|center|right)
     headAlign: 'left', pnumAlign: 'left', footAlign: 'right',
+    // cores do rodapé (nº + texto) — defaults = CSS histórico; campos aditivos
+    pnumColor: PNUM_COLOR_DEFAULT, footColor: FOOT_COLOR_DEFAULT,
     // Modo Impressão: espelha left↔right nas páginas pares (página / contrapágina)
     printMirror: false,
     // cor de fundo de TODAS as páginas do PDF (miolo, índice, capa, contracapa).
@@ -374,24 +380,27 @@ function seedDoc() {
     // tamanho (px) dos ícones em TODOS os headings (H1–H4). null = 1.05 × fontSize do tipo.
     headingIconSize: null,
     // páginas especiais — ligadas por padrão via switcher no painel Documento.
-    // bgX/bgY = posição do fundo (Fill) em %; bgScale = zoom (100 = sem zoom, "cover" puro);
-    // itens posicionados por coluna (x) + y livre.
-    cover: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, logo: defaultLogo(), items: [
+    // bgX/bgY = posição do fundo em %; bgScale = zoom (100 = sem zoom);
+    // bgFit: 'fill' (cover, recorta) | 'fit' (contain, mostra inteira); itens por coluna + y livre.
+    cover: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, bgFit: 'fill', logo: defaultLogo(), items: [
       // title/subtitle = tipos da capa (40px/15px) — retrocompat com o visual antigo
+      // weight opcional no item (100–700); ausente → 700 (bold histórico)
       coverItem('Título do relatório', 40, 'full', 'left', null, 330, 'title'),
       coverItem('Subtítulo · Paradigma Education', 15, 'full', 'left', null, 392, 'subtitle'),
     ] },
-    back: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, logo: defaultLogo(), items: [
+    back: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, bgFit: 'fill', logo: defaultLogo(), items: [
       coverItem('paradigma.education', 18, 'full', 'center', null, 360, 'p'),
     ] },
     // t2.11: índice (lista de títulos) e resumo agora ligam/desligam independente —
     // resumoOn é o switcher novo; ambos vivem na mesma página física (index.on segue
     // sendo o gate de existência da página, ver assemblePages/renderIndexPage).
-    // levels: quais níveis de título entram no índice · color: 'padrao' | 'cinza' ·
-    // width: 'curto' (coluna de 345px) | 'full' · resumoWidth: 'full' | 'left' (coluna de 258px)
+    // levels: quais níveis de título entram no índice · color: 'padrao' | 'cinza' | 'custom' ·
+    // colors: { num, text, page } quando color==='custom' · width: 'curto'|'full' ·
+    // resumoWidth: 'full' | 'left'
     index: {
       on: true, resumoOn: true, levels: { h1: true, h2: true, h3: false, h4: false },
-      color: 'padrao', width: 'curto', resumoWidth: 'full',
+      color: 'padrao', colors: { ...INDEX_COLOR_DEFAULTS },
+      width: 'curto', resumoWidth: 'full',
       resumo: '<p>Escreva aqui o resumo do relatório.</p>',
     },
     // ids de H1/H2 marcados como “revisado” no índice flutuante do preview.
@@ -487,6 +496,8 @@ function load() {
       const p = parseColor(cfg.pageBg);
       if (p) state.doc.pageBg = withAlpha(p.hex, p.alpha);
     }
+    if (cfg.pnumColor) state.doc.pnumColor = cfg.pnumColor;
+    if (cfg.footColor) state.doc.footColor = cfg.footColor;
     if (cfg.colLeft != null) state.doc.colLeft = clampColL(cfg.colLeft);
     if (cfg.source) {
       state.doc.source = cfg.source;
@@ -509,7 +520,8 @@ function load() {
     const idx = state.doc.index;
     if (!idx.levels) idx.levels = { h1: true, h2: true, h3: false, h4: false };
     idx.color ||= 'padrao'; idx.width ||= 'curto'; idx.resumoWidth ||= 'full';
-    // migração: capas salvas antes do Y livre / logo / type — ver migrateSpecialPages
+    ensureIndexColors(idx);
+    // migração: capas salvas antes do Y livre / logo / type / bgFit — ver migrateSpecialPages
     migrateSpecialPages(state.doc);
   } catch {}
 }
@@ -528,6 +540,8 @@ function save() { clearTimeout(saveT); saveT = setTimeout(() => {
     footAlign: clampFootAlign(state.doc.footAlign || 'right'),
     printMirror: !!state.doc.printMirror,
     pageBg: pageBgOf(),
+    pnumColor: pnumColorOf(),
+    footColor: footColorOf(),
     colLeft: colL(),
     source: state.doc.source || null, cover: state.doc.cover, back: state.doc.back, index: state.doc.index,
     // seções expandíveis da sidebar (Texto/Capa/…) — UI chrome, não documento
@@ -1905,9 +1919,11 @@ function pageShell(number) {
   const zones = { left: [], center: [], right: [] };
   const pnum = document.createElement('span'); pnum.className = 'pnum';
   pnum.textContent = String(number).padStart(2, '0');   // 2 dígitos; 3º a partir de 100
+  pnum.style.color = pnumColorOf();
   zones[resolveFootAlign(state.doc.pnumAlign || 'left', number)].push(pnum);
   if (state.doc.footText) {
     const site = document.createElement('span'); site.className = 'site'; site.textContent = state.doc.footText;
+    site.style.color = footColorOf();
     zones[resolveFootAlign(state.doc.footAlign || 'right', number)].push(site);
   }
   for (const side of ['left', 'center', 'right']) {
@@ -2210,13 +2226,17 @@ function renderIndexPage(toc, contentStart, number) {
     else sec.style.width = COL_FULL + 'px';
     const h1 = document.createElement('div'); h1.className = 'idx-title'; h1.textContent = 'Índice';
     const list = document.createElement('div');
+    const colorScheme = idx.color === 'cinza' ? 'cinza' : idx.color === 'custom' ? 'custom' : 'padrao';
     list.className = 'toc'
-      + (idx.color === 'cinza' ? ' toc-cinza' : '')
+      + (colorScheme === 'cinza' ? ' toc-cinza' : '')
+      + (colorScheme === 'custom' ? ' toc-custom' : '')
       + (idx.leaders ? ' toc-leaders' : '');
     // tipografia: default = parágrafo; override via painel do Índice
     const tocStyle = indexTextStyle();
     list.style.fontSize = tocStyle.fontSize + 'px';
     list.style.lineHeight = tocStyle.lineHeight + 'px';
+    // cores Custom: CSS vars no .toc (ver .toc-custom em diagramacao.html)
+    if (colorScheme === 'custom') applyIndexCustomColors(list, idx);
     if (!toc.length) {
       const empty = document.createElement('div'); empty.className = 'toc-empty';
       const ligados = Object.keys(idx.levels || {}).filter(k => idx.levels[k]).map(k => k.toUpperCase());
@@ -2438,15 +2458,35 @@ function buildCoverItem(kind, it) {
   el.classList.add('b', cls);
   el.style.fontSize = (it.size || COVER_TYPE_SIZE[type] || 18) + 'px';
   if (it.color) el.style.color = it.color;
-  if (COVER_HEAD_TYPES.has(type)) el.style.fontWeight = '700';
+  // title/subtitle: weight configurável no painel (default 700); h1–h4 fixo em 700
+  if (type === 'title' || type === 'subtitle') el.style.fontWeight = String(coverItemWeight(it));
+  else if (COVER_HEAD_TYPES.has(type)) el.style.fontWeight = '700';
   el.innerHTML = it.html || '';
-  // h1–h4/p/quote: estilo global do miolo; title/subtitle só usam size/cor do item
+  // h1–h4/p/quote: estilo global do miolo; title/subtitle só usam size/cor/weight do item
   if (HEAD_TYPES.has(type) || type === 'p' || type === 'quote') applyTypeStyle(el, type);
-  // size/cor do item de capa vencem o estilo global do tipo (slider do painel)
+  // size/cor/weight do item de capa vencem o estilo global do tipo (slider do painel)
   if (it.size) el.style.fontSize = it.size + 'px';
   if (it.color) el.style.color = it.color;
+  if (type === 'title' || type === 'subtitle') el.style.fontWeight = String(coverItemWeight(it));
   if (editing) { el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR'; }
   return el;
+}
+
+/** Peso (font-weight) de title/subtitle da capa: 100–700, default 700 (bold histórico). */
+function coverItemWeight(it) {
+  const w = it && it.weight != null ? +it.weight : 700;
+  if (!Number.isFinite(w)) return 700;
+  return Math.min(700, Math.max(100, Math.round(w / 100) * 100));
+}
+
+/** Aplica CSS vars de cores Custom no .toc (live + render). */
+function applyIndexCustomColors(listEl, idx) {
+  if (!listEl) return;
+  ensureIndexColors(idx || state.doc.index);
+  const c = (idx || state.doc.index).colors;
+  listEl.style.setProperty('--toc-num', c.num);
+  listEl.style.setProperty('--toc-text', c.text);
+  listEl.style.setProperty('--toc-pg', c.page);
 }
 
 // âncora (cadeado): escolhe, entre candidatos {._top}, o mais próximo do Y informado. Pura —
@@ -3848,7 +3888,7 @@ function applyDrop(id, t) {
   if (t.refId === id) return;                      // soltou em si mesmo
   const from = idxOf(id);
   // voltando pro fluxo: APAGA o placement em vez de cravar 'inline' — assim o bloco
-  // recupera o default do tipo (H1–H3/tabela voltam pra largura total, o resto pra esquerda).
+  // recupera o default do tipo (H1–H4/tabela voltam pra largura total, o resto pra esquerda).
   if (placementOf(b) === 'right') { delete b.placement; delete b.y; delete b.page; delete b.anchor; }
   const [moved] = state.doc.blocks.splice(from, 1);
   const ri = idxOf(t.refId);
@@ -4333,16 +4373,21 @@ function openCoverPanel() {
   const type = coverTypeOf(it);
   if (!coverPanel) { coverPanel = document.createElement('div'); coverPanel.id = 'coverPanel'; document.body.appendChild(coverPanel); }
   const isPlain = COVER_PLAIN.has(type);
+  const isTitleSub = type === 'title' || type === 'subtitle';
   const isImage = type === 'image';
   const showAlign = isPlain || type === 'li' || type === 'ol' || type === 'check' || type === 'callout';
   const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
   const replace = typeof REPLACE_ICO !== 'undefined' ? REPLACE_ICO : uiIco('repeat', 16, 'outline');
   const sizeVal = it.size || COVER_TYPE_SIZE[type] || 18;
+  const weightVal = coverItemWeight(it);
   coverPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">${COVER_TYPE_LABEL[type] || 'Bloco'}</div>
     ${isPlain ? `
     <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${sizeVal}px</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir">↺</button></span></span>
       <input type="range" data-a="size" min="8" max="120" step="1" value="${sizeVal}" data-snaps="8,14,18,32,64,120"></label>
+    ${isTitleSub ? `
+    <label class="field"><span class="field-row">Espessura <span class="field-val"><span data-role="wtv">${weightVal}</span><button type="button" class="resetbtn" data-a="weightreset" title="Redefinir para 700">↺</button></span></span>
+      <input type="range" data-a="weight" min="100" max="700" step="100" value="${weightVal}" data-snaps="100,200,300,400,500,600,700" data-edit="off"></label>` : ''}
     <label class="field">Cor <button type="button" class="colorfield" data-cf style="background:${it.color || '#000000'}"></button></label>` : ''}
     <div class="field">Coluna<div data-slot="col"></div></div>
     ${showAlign ? `<div class="field">Alinhamento<div data-slot="align"></div></div>` : ''}
@@ -4382,6 +4427,8 @@ function openCoverPanel() {
   }
   const szReset = coverPanel.querySelector('[data-a="sizereset"]');
   if (szReset) szReset.addEventListener('mousedown', (e) => e.preventDefault());
+  const wtReset = coverPanel.querySelector('[data-a="weightreset"]');
+  if (wtReset) wtReset.addEventListener('mousedown', (e) => e.preventDefault());
   enhanceAll(coverPanel);
   positionCoverPanel();
   coverPanel.querySelectorAll('[data-a]').forEach(el => {
@@ -4401,6 +4448,19 @@ function openCoverPanel() {
         coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);
         const szv = coverPanel.querySelector('[data-role="szv"]');
         if (szv) szv.textContent = cur.item.size + 'px';
+        save(); scheduleCommit(); return;
+      }
+      if (a === 'weight' || a === 'weightreset') {
+        const oldH = node ? node.offsetHeight : 0;
+        cur.item.weight = a === 'weightreset' ? 700 : coverItemWeight({ weight: +el.value });
+        if (a === 'weightreset') {
+          const range = coverPanel.querySelector('input[data-a="weight"]');
+          if (range) range.value = cur.item.weight;
+        }
+        if (node) node.style.fontWeight = String(cur.item.weight);
+        coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);
+        const wtv = coverPanel.querySelector('[data-role="wtv"]');
+        if (wtv) wtv.textContent = String(cur.item.weight);
         save(); scheduleCommit(); return;
       }
       if (a === 'replace') {
@@ -4544,11 +4604,14 @@ function openIdxPanel() {
     document.body.appendChild(idxPanel);
   }
   const idx = state.doc.index;
+  ensureIndexColors(idx);
   const lv = idx.levels || {};
   const pDef = typeStyleOf('p');
   // valores efetivos (override do índice OU default do parágrafo)
   const fs = idx.fontSize != null ? +idx.fontSize : pDef.fontSize;
   const lh = idx.lineHeight != null ? +idx.lineHeight : pDef.lineHeight;
+  const scheme = idx.color === 'cinza' ? 'cinza' : idx.color === 'custom' ? 'custom' : 'padrao';
+  const cc = idx.colors;
   idxPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Índice</div>
     <div class="titlelvls" style="padding-left:0;margin:0;border:0">
@@ -4559,10 +4622,16 @@ function openIdxPanel() {
     </div>
     <label class="field">Cores
       <select data-a="color">
-        <option value="padrao"${idx.color !== 'cinza' ? ' selected' : ''}>Padrão</option>
-        <option value="cinza"${idx.color === 'cinza' ? ' selected' : ''}>Cinza</option>
+        <option value="padrao"${scheme === 'padrao' ? ' selected' : ''}>Padrão</option>
+        <option value="cinza"${scheme === 'cinza' ? ' selected' : ''}>Cinza</option>
+        <option value="custom"${scheme === 'custom' ? ' selected' : ''}>Custom</option>
       </select>
     </label>
+    <div class="idx-custom-colors" data-role="idxcolors"${scheme !== 'custom' ? ' hidden' : ''}>
+      <label class="field">Número <button type="button" class="colorfield" data-idxc="num" style="background:${cc.num}"></button></label>
+      <label class="field">Texto <button type="button" class="colorfield" data-idxc="text" style="background:${cc.text}"></button></label>
+      <label class="field">Página <button type="button" class="colorfield" data-idxc="page" style="background:${cc.page}"></button></label>
+    </div>
     <div class="field">Largura<div data-slot="w"></div></div>
     <div class="swrow"><span>Linha até a página</span><button type="button" class="sw" data-a="leaders" role="switch" aria-checked="${idx.leaders ? 'true' : 'false'}"></button></div>
     <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fs}px</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para o Parágrafo (${pDef.fontSize}px)">↺</button></span></span>
@@ -4580,8 +4649,23 @@ function openIdxPanel() {
   }));
   idxPanel.querySelector('[data-a="color"]').addEventListener('change', (e) => {
     state.doc.index.color = e.target.value;
+    if (e.target.value === 'custom') ensureIndexColors(state.doc.index);
     syncSpecialUI();
+    // reabre o painel pra revelar/esconder pickers de cor (sem rebuild só o hidden
+    // deixar os handlers de swatch desatualizados no select)
     render();
+    if (idxFocus === 'index') openIdxPanel();
+  });
+  idxPanel.querySelectorAll('.colorfield[data-idxc]').forEach(cf => {
+    const key = cf.dataset.idxc;
+    cf.addEventListener('click', () => openSwatchPop(cf, (hex) => {
+      ensureIndexColors(state.doc.index);
+      state.doc.index.colors[key] = hex;
+      cf.style.background = hex;
+      pagesEl.querySelectorAll('.toc.toc-custom').forEach(list => applyIndexCustomColors(list, state.doc.index));
+      syncSpecialUI();
+      save(); scheduleCommit();
+    }, state.doc.index.colors[key]));
   });
   // linha-guia entre título e nº da página (leaders)
   idxPanel.querySelector('.sw[data-a="leaders"]').addEventListener('click', (e) => {
@@ -6357,15 +6441,29 @@ function syncColUI() {
     return;
   }
   setSidebarReveal(blockColEl, true);
-  blockColSlot.replaceChildren(widthSeg(placementOf(b), [
-    { val: 'inline', label: 'Coluna Esquerda', icon: COL_ICON.left },
-    { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
-    { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
-  ], (v) => setBlockPlacement(b.id, v)));
+  // headers + parágrafo: 1 coluna (esq) | 2 colunas (largura total). Demais blocos
+  // (imagem, tabela, lista…) mantêm as 3 posições, inclusive coluna direita.
+  const opts = COL_FMT_TYPES.has(b.type)
+    ? [
+        { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
+        { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
+      ]
+    : [
+        { val: 'inline', label: 'Coluna Esquerda', icon: COL_ICON.left },
+        { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+        { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
+      ];
+  // se o bloco está na direita e o tipo agora só mostra 1/2 col, reflete full/inline
+  // no segment (valor efetivo pra UI); a troca real limpa right via setBlockPlacement.
+  let cur = placementOf(b);
+  if (COL_FMT_TYPES.has(b.type) && cur === 'right') cur = 'inline';
+  blockColSlot.replaceChildren(widthSeg(cur, opts, (v) => setBlockPlacement(b.id, v)));
   // cadeado: só na coluna direita (modelo da imagem). Mesma regra do #imgPanel.
+  // headers/parágrafo não usam right no segment — esconde o cadeado nesses tipos.
   if (blockLockEl) {
-    if (placementOf(b) !== 'right') { setSidebarReveal(blockLockEl, false); }
-    else {
+    if (placementOf(b) !== 'right' || COL_FMT_TYPES.has(b.type)) {
+      setSidebarReveal(blockLockEl, false);
+    } else {
       const travavel = !!b.anchor || leftBlocksOnPage(b.page | 0).length > 0;
       setSidebarReveal(blockLockEl, true);
       blockLockEl.disabled = !travavel;
@@ -6434,6 +6532,11 @@ function setActiveType(t) {
     if (!LIST_TYPES.has(t)) delete b.indent; // indent só faz sentido em lista
     // ícone de título (Material Symbols) só vale em H1–H4
     if (wasHead && !HEAD_TYPES.has(t)) clearHeadIconFields(b);
+    // headers/parágrafo não usam coluna direita no UI — se vinha de lista/imagem na
+    // direita, volta pro fluxo (default do tipo: H1–H4 = 2 cols, p = 1 col).
+    if (COL_FMT_TYPES.has(t) && b.placement === 'right') {
+      delete b.placement; delete b.y; delete b.page; delete b.anchor;
+    }
     render(keep && keep.id === b.id ? keep : { id: b.id, role: 'block', offset: 0 });
     syncTypeUI(t);
     updateHeadBar();
@@ -6910,7 +7013,21 @@ function bindRuleSlider(which) {
 bindRuleSlider('top');
 bindRuleSlider('bot');
 
-// alinhamento do cabeçalho/nº/texto do rodapé + switcher Modo Impressão
+// cores efetivas do rodapé (defaults do CSS histórico se o campo faltar)
+function pnumColorOf() {
+  return state.doc?.pnumColor || PNUM_COLOR_DEFAULT;
+}
+function footColorOf() {
+  return state.doc?.footColor || FOOT_COLOR_DEFAULT;
+}
+/** Pinta .pnum / .site ao vivo (sem re-paginar). */
+function paintFootColors() {
+  const pc = pnumColorOf(), fc = footColorOf();
+  pagesEl.querySelectorAll('.foot .pnum').forEach(el => { el.style.color = pc; });
+  pagesEl.querySelectorAll('.foot .site').forEach(el => { el.style.color = fc; });
+}
+
+// alinhamento do cabeçalho/nº/texto do rodapé + cores + switcher Modo Impressão
 function syncFootChromeUI() {
   const headSlot = document.querySelector('[data-slot="headalign"]');
   if (headSlot) headSlot.replaceChildren(widthSeg(clampFootAlign(state.doc.headAlign || 'left'), [
@@ -6930,9 +7047,33 @@ function syncFootChromeUI() {
     { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
     { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
   ], (v) => { state.doc.footAlign = v; syncFootChromeUI(); render(); }));
+  const pnumCf = document.getElementById('pnumColor');
+  if (pnumCf) pnumCf.style.background = pnumColorOf();
+  const footCf = document.getElementById('footColor');
+  if (footCf) footCf.style.background = footColorOf();
   const pm = document.getElementById('printMirror');
   if (pm) pm.setAttribute('aria-checked', String(!!state.doc.printMirror));
 }
+document.getElementById('pnumColor')?.addEventListener('click', () => {
+  const btn = document.getElementById('pnumColor');
+  if (!btn) return;
+  openSwatchPop(btn, (hex) => {
+    state.doc.pnumColor = hex;
+    btn.style.background = hex;
+    paintFootColors();
+    save(); scheduleCommit();
+  }, pnumColorOf());
+});
+document.getElementById('footColor')?.addEventListener('click', () => {
+  const btn = document.getElementById('footColor');
+  if (!btn) return;
+  openSwatchPop(btn, (hex) => {
+    state.doc.footColor = hex;
+    btn.style.background = hex;
+    paintFootColors();
+    save(); scheduleCommit();
+  }, footColorOf());
+});
 document.getElementById('printMirror')?.addEventListener('click', () => {
   state.doc.printMirror = !state.doc.printMirror;
   const pm = document.getElementById('printMirror');
@@ -7215,7 +7356,18 @@ function syncSpecialUI() {
   document.querySelectorAll('.sw[data-idxlvl]').forEach(sw => {
     sw.setAttribute('aria-checked', String(!!(state.doc.index.levels || {})[sw.dataset.idxlvl]));
   });
+  ensureIndexColors(state.doc.index);
   document.querySelectorAll('select[data-idxopt]').forEach(s => { s.value = state.doc.index[s.dataset.idxopt]; });
+  // pickers Custom do índice: só visíveis com color==='custom'
+  const idxCustomOn = state.doc.index.color === 'custom';
+  document.querySelectorAll('[data-idxcolors]').forEach(el => {
+    setSidebarReveal(el, idxCustomOn);
+  });
+  document.querySelectorAll('[data-idxcolor]').forEach(cf => {
+    const key = cf.dataset.idxcolor;
+    const hex = state.doc.index.colors[key] || INDEX_COLOR_DEFAULTS[key];
+    cf.style.background = hex;
+  });
   // largura do índice e do resumo: segment de ícone, não <select> — rebuild é mais barato que
   // um setter (mesmo idioma do #blockcol/widthSeg: o componente não guarda estado próprio).
   const iwSlot = document.querySelector('[data-slot="idxwidth"]');
@@ -7232,6 +7384,21 @@ function syncSpecialUI() {
   document.querySelectorAll('[data-bgy]').forEach(s => { s.value = specialObj(s.dataset.bgy).bgY ?? 50; });
   document.querySelectorAll('[data-bgscale]').forEach(s => { s.value = specialObj(s.dataset.bgscale).bgScale ?? 100; });
   document.querySelectorAll('[data-bgscalev]').forEach(sp => { sp.textContent = ((specialObj(sp.dataset.bgscalev).bgScale ?? 100) / 100).toFixed(2) + '×'; });
+  // Fill/Fit do fundo da capa/contracapa
+  document.querySelectorAll('[data-slot="bgfit"]').forEach(slot => {
+    const kind = slot.dataset.kind;
+    const cov = specialObj(kind);
+    ensureCoverBgFit(cov);
+    slot.replaceChildren(widthSeg(cov.bgFit || 'fill', [
+      { val: 'fill', label: 'Fill (preenche e recorta)', icon: BG_FIT_ICON.fill },
+      { val: 'fit', label: 'Fit (imagem inteira)', icon: BG_FIT_ICON.fit },
+    ], (v) => {
+      specialObj(kind).bgFit = v;
+      applyCoverBgStylesLive(kind);
+      syncSpecialUI();
+      save(); scheduleCommit();
+    }));
+  });
   // "Selecionar" vs "Substituir + Remover" são mutuamente exclusivos — com imagem, os
   // fieldbtns (mesmo do popover de imagem) tomam o lugar do botão de arquivo.
   document.querySelectorAll('[data-bgbtn]').forEach(b => {
@@ -7240,12 +7407,26 @@ function syncSpecialUI() {
   document.querySelectorAll('[data-bgactions]').forEach(el => {
     setSidebarReveal(el, specialObj(el.dataset.bgactions).bg != null);
   });
-  // fundo↔/fundo↕/escala só fazem sentido com uma imagem selecionada
+  // fundo Fill/Fit + ↔/↕/escala só fazem sentido com uma imagem selecionada
   document.querySelectorAll('[data-bgxform]').forEach(el => {
     setSidebarReveal(el, specialObj(el.dataset.bgxform).bg != null);
   });
   syncSubCtrl();
   syncLogoUI();
+}
+
+// ícones Fill (cover) / Fit (contain) pro segment da imagem de fundo
+const BG_FIT_ICON = {
+  // quadro preenchido = Fill (cobre a página, pode recortar)
+  fill: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="currentColor"/></svg>',
+  // quadro vazio + retângulo menor = Fit (imagem inteira, com sobra)
+  fit: '<svg viewBox="0 0 16 16"><rect x="1.5" y="2" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="4.5" y="5" width="7" height="6" rx="0.6" fill="currentColor"/></svg>',
+};
+/** Aplica bgFit/pos/scale ao vivo no .cover-bg (sem re-render). */
+function applyCoverBgStylesLive(kind) {
+  const cov = specialObj(kind);
+  const bg = pagesEl.querySelector(`.page[data-cover="${kind}"] .cover-bg`);
+  if (bg) applyCoverBgStyles(bg, cov);
 }
 // espelha o campo logo (de cada capa) na sidebar. "none" = logo desligado; os opts
 // (posição/alinhamento/cor/tamanho) só aparecem com o logo ligado.
@@ -7296,12 +7477,16 @@ function applyCoverLogoLive(kind) {
   const h = LOGO_BASE_H * (lg.size || 1);
   svg.setAttribute('height', +h.toFixed(1)); svg.setAttribute('width', +(h * (L.w / L.h)).toFixed(1));
 }
-// aplica posição + escala no .cover-bg (render e sliders ao vivo). Ver renderCoverPage.
+// aplica posição + escala + fill/fit no .cover-bg (render e sliders ao vivo). Ver renderCoverPage.
 // Scale = valor do usuário. Sangria de 1px fica no CSS (.cover-bg), não no scale.
+// bgFit: 'fill' → background-size:cover (recorta); 'fit' → contain (imagem inteira).
 function applyCoverBgStyles(bg, cov) {
   const x = cov.bgX ?? 50, y = cov.bgY ?? 50;
   const s = (cov.bgScale ?? 100) / 100;
+  const fit = cov.bgFit === 'fit';
   bg.style.backgroundPosition = `${x}% ${y}%`;
+  bg.style.backgroundSize = fit ? 'contain' : 'cover';
+  bg.classList.toggle('bg-fit', fit);
   bg.style.transformOrigin = `${x}% ${y}%`;
   bg.style.transform = `scale(${s})`;
 }
@@ -7337,8 +7522,31 @@ document.querySelectorAll('.sw[data-idxlvl]').forEach(sw => sw.addEventListener(
 }));
 // cores / largura do índice / largura do resumo: o value do <select> É o valor guardado
 document.querySelectorAll('select[data-idxopt]').forEach(s => s.addEventListener('change', () => {
-  state.doc.index[s.dataset.idxopt] = s.value; render();
+  state.doc.index[s.dataset.idxopt] = s.value;
+  if (s.dataset.idxopt === 'color' && s.value === 'custom') ensureIndexColors(state.doc.index);
+  syncSpecialUI();
+  render();
+  // se o painel flutuante do índice está aberto, reconstrói pra mostrar pickers
+  if (s.dataset.idxopt === 'color' && idxFocus === 'index') openIdxPanel();
 }));
+// pickers de cor Custom do índice (sidebar Documento)
+document.querySelectorAll('[data-idxcolor]').forEach(cf => {
+  cf.addEventListener('click', () => {
+    ensureIndexColors(state.doc.index);
+    const key = cf.dataset.idxcolor;
+    openSwatchPop(cf, (hex) => {
+      state.doc.index.colors[key] = hex;
+      cf.style.background = hex;
+      pagesEl.querySelectorAll('.toc.toc-custom').forEach(list => applyIndexCustomColors(list, state.doc.index));
+      // espelha no painel flutuante se aberto
+      if (idxPanel && !idxPanel.hidden) {
+        const p = idxPanel.querySelector(`.colorfield[data-idxc="${key}"]`);
+        if (p) p.style.background = hex;
+      }
+      save(); scheduleCommit();
+    }, state.doc.index.colors[key] || INDEX_COLOR_DEFAULTS[key]);
+  });
+});
 // t2.10: tooltip nativo (title=) no ícone "ⓘ" ao lado de "Índice + Resumo" — preventDefault
 // no click evita que a ativação do botão borbulhe pro <summary> e togglar o <details> junto.
 // ⓘ em summary ou ao lado de switchers: não toggle details; tooltip fixed no body
@@ -7827,9 +8035,11 @@ async function printHtml(bodyHtml, { titleSuffix = '', busyBtn = null } = {}) {
     bottom: auto !important;
     width: calc(100% + 2px) !important;
     height: calc(100% + 2px) !important;
-    background-size: cover !important;
+    /* size vem do inline (applyCoverBgStyles) — não forçar cover, senão Fit some no PDF */
     background-repeat: no-repeat !important;
   }
+  .page.cover-page .cover-bg.bg-fit { background-size: contain !important; }
+  .page.cover-page .cover-bg:not(.bg-fit) { background-size: cover !important; }
   /* o print do navegador some com fundo/cor por padrão (só sai marcando "gráficos
      de fundo" na caixa do usuário) — força sempre, cobre capa/contracapa (imagem
      de fundo), checklist/callout (preenchimento) e cor de texto/highlight */
@@ -8725,11 +8935,13 @@ addEventListener('resize', () => { if (state.zoom === 'fit') applyZoom(); });
 // ──────────────── barra flutuante de formatação (estilo Notion) ─────────────
 const fmtbar = document.getElementById('fmtbar');
 const typeSelect = fmtbar.querySelector('.typeselect');
-// mousedown na barra NÃO pode roubar o foco/seleção do texto — EXCETO no <select> de
-// tipo: um <select> nativo abre a lista de opções respondendo ao mousedown; dar
-// preventDefault nele trava o dropdown fechado (não abre no clique). Como setActiveType
-// usa state.activeId (não a Selection ao vivo), perder a seleção visível aqui não quebra nada.
-fmtbar.addEventListener('mousedown', (e) => { if (e.target !== typeSelect) e.preventDefault(); });
+const colSelect = fmtbar.querySelector('.colselect');
+// mousedown na barra NÃO pode roubar o foco/seleção do texto — EXCETO nos <select>
+// (tipo / colunas): select nativo abre a lista no mousedown; preventDefault trava o
+// dropdown. setActiveType/setBlockPlacement usam state.activeId, não a Selection ao vivo.
+fmtbar.addEventListener('mousedown', (e) => {
+  if (e.target !== typeSelect && e.target !== colSelect) e.preventDefault();
+});
 
 fmtbar.querySelectorAll('.markbtn').forEach(btn => btn.addEventListener('click', () => {
   document.execCommand(btn.dataset.cmd);   // dispara 'input' → sincroniza o bloco
@@ -8737,6 +8949,14 @@ fmtbar.querySelectorAll('.markbtn').forEach(btn => btn.addEventListener('click',
 }));
 typeSelect.addEventListener('change', () => {
   setActiveType(typeSelect.value);
+  updateFmtbar();
+});
+if (colSelect) colSelect.addEventListener('change', () => {
+  const id = state.activeId;
+  const b = id && blockOf(id);
+  if (!b || !COL_FMT_TYPES.has(b.type)) return;
+  // 'inline' | 'full' — 1 coluna ou 2 colunas
+  setBlockPlacement(b.id, colSelect.value === 'full' ? 'full' : 'inline');
   updateFmtbar();
 });
 
@@ -8864,6 +9084,15 @@ function updateFmtbar() {
   // só troca o valor do <select> se o tipo do bloco estiver entre as opções (ex.: callout
   // não está na lista — mantém o dropdown como estava em vez de ficar num estado inválido)
   if (blk && [...typeSelect.options].some(o => o.value === blk.type)) typeSelect.value = blk.type;
+  // colunas (1 / 2): só headers + parágrafo no miolo
+  if (colSelect) {
+    const showCol = !!(blk && COL_FMT_TYPES.has(blk.type));
+    colSelect.hidden = !showCol;
+    if (showCol) {
+      const pl = placementOf(blk);
+      colSelect.value = pl === 'full' ? 'full' : 'inline';
+    }
+  }
   // acima da seleção, centrada; se não couber, abaixo
   fmtbar.hidden = false;
   const rect = r.getBoundingClientRect();

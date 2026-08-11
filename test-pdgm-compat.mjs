@@ -15,6 +15,8 @@ import { serializeDoc, deserializeDoc, serializeDocZip, loadDocZip } from './doc
 import {
   RULE_W_DEFAULT, RULE_W_LEGACY, COL_L_DEFAULT, COL_L_MIN, COL_L_MAX,
   clampColL, defaultLogo, normalizeOpenedDoc,
+  INDEX_COLOR_DEFAULTS, ensureIndexColors, ensureCoverBgFit,
+  PNUM_COLOR_DEFAULT, FOOT_COLOR_DEFAULT,
 } from './doc-migrate.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/pdgm-v1-minimal.json', import.meta.url));
@@ -88,6 +90,7 @@ assert.equal(opened.index.resumoOn, true, 'resumoOn default em doc antigo');
 assert.deepEqual(opened.index.levels, { h1: true, h2: true, h3: false, h4: false });
 assert.equal(opened.index.color, 'padrao');
 assert.equal(opened.index.width, 'curto');
+assert.deepEqual(opened.index.colors, INDEX_COLOR_DEFAULTS, 'colors default em doc antigo (Custom)');
 assert.match(opened.index.resumo, /Resumo antigo/, 'texto do resumo legado permanece');
 assert.deepEqual(opened.reviewed, []);
 assert.equal(opened.ruleTop, RULE_W_LEGACY, 'regra de cabeçalho legada = 1px');
@@ -96,10 +99,22 @@ assert.equal(opened.footText, 'paradigma.education');
 assert.equal(opened.back.on, false, 'Object.assign preserva back.on do arquivo');
 assert.ok(opened.freePdf && opened.freePdf.mode === 'page', 'freePdf vem do seed quando ausente');
 assert.equal(opened.pageBg, '#FFFFFF', 'pageBg default em doc antigo (papel branco)');
+assert.equal(opened.pnumColor, PNUM_COLOR_DEFAULT, 'pnumColor default (mint) em doc antigo');
+assert.equal(opened.footColor, FOOT_COLOR_DEFAULT, 'footColor default (cinza) em doc antigo');
 assert.equal(opened.colLeft, COL_L_DEFAULT, 'colLeft default em doc antigo (258px)');
+
+// cores custom do rodapé preservadas
+const withFootColors = openCompat({
+  ...JSON.parse(JSON.stringify(raw)),
+  pnumColor: '#FF00AA',
+  footColor: '#112233',
+});
+assert.equal(withFootColors.pnumColor, '#FF00AA');
+assert.equal(withFootColors.footColor, '#112233');
 assert.equal(raw.index.resumoOn, undefined, 'raw do arquivo permanece intocado após open');
 assert.ok(opened.cover.logo, 'capa sem logo ganha defaultLogo na migração');
 assert.deepEqual(opened.cover.logo, defaultLogo());
+assert.equal(opened.cover.bgFit, 'fill', 'bgFit default Fill em capa antiga');
 
 // pageBg custom preservado no open (campo aditivo)
 const withPageBg = openCompat({ ...JSON.parse(JSON.stringify(raw)), pageBg: '#1A1A2E' });
@@ -128,6 +143,38 @@ const capaAntiga = openCompat({
 });
 assert.equal(capaAntiga.cover.items[0].type, 'title');
 assert.equal(capaAntiga.cover.items[1].type, 'subtitle');
+assert.equal(capaAntiga.cover.bgFit, 'fill', 'capa antiga sem bgFit → fill');
+// weight ausente no item: UI trata como 700 (não injeta no open — aditivo opcional)
+assert.equal(capaAntiga.cover.items[0].weight, undefined);
+
+// bgFit 'fit' + weight no title preservados no open
+const capaFit = openCompat({
+  blocks: [],
+  cover: {
+    on: true,
+    bgFit: 'fit',
+    items: [{ id: 't1', type: 'title', html: 'Bold free', y: 100, weight: 400 }],
+  },
+  back: { on: false, bgFit: 'fit', items: [] },
+  index: { on: true, color: 'custom', colors: { num: '#FF0000', text: '#111111', page: '#999999' } },
+});
+assert.equal(capaFit.cover.bgFit, 'fit');
+assert.equal(capaFit.back.bgFit, 'fit');
+assert.equal(capaFit.cover.items[0].weight, 400, 'weight do título da capa sobrevive ao open');
+assert.equal(capaFit.index.color, 'custom');
+assert.deepEqual(capaFit.index.colors, { num: '#FF0000', text: '#111111', page: '#999999' });
+
+// ensureIndexColors / ensureCoverBgFit: helpers puros
+const idxBare = {};
+ensureIndexColors(idxBare);
+assert.deepEqual(idxBare.colors, INDEX_COLOR_DEFAULTS);
+assert.equal(idxBare.color, 'padrao');
+const covBare = {};
+ensureCoverBgFit(covBare);
+assert.equal(covBare.bgFit, 'fill');
+ensureCoverBgFit({ bgFit: 'fit' });
+assert.equal(ensureCoverBgFit({ bgFit: 'fit' }).bgFit, 'fit');
+assert.equal(ensureCoverBgFit({ bgFit: 'nope' }).bgFit, 'fill', 'bgFit inválido → fill');
 
 // ── round-trip JSON preserva o que o usuário salvou ──────────────────────────
 const wire = serializeDoc(raw);

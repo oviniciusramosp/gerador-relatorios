@@ -74,11 +74,12 @@ export function migrateCoverTitleSubtitle(cov) {
   if (plain[1]) plain[1].type = 'subtitle';
 }
 
-// Migração de capa/contracapa (load + abrir .pdgm): Y livre, logo default, type de item.
+// Migração de capa/contracapa (load + abrir .pdgm): Y livre, logo default, type de item, bgFit.
 export function migrateSpecialPages(doc) {
   [doc.cover, doc.back].forEach((cov) => {
     if (!cov) return;
     if (!cov.logo) cov.logo = defaultLogo();
+    ensureCoverBgFit(cov);
     if (!cov.items) return;
     let yy = 40;
     cov.items.forEach((it) => {
@@ -122,6 +123,10 @@ export function normalizeOpenedDoc(doc, raw = null) {
   // Valor inválido fica pro paint path (parseColor); não engolir hex custom sem validar aqui.
   if (doc.pageBg == null || doc.pageBg === '') doc.pageBg = '#FFFFFF';
 
+  // cores do rodapé (nº da página + texto). Ausente → mint / cinza histórico do CSS.
+  if (!doc.pnumColor) doc.pnumColor = PNUM_COLOR_DEFAULT;
+  if (!doc.footColor) doc.footColor = FOOT_COLOR_DEFAULT;
+
   // largura da coluna esquerda do miolo (px). Ausente → padrão 258.
   if (raw && !hasOwn(raw, 'colLeft')) doc.colLeft = COL_L_DEFAULT;
   else doc.colLeft = clampColL(doc.colLeft);
@@ -132,7 +137,43 @@ export function normalizeOpenedDoc(doc, raw = null) {
     doc.index.color ||= 'padrao';
     doc.index.width ||= 'curto';
     doc.index.resumoWidth ||= 'full';
+    // cores Custom do índice: aditivo — docs antigos sem colors usam o default do esquema Padrão
+    ensureIndexColors(doc.index);
   }
   migrateSpecialPages(doc);
   return doc;
+}
+
+/** Cores default do rodapé — batem com .page .foot .pnum / .site no CSS. */
+export const PNUM_COLOR_DEFAULT = '#3DE8A0';
+export const FOOT_COLOR_DEFAULT = '#828080';
+
+/** Cores default do esquema "Padrão" do índice (num mint / texto corpo / nº da página). */
+export const INDEX_COLOR_DEFAULTS = {
+  num: '#29E899',
+  text: '#4E4E4E',
+  page: '#828080',
+};
+
+/** Preenche index.colors com defaults (mutates). Aceita color scheme 'padrao'|'cinza'|'custom'. */
+export function ensureIndexColors(idx) {
+  if (!idx) return idx;
+  const d = INDEX_COLOR_DEFAULTS;
+  const cur = idx.colors && typeof idx.colors === 'object' ? idx.colors : {};
+  idx.colors = {
+    num: cur.num || d.num,
+    text: cur.text || d.text,
+    page: cur.page || d.page,
+  };
+  if (idx.color !== 'padrao' && idx.color !== 'cinza' && idx.color !== 'custom') {
+    idx.color = 'padrao';
+  }
+  return idx;
+}
+
+/** bgFit da capa/contracapa: 'fill' (cover) | 'fit' (contain). Ausente → fill. */
+export function ensureCoverBgFit(cov) {
+  if (!cov) return cov;
+  if (cov.bgFit !== 'fit' && cov.bgFit !== 'fill') cov.bgFit = 'fill';
+  return cov;
 }

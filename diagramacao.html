@@ -944,6 +944,10 @@
      um a um — cada um crava a própria cor acima, e herança não passa por cima de cor declarada. */
   .page .toc-cinza .toc-row, .page .toc-cinza .toc-row.lvl1,
   .page .toc-cinza .toc-num, .page .toc-cinza .toc-pg { color: #A9A9A9; }
+  /* esquema "Custom": cores via CSS vars setadas em applyIndexCustomColors (render/live). */
+  .page .toc-custom .toc-row, .page .toc-custom .toc-row.lvl1 { color: var(--toc-text, #4E4E4E); }
+  .page .toc-custom .toc-num { color: var(--toc-num, #29E899); }
+  .page .toc-custom .toc-pg { color: var(--toc-pg, #828080); }
   /* default = parágrafo; override via inline no render (painel do Resumo) */
   .page .idx-resumo { font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: justify; outline: none; }
   .page .idx-resumo p { margin: 0 0 8px; }
@@ -971,10 +975,11 @@
     bottom: auto;
     width: calc(100% + 2px);
     height: calc(100% + 2px);
-    background-size: cover;
+    background-size: cover; /* default Fill; Fit = .bg-fit ou inline em applyCoverBgStyles */
     background-position: center;
     background-repeat: no-repeat;
   }
+  .page.cover-page .cover-bg.bg-fit { background-size: contain; }
   /* conteúdo respeita o padding (48h/40v); itens posicionados por coluna (x) + y livre (absolutos) */
   .page.cover-page .cover-area { position: absolute; left: 48px; right: 48px; top: 40px; bottom: 40px; }
   .page.cover-page .cover-item { position: absolute; color: #000; line-height: 1.15; letter-spacing: -0.01em; outline: none; }
@@ -1244,16 +1249,22 @@
   /* dropdown de tipo de bloco — mesma "moldura" visual dos botões (transparente + hover).
      Reseta o select global (altura fixa + chevron custom de paradigma.css): aqui o combo
      nativo do SO encaixa melhor na fmtbar compacta. */
-  #fmtbar select.typeselect {
+  #fmtbar select.typeselect,
+  #fmtbar select.colselect {
     border: 0; background: transparent; color: var(--ink);
     font: inherit; font-size: .78rem; font-weight: 600;
     padding: .28rem .3rem; border-radius: 5px; cursor: pointer;
     height: auto; background-image: none;
     -webkit-appearance: menulist; appearance: auto;
   }
-  #fmtbar select.typeselect:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
-  /* em legenda/título de imagem não faz sentido trocar tipo de bloco */
-  #fmtbar.caption-mode .typeselect, #fmtbar.caption-mode .sep { display: none; }
+  #fmtbar select.typeselect:hover,
+  #fmtbar select.colselect:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
+  /* em legenda/título de imagem não faz sentido trocar tipo/colunas do bloco */
+  #fmtbar.caption-mode .typeselect,
+  #fmtbar.caption-mode .colselect,
+  #fmtbar.caption-mode .sep { display: none; }
+  /* colselect some via hidden= quando o tipo não é header/parágrafo */
+  #fmtbar select.colselect[hidden] { display: none; }
 
   /* menus flutuantes: adicionar imagem (clique na coluna direita) + editar imagem selecionada */
   #addImgMenu, #imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #coverPanel, #logoPanel, #downloadMenu, #blockStylePanel, #idxPanel, #resumoPanel {
@@ -1699,17 +1710,22 @@
     font-size: .74rem; font-stretch: 85%; color: var(--muted); gap: .4rem;
   }
   #imgPanel [data-role="scale-opts"] .swrow > span { line-height: 1.25; min-width: 0; }
-  #blockcol { margin-top: .5rem; }
+  #blockcol { margin-bottom: .55rem; }
   #blockcol[hidden] { display: none; }
   /* cadeado do bloco na coluna direita (sidebar Conteúdo) — mesmo .fieldbtn do painel de imagem */
-  #blocklock { width: 100%; margin-top: .35rem; }
+  #blocklock { width: 100%; margin: 0 0 .55rem; }
   #blocklock[hidden] { display: none; }
   #blocklock:disabled { opacity: .4; cursor: default; }
   /* bug pré-existente: quando um seletor do AUTOR define display (grid/flex), ele vence o
      [hidden] da UA mesmo com especificidade igual — sem esta linha, .grid2[data-logoopts] (Cor do
      logo/Tamanho) e os campos de fundo (data-bgxform) ficavam SEMPRE visíveis, hidden=true e tudo.
      Mesmo padrão do #blockcol[hidden] acima — só faltava replicar aqui. */
-  [data-logoopts][hidden], [data-bgxform][hidden], .bgactions[hidden] { display: none; }
+  [data-logoopts][hidden], [data-bgxform][hidden], [data-idxcolors][hidden], .bgactions[hidden] { display: none; }
+  /* pickers de cor Custom do índice (sidebar + painel flutuante) */
+  .idx-custom-colors { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .45rem; }
+  .idx-custom-colors[hidden] { display: none; }
+  .idx-custom-colors .field { min-width: 0; }
+  #idxPanel .idx-custom-colors { margin-top: .1rem; }
   /* "Logo da Paradigma" no mesmo peso visual de um rótulo de switcher (ex.: "Mostrar Capa") —
      não o cinza/pequeno padrão de rótulo de campo. Só o TEXTO muda; o <div class="field"> ao
      redor continua o de sempre (empilha o texto sobre o grupo, via aside .field acima). */
@@ -2088,6 +2104,9 @@
                 <button type="button" class="fieldbtn danger" data-rmbg="cover"><span>Remover</span></button>
               </div>
             </div>
+            <div class="field" data-bgxform="cover" hidden>Preenchimento
+              <div data-slot="bgfit" data-kind="cover"></div>
+            </div>
             <div class="grid2" data-bgxform="cover" hidden>
               <label class="field"><span class="field-row">Posição Horizontal ↔ <span class="field-val"><button type="button" class="resetbtn" data-bgxreset="cover" title="Redefinir para o centro">↺</button></span></span>
                 <input type="range" data-bgx="cover" min="0" max="100" value="50" data-snaps="0,25,50,75,100">
@@ -2119,11 +2138,23 @@
                 <select data-idxopt="color">
                   <option value="padrao" selected>Padrão</option>
                   <option value="cinza">Cinza</option>
+                  <option value="custom">Custom</option>
                 </select>
               </label>
               <div class="field">Largura
                 <div data-slot="idxwidth"></div>
               </div>
+            </div>
+            <div class="idx-custom-colors" data-idxcolors hidden>
+              <label class="field">Número
+                <button type="button" class="colorfield" data-idxcolor="num" title="Cor do número do índice"></button>
+              </label>
+              <label class="field">Texto
+                <button type="button" class="colorfield" data-idxcolor="text" title="Cor do título no índice"></button>
+              </label>
+              <label class="field">Página
+                <button type="button" class="colorfield" data-idxcolor="page" title="Cor do número da página"></button>
+              </label>
             </div>
           </div>
           <div class="swrow"><span>Mostrar Resumo</span><button class="sw" data-sw="resumo" role="switch" aria-checked="true"></button></div>
@@ -2171,6 +2202,9 @@
                 <button type="button" class="fieldbtn danger" data-rmbg="back"><span>Remover</span></button>
               </div>
             </div>
+            <div class="field" data-bgxform="back" hidden>Preenchimento
+              <div data-slot="bgfit" data-kind="back"></div>
+            </div>
             <div class="grid2" data-bgxform="back" hidden>
               <label class="field"><span class="field-row">Posição Horizontal ↔ <span class="field-val"><button type="button" class="resetbtn" data-bgxreset="back" title="Redefinir para o centro">↺</button></span></span>
                 <input type="range" data-bgx="back" min="0" max="100" value="50" data-snaps="0,25,50,75,100">
@@ -2207,14 +2241,24 @@
           <label class="field">Nº da 1ª página
             <input type="number" id="firstPage" value="1" min="0" step="1">
           </label>
-          <div class="field">Posição do número
-            <div data-slot="pnumalign"></div>
+          <div class="grid2">
+            <div class="field">Posição do número
+              <div data-slot="pnumalign"></div>
+            </div>
+            <label class="field">Cor do número
+              <button type="button" class="colorfield" id="pnumColor" title="Cor do número da página" style="background:#3DE8A0"></button>
+            </label>
           </div>
           <label class="field">Texto do rodapé
             <input type="text" id="footText" value="paradigma.education">
           </label>
-          <div class="field">Posição do texto
-            <div data-slot="footalign"></div>
+          <div class="grid2">
+            <div class="field">Posição do texto
+              <div data-slot="footalign"></div>
+            </div>
+            <label class="field">Cor do texto
+              <button type="button" class="colorfield" id="footColor" title="Cor do texto do rodapé" style="background:#828080"></button>
+            </label>
           </div>
           <label class="field"><span class="field-row">Espessura da linha do Rodapé <span class="field-val"><span id="ruleBotv">0.5px</span><button type="button" class="resetbtn" id="ruleBotReset" title="Redefinir para 0.5px">↺</button></span></span>
             <input type="range" id="ruleBot" min="0.25" max="8" step="0.25" value="0.5" data-snaps="0.25,0.5,1,2,4,8">
@@ -2231,6 +2275,11 @@
       <div class="sb-static">
         <div class="sb-static-title">Bloco</div>
         <div class="body">
+          <!-- colunas do bloco EM FOCO — no TOPO (antes da lista longa de tipos) pra
+               headers/parágrafos não “sumirem” no scroll. Mesmo widthSeg da Imagem/Capa.
+               Coluna direita = modelo da imagem: Y livre + "Travar no texto". -->
+          <div class="field" id="blockcol" hidden>Colunas<div data-slot="col"></div></div>
+          <button type="button" class="fieldbtn" id="blocklock" hidden></button>
           <div class="blocktypes" id="blocktypes">
             <div class="blockrow"><button data-type="h1"><span class="ico" style="font-size:15px;font-weight:800">H</span><span class="lbl">H1</span><span class="sc">#</span></button><button type="button" class="blockmenu" data-styletype="h1" title="Editar estilo do H1"></button></div>
             <div class="blockrow"><button data-type="h2"><span class="ico" style="font-size:13px;font-weight:800">H</span><span class="lbl">H2</span><span class="sc">##</span></button><button type="button" class="blockmenu" data-styletype="h2" title="Editar estilo do H2"></button></div>
@@ -2255,11 +2304,6 @@
             <div class="blockrow"><button data-type="divider"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 8h12"/></svg></span><span class="lbl">Divisor</span><span class="sc">---</span></button><button type="button" class="blockmenu" data-styletype="divider" title="Editar estilo do Divisor"></button></div>
             <button data-type="pagebreak" title="Quebra de página (⌘⏎)"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h8v3H4zM4 11h8v3H4z"/><path d="M1.5 8h3M6.5 8h3M12 8h2.5"/></svg></span><span class="lbl">Quebra de Página</span><span class="sc">⌘⏎</span></button>
           </div>
-          <!-- posição do bloco EM FOCO — mesmo segment (widthSeg) do popover de Imagem e
-               da Capa; o JS (syncColUI) preenche/limpa conforme state.activeId.
-               Coluna direita = modelo da imagem: sem alça/+, Y livre + "Travar no texto". -->
-          <div class="field" id="blockcol" hidden>Posição<div data-slot="col"></div></div>
-          <button type="button" class="fieldbtn" id="blocklock" hidden></button>
         </div>
       </div>
     </div>
@@ -2324,11 +2368,17 @@
     <option value="h1">H1</option>
     <option value="h2">H2</option>
     <option value="h3">H3</option>
+    <option value="h4">H4</option>
     <option value="p">Parágrafo</option>
     <option value="li">Lista de Pontos</option>
     <option value="ol">Lista Numérica</option>
     <option value="check">Checklist</option>
     <option value="quote">Citação</option>
+  </select>
+  <!-- 1 vs 2 colunas: só headers + parágrafo (ver updateFmtbar / setBlockPlacement) -->
+  <select class="colselect" title="Largura em colunas" hidden>
+    <option value="inline">1 coluna</option>
+    <option value="full">2 colunas</option>
   </select>
   <span class="sep"></span>
   <button class="markbtn" data-cmd="bold" title="Negrito (⌘B)" style="font-weight:700">B</button>
