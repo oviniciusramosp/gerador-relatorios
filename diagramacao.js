@@ -25,12 +25,25 @@ import { enhanceAll, wireFieldEditKeys } from './range-snap.js';  // snap + digi
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
-import { buildTableEl } from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
+import {
+  buildTableEl, ensureTable, applyTableChrome,
+  tableHeaderBg, borderOuterOf, borderInnerOf, tableRadiusOf, clampTableRadius,
+  tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
+  clampTableFontSize, clampTableLineHeight, normalizeTableAlign, normalizeTableValign,
+  DEFAULT_HEADER_BG, DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_RADIUS,
+  DEFAULT_TABLE_FONT_SIZE, DEFAULT_TABLE_LINE_HEIGHT, DEFAULT_TABLE_ALIGN, DEFAULT_TABLE_VALIGN,
+  TABLE_RADIUS_MAX, TABLE_FONT_SIZE_MIN, TABLE_FONT_SIZE_MAX,
+  TABLE_LINE_HEIGHT_MIN, TABLE_LINE_HEIGHT_MAX,
+} from './bloco-tabela.js';    // trilha B (t6): DOM do bloco Tabela
 import {
   buildImageGridEl, ensureImageGrid, equalModeOf, setGridCols, setGridItemImage,
   setTitlesOn, setCaptionsOn, titlesOn, captionsOn, captionStyleOf, gapOf, clampGap,
   IMAGE_GRID_MAX, IMAGE_GRID_GAP, IMAGE_GRID_GAP_MAX,
-} from './bloco-image-grid.js';
+} from './bloco-image-grid.js';import {
+  buildTableGridEl, ensureTableGrid, tableGridEqualModeOf, tableGridGapOf,
+  clampTableGridGap, setTableGridCols,
+  TABLE_GRID_MAX, TABLE_GRID_GAP, TABLE_GRID_GAP_MAX,
+} from './bloco-table-grid.js';
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
 import { deserializeDoc, serializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';  // trilha C (t3.2): salvar/abrir documento completo (.pdgm.zip; .pdgm.json ainda lido por compat)
 import {
@@ -153,10 +166,10 @@ function colRightX() { return colL() + GAP; }
 // Sem placement explícito o default vem do TIPO: títulos H1–H4 e tabela ocupam as duas
 // colunas; o resto fica na esquerda. Ler sempre por placementOf() — nunca b.placement
 // direto — senão documentos antigos (sem o campo) perdem o default do tipo.
-const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid']);
+const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid', 'table-grid']);
 const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : 'inline');
 // tipos com seletor "1 coluna / 2 colunas" (sidebar + painel flutuante à direita)
-const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'caption', 'image-grid']);
+const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'caption', 'image-grid', 'table-grid']);
 // texto puro (p/legenda): painel flutuante só de Largura; H1–H4 usam o #iconPanel
 const TEXT_PLACE_TYPES = new Set(['p', 'caption']);
 
@@ -175,7 +188,7 @@ function gapBefore(b, prev) {
   if (custom) {
     const v = HEAD_TYPES.has(b.type) ? custom.marginTop : custom.gap;
     if (v != null) {
-      if (pt === 'table' && !HEAD_TYPES.has(b.type)) return Math.max(PARA_LH, v);
+      if ((pt === 'table' || pt === 'table-grid') && !HEAD_TYPES.has(b.type)) return Math.max(PARA_LH, v);
       return v;
     }
   }
@@ -185,8 +198,8 @@ function gapBefore(b, prev) {
   // qualquer lista consecutiva (mesmo misturando pontos/número/check) fica compacta —
   // permite "1. pai → subitem • → 2. continua" sem folga de parágrafo no meio
   if (LIST_TYPES.has(b.type) && LIST_TYPES.has(pt)) return LIST_GAP;
-  // após tabela / grid de imagens: mesmo respiro p↔p (1 linha). Headings já saíram acima.
-  if (pt === 'table' || pt === 'image-grid') return PARA_LH;
+  // após tabela / grid de imagens/tabelas: mesmo respiro p↔p (1 linha). Headings já saíram acima.
+  if (pt === 'table' || pt === 'image-grid' || pt === 'table-grid') return PARA_LH;
   return PARA_LH;                     // demais blocos (inclui 'callout', trilha G): folga de 1 linha, sem regra especial
 }
 
@@ -472,6 +485,12 @@ const mkBlock = (type, html = '') => {
   if (type === 'image-grid') {
     // 2 slots vazios por padrão; equal=width = colunas iguais
     ensureImageGrid(b);
+  }
+  if (type === 'table-grid') {
+    ensureTableGrid(b);
+  }
+  if (type === 'table') {
+    ensureTable(b);
   }
   if (type === 'icon') {
     b.icon = DEFAULT_MS_ICON;
@@ -1235,80 +1254,244 @@ function activeTableBlock() {
   return null;
 }
 function closeTablePanel() { if (tablePanel) tablePanel.hidden = true; }
+
+/** Ícones de alinhamento vertical (topo / meio / base) — espelham ALIGN_ICON. */
+const VALIGN_ICON = {
+  top: '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="2" width="10" height="2" rx="1"/><rect x="5" y="6" width="6" height="2" rx="1"/><rect x="4" y="10" width="8" height="2" rx="1" opacity=".35"/></svg>',
+  middle: '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="3" width="8" height="2" rx="1" opacity=".35"/><rect x="3" y="7" width="10" height="2" rx="1"/><rect x="4" y="11" width="8" height="2" rx="1" opacity=".35"/></svg>',
+  bottom: '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="4" width="8" height="2" rx="1" opacity=".35"/><rect x="5" y="8" width="6" height="2" rx="1"/><rect x="3" y="12" width="10" height="2" rx="1"/></svg>',
+};
+
+function fmtTableLineHeight(n) {
+  const v = clampTableLineHeight(n);
+  return String(v);
+}
+
+/** HTML dos controles de estilo da tabela (painel flutuante ou modal). */
+function tableStyleFieldsHtml(b) {
+  const headerColor = tableHeaderBg(b);
+  const outer = borderOuterOf(b);
+  const inner = borderInnerOf(b);
+  const radius = tableRadiusOf(b);
+  const fontSize = tableFontSizeOf(b);
+  const lineHeight = tableLineHeightOf(b);
+  const vlinesOn = b.hideVLines !== true;
+  return `
+    <div class="swrow"><span>Linhas Verticais</span>
+      <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>
+    <div class="swrow"><span>Linhas alternadas</span>
+      <button type="button" class="sw" data-a="alt" role="switch" aria-checked="${!!b.altRows}"></button></div>
+    <div class="field">Alinhamento horizontal<div data-slot="align"></div></div>
+    <div class="field">Alinhamento vertical<div data-slot="valign"></div></div>
+    <label class="field"><span class="field-row">Tamanho da fonte <span class="field-val"><span data-role="fsv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${fontSize}</span>px<button type="button" class="resetbtn" data-a="fsreset" title="Redefinir para ${DEFAULT_TABLE_FONT_SIZE}px">↺</button></span></span>
+      <input type="range" data-a="fontSize" min="${TABLE_FONT_SIZE_MIN}" max="${TABLE_FONT_SIZE_MAX}" step="1" value="${fontSize}" data-snaps="6,8,10,12,14,16,18,24" data-edit="off">
+    </label>
+    <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lhv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${fmtTableLineHeight(lineHeight)}</span><button type="button" class="resetbtn" data-a="lhreset" title="Redefinir para ${DEFAULT_TABLE_LINE_HEIGHT}">↺</button></span></span>
+      <input type="range" data-a="lineHeight" min="${TABLE_LINE_HEIGHT_MIN}" max="${TABLE_LINE_HEIGHT_MAX}" step="0.05" value="${lineHeight}" data-snaps="1,1.15,1.35,1.5,1.75,2,2.5" data-edit="off">
+    </label>
+    <div class="field">Cor do cabeçalho
+      <button type="button" class="swatch" data-a="headerColor" title="Cor do cabeçalho"
+        style="background:${headerColor};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    </div>
+    <div class="field">Cor das linhas externas
+      <button type="button" class="swatch" data-a="borderOuter" title="Cor das linhas externas"
+        style="background:${outer};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    </div>
+    <div class="field">Cor das linhas internas
+      <button type="button" class="swatch" data-a="borderInner" title="Cor das linhas internas"
+        style="background:${inner};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
+    </div>
+    <label class="field"><span class="field-row">Cantos (raio) <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para ${DEFAULT_TABLE_RADIUS}px">↺</button></span></span>
+      <input type="range" data-a="radius" min="0" max="${TABLE_RADIUS_MAX}" step="1" value="${radius}" data-snaps="0,4,8,12,16,24" data-edit="off">
+    </label>`;
+}
+
+/**
+ * Liga switches/swatches/raio/tipografia/alinhamento de estilo de tabela num host.
+ * @param {HTMLElement} root
+ * @param {object} b dados da tabela
+ * @param {{ paint?:()=>void, after?:()=>void }} hooks paint=live no DOM; after=save
+ */
+function wireTableStyleControls(root, b, hooks = {}) {
+  const paint = () => {
+    ensureTable(b);
+    hooks.paint?.();
+    hooks.after?.();
+  };
+  root.querySelectorAll('.sw[data-a]').forEach((sw) => {
+    sw.addEventListener('mousedown', (e) => e.preventDefault());
+    sw.addEventListener('click', () => {
+      const on = sw.getAttribute('aria-checked') !== 'true';
+      sw.setAttribute('aria-checked', String(on));
+      if (sw.dataset.a === 'vlines') b.hideVLines = !on;
+      else if (sw.dataset.a === 'alt') b.altRows = on;
+      paint();
+    });
+  });
+
+  // alinhamento horizontal / vertical (segments)
+  const alignSlot = root.querySelector('[data-slot="align"]');
+  if (alignSlot) {
+    const mountAlign = () => {
+      alignSlot.replaceChildren(widthSeg(tableAlignOf(b), [
+        { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+        { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+        { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+      ], (v) => {
+        const a = normalizeTableAlign(v);
+        if (a === DEFAULT_TABLE_ALIGN) delete b.align;
+        else b.align = a;
+        paint();
+        mountAlign();
+      }));
+    };
+    mountAlign();
+  }
+  const valignSlot = root.querySelector('[data-slot="valign"]');
+  if (valignSlot) {
+    const mountValign = () => {
+      valignSlot.replaceChildren(widthSeg(tableValignOf(b), [
+        { val: 'top', label: 'Topo', icon: VALIGN_ICON.top },
+        { val: 'middle', label: 'Meio', icon: VALIGN_ICON.middle },
+        { val: 'bottom', label: 'Base', icon: VALIGN_ICON.bottom },
+      ], (v) => {
+        const vv = normalizeTableValign(v);
+        if (vv === DEFAULT_TABLE_VALIGN) delete b.valign;
+        else b.valign = vv;
+        paint();
+        mountValign();
+      }));
+    };
+    mountValign();
+  }
+
+  const wireSwatch = (attr, apply) => {
+    const btn = root.querySelector(`[data-a="${attr}"]`);
+    if (!btn) return;
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => {
+      openSwatchPop(btn, (color) => {
+        apply(color);
+        btn.style.background = color;
+        paint();
+      }, btn.style.background || '#ccc', { paper: true });
+    });
+  };
+  wireSwatch('headerColor', (c) => {
+    if (c === DEFAULT_HEADER_BG) delete b.headerColor;
+    else b.headerColor = c;
+  });
+  wireSwatch('borderOuter', (c) => {
+    if (c === DEFAULT_BORDER_OUTER) delete b.borderOuter;
+    else b.borderOuter = c;
+  });
+  wireSwatch('borderInner', (c) => {
+    if (c === DEFAULT_BORDER_INNER) delete b.borderInner;
+    else b.borderInner = c;
+  });
+
+  // ── helpers de slider + campo editável ──────────────────────────────────
+  const wireNum = ({ role, attr, resetAttr, clamp, of, def, fmt, parse }) => {
+    const edit = root.querySelector(`[data-role="${role}"]`);
+    const apply = (raw, { syncText = true } = {}) => {
+      const n = clamp(raw);
+      if (n === def || (typeof def === 'number' && Math.abs(n - def) < 1e-9)) delete b[attr];
+      else b[attr] = n;
+      if (syncText && edit && document.activeElement !== edit) edit.textContent = fmt(n);
+      const range = root.querySelector(`input[data-a="${attr}"]`);
+      if (range && document.activeElement !== range) range.value = String(n);
+      paint();
+    };
+    if (edit) {
+      wireFieldEditKeys(edit, {
+        onInput: (raw) => {
+          const n = parse(raw);
+          if (n == null) return;
+          apply(n, { syncText: false });
+        },
+        onCommit: (raw) => {
+          const n = parse(raw);
+          apply(n == null ? of(b) : n, { syncText: true });
+          edit.textContent = fmt(of(b));
+        },
+        onCancel: () => {
+          edit.textContent = fmt(of(b));
+          apply(of(b), { syncText: true });
+        },
+      });
+    }
+    root.querySelectorAll(`[data-a="${attr}"], [data-a="${resetAttr}"]`).forEach((el) => {
+      const isRange = el.type === 'range';
+      el.addEventListener(isRange ? 'input' : 'click', () => {
+        if (el.dataset.a === resetAttr) apply(def);
+        else apply(+el.value);
+      });
+    });
+  };
+
+  wireNum({
+    role: 'radv', attr: 'radius', resetAttr: 'radiusreset',
+    clamp: clampTableRadius, of: tableRadiusOf, def: DEFAULT_TABLE_RADIUS,
+    fmt: (n) => String(n),
+    parse: (raw) => {
+      const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+      return Number.isFinite(n) ? n : null;
+    },
+  });
+  wireNum({
+    role: 'fsv', attr: 'fontSize', resetAttr: 'fsreset',
+    clamp: clampTableFontSize, of: tableFontSizeOf, def: DEFAULT_TABLE_FONT_SIZE,
+    fmt: (n) => String(n),
+    parse: (raw) => {
+      const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+      return Number.isFinite(n) ? n : null;
+    },
+  });
+  wireNum({
+    role: 'lhv', attr: 'lineHeight', resetAttr: 'lhreset',
+    clamp: clampTableLineHeight, of: tableLineHeightOf, def: DEFAULT_TABLE_LINE_HEIGHT,
+    fmt: fmtTableLineHeight,
+    parse: (raw) => {
+      const n = Number(String(raw ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    },
+  });
+
+  root.querySelectorAll('.resetbtn').forEach((btn) => {
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+  });
+  enhanceAll(root);
+}
+
 function openTablePanel() {
   const b = activeTableBlock();
   if (!b || !editing) { closeTablePanel(); return; }
+  ensureTable(b);
   tablePanelDismissed = false;
   closeImgPanel();
   closeImageGridPanel();
+  closeTableGridPanel();
   if (!tablePanel) {
     tablePanel = document.createElement('div');
     tablePanel.id = 'tablePanel';
     document.body.appendChild(tablePanel);
   }
   tablePanel.dataset.tid = b.id;
-  const headerColor = b.headerColor || '#F1F1F4';
   // TRASH_ICO pode ainda não existir se chamado cedo demais — monta na hora
   const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
-  // "Linhas Verticais" ligado por padrão (hideVLines só quando o usuário desliga)
-  const vlinesOn = b.hideVLines !== true;
   tablePanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Tabela</div>
-    <div class="swrow"><span>Linhas Verticais</span>
-      <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>
-    <div class="swrow"><span>Linhas alternadas</span>
-      <button type="button" class="sw" data-a="alt" role="switch" aria-checked="${!!b.altRows}"></button></div>
-    <div class="field">Cor do cabeçalho
-      <button type="button" class="swatch" data-a="headerColor" title="Cor do cabeçalho"
-        style="background:${headerColor};width:100%;height:2rem;border-radius:6px;border:1px solid var(--hair)"></button>
-    </div>
+    ${tableStyleFieldsHtml(b)}
     <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
   tablePanel.hidden = false;
 
   const paintTable = () => {
     const host = pagesEl.querySelector(`.tbl-wrap[data-id="${b.id}"]`);
-    const tbl = host && host.querySelector('table.tbl');
-    if (!tbl) return;
-    tbl.classList.toggle('no-vlines', b.hideVLines === true);
-    tbl.classList.toggle('alt-rows', !!b.altRows);
-    tbl.style.setProperty('--tbl-header-bg', b.headerColor || '#F1F1F4');
-    // reaplica fundo nas células de cabeçalho sem rebuild completo
-    tbl.querySelectorAll('th, .tbl-head-cell').forEach((cell) => {
-      cell.style.background = b.headerColor || '#F1F1F4';
-    });
-    if (b.altRows) {
-      [...tbl.rows].forEach((tr, r) => {
-        const isHead = b.headerRow !== false && r === 0;
-        tr.classList.toggle('alt', !isHead && r % 2 === 0);
-      });
-    } else {
-      tbl.querySelectorAll('tr.alt').forEach((tr) => tr.classList.remove('alt'));
-    }
+    if (host) applyTableChrome(host, b);
   };
-
-  tablePanel.querySelectorAll('.sw[data-a]').forEach((sw) => {
-    sw.addEventListener('mousedown', (e) => e.preventDefault());
-    sw.addEventListener('click', () => {
-      const on = sw.getAttribute('aria-checked') !== 'true';
-      sw.setAttribute('aria-checked', String(on));
-      // vlines ON = mostrar linhas → hideVLines false
-      if (sw.dataset.a === 'vlines') b.hideVLines = !on;
-      else if (sw.dataset.a === 'alt') b.altRows = on;
-      if (sw.dataset.a === 'alt' || sw.dataset.a === 'vlines') {
-        paintTable();
-        save(); scheduleCommit();
-      }
-    });
-  });
-  const swatchBtn = tablePanel.querySelector('[data-a="headerColor"]');
-  swatchBtn.addEventListener('mousedown', (e) => e.preventDefault());
-  swatchBtn.addEventListener('click', () => {
-    openSwatchPop(swatchBtn, (color) => {
-      b.headerColor = color;
-      swatchBtn.style.background = color;
-      paintTable();
-      save(); scheduleCommit();
-    }, b.headerColor || '#F1F1F4', { paper: true });
+  wireTableStyleControls(tablePanel, b, {
+    paint: paintTable,
+    after: () => { save(); scheduleCommit(); },
   });
   tablePanel.querySelector('[data-a="del"]').addEventListener('click', () => {
     tableCtx.removeBlock(b.id);
@@ -1366,6 +1549,7 @@ function openImageGridPanel() {
   imageGridPanelDismissed = false;
   closeImgPanel();
   closeTablePanel();
+  closeTableGridPanel();
   if (!imageGridPanel) {
     imageGridPanel = document.createElement('div');
     imageGridPanel.id = 'imageGridPanel';
@@ -1600,6 +1784,273 @@ function updateImageGridBar() {
   }
 }
 
+// ── popover do Grid de Tabelas (gap, equal, colunas — edição de célula na modal) ─
+let tableGridPanel;
+let tableGridPanelDismissed = false;
+function activeTableGridBlock() {
+  const b = state.activeId && blockOf(state.activeId);
+  if (b && b.type === 'table-grid') return b;
+  if (state.sel) {
+    const f = findCoverItem(state.sel);
+    if (f && f.item.type === 'table-grid') return f.item;
+  }
+  return null;
+}
+function closeTableGridPanel() { if (tableGridPanel) tableGridPanel.hidden = true; }
+function openTableGridPanel() {
+  const b = activeTableGridBlock();
+  if (!b || !editing) { closeTableGridPanel(); return; }
+  ensureTableGrid(b);
+  tableGridPanelDismissed = false;
+  closeImgPanel();
+  closeTablePanel();
+  closeImageGridPanel();
+  if (!tableGridPanel) {
+    tableGridPanel = document.createElement('div');
+    tableGridPanel.id = 'tableGridPanel';
+    document.body.appendChild(tableGridPanel);
+  }
+  tableGridPanel.dataset.gid = b.id;
+  const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
+  const n = b.items.length;
+  const equal = tableGridEqualModeOf(b);
+  const gap = tableGridGapOf(b);
+  const mioloGrid = !!(state.activeId && blockOf(state.activeId)?.id === b.id);
+  tableGridPanel.innerHTML = `
+    <div class="eyebrow" style="margin:0">Grid de Tabelas</div>
+    ${mioloGrid ? `<div class="field">Largura<div data-slot="place"></div></div>` : ''}
+    <div class="field">Igualar por<div data-slot="equal"></div></div>
+    <div class="field"><span class="field-row">Colunas do grid</span>
+      <div class="numstep" data-role="cols">
+        <button type="button" data-a="col-" ${n <= 1 ? 'disabled' : ''} title="Menos colunas" aria-label="Menos colunas">−</button>
+        <span class="numstep-val" data-role="coln">${n}</span>
+        <button type="button" data-a="col+" ${n >= TABLE_GRID_MAX ? 'disabled' : ''} title="Mais colunas" aria-label="Mais colunas">+</button>
+      </div>
+    </div>
+    <label class="field"><span class="field-row">Espaço entre colunas <span class="field-val"><span data-role="gapv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${gap}</span>px<button type="button" class="resetbtn" data-a="gapreset" title="Redefinir para ${TABLE_GRID_GAP}px">↺</button></span></span>
+      <input type="range" data-a="gap" min="0" max="${TABLE_GRID_GAP_MAX}" step="1" value="${gap}" data-snaps="0,4,8,12,16,24,32,48" data-edit="off">
+    </label>
+    <p class="hint" style="margin:0;font-size:.72rem;opacity:.8">Clique numa tabela para editar</p>
+    <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
+  tableGridPanel.hidden = false;
+
+  const reopen = () => {
+    render();
+    if (state.activeId === b.id || state.sel === b.id) openTableGridPanel();
+  };
+
+  const placeSlot = tableGridPanel.querySelector('[data-slot="place"]');
+  if (placeSlot) {
+    const pl = placementOf(b) === 'full' ? 'full' : 'inline';
+    placeSlot.append(widthSeg(pl, [
+      { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
+      { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
+    ], (v) => {
+      setBlockPlacement(b.id, v);
+      if (state.activeId === b.id) openTableGridPanel();
+    }));
+  }
+
+  const EQ_W_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h12M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg>';
+  const EQ_H_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M4.5 5.5 8 2l3.5 3.5M4.5 10.5 8 14l3.5-3.5"/></svg>';
+  tableGridPanel.querySelector('[data-slot="equal"]').append(
+    widthSeg(equal, [
+      { val: 'width', label: 'Largura (colunas iguais)', icon: EQ_W_ICO },
+      { val: 'height', label: 'Altura (mesma altura)', icon: EQ_H_ICO },
+    ], (v) => {
+      b.equal = v === 'height' ? 'height' : 'width';
+      if (b.equal === 'width') delete b.equal;
+      reopen();
+    }));
+
+  const gapv = tableGridPanel.querySelector('[data-role="gapv"]');
+  const paintGap = (raw, { reflow = false, syncText = true } = {}) => {
+    const g = clampTableGridGap(raw);
+    if (g === TABLE_GRID_GAP) delete b.gap;
+    else b.gap = g;
+    if (syncText && gapv && document.activeElement !== gapv) gapv.textContent = String(g);
+    const range = tableGridPanel.querySelector('input[data-a="gap"]');
+    if (range && document.activeElement !== range) range.value = String(g);
+    if (reflow) reopen();
+    else {
+      const grid = pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"] .tblgrid`);
+      if (grid) grid.style.columnGap = g + 'px';
+      save(); scheduleCommit();
+    }
+  };
+  if (gapv) {
+    wireFieldEditKeys(gapv, {
+      onInput: (raw) => {
+        const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+        if (!Number.isFinite(n)) return;
+        paintGap(n, { reflow: false, syncText: false });
+      },
+      onCommit: (raw) => {
+        const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+        paintGap(Number.isFinite(n) ? n : tableGridGapOf(b), { reflow: true, syncText: true });
+        gapv.textContent = String(tableGridGapOf(b));
+      },
+      onCancel: () => {
+        gapv.textContent = String(tableGridGapOf(b));
+        paintGap(tableGridGapOf(b), { reflow: false, syncText: true });
+      },
+    });
+  }
+
+  tableGridPanel.querySelectorAll('.resetbtn').forEach((btn) => {
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+  });
+  enhanceAll(tableGridPanel);
+
+  tableGridPanel.querySelectorAll('button[data-a], input[data-a]').forEach((el) => {
+    const isRange = el.type === 'range';
+    el.addEventListener(isRange ? 'input' : 'click', () => {
+      const a = el.dataset.a;
+      if (a === 'gap') { paintGap(+el.value, { reflow: false }); return; }
+      if (a === 'gapreset') { paintGap(TABLE_GRID_GAP, { reflow: true }); return; }
+      if (a === 'col+') {
+        if (b.items.length < TABLE_GRID_MAX) { setTableGridCols(b, b.items.length + 1); reopen(); }
+        return;
+      }
+      if (a === 'col-') {
+        if (b.items.length > 1) { setTableGridCols(b, b.items.length - 1); reopen(); }
+        return;
+      }
+      if (a === 'del') {
+        tableGridCtx.removeBlock(b.id);
+        closeTableGridPanel();
+      }
+    });
+  });
+  const gapRange = tableGridPanel.querySelector('input[data-a="gap"]');
+  if (gapRange) {
+    gapRange.addEventListener('change', () => paintGap(+gapRange.value, { reflow: true }));
+  }
+  positionTableGridPanel();
+}
+function positionTableGridPanel() {
+  if (!tableGridPanel || tableGridPanel.hidden) return;
+  const b = activeTableGridBlock();
+  const el = b && pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"]`);
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const pw = tableGridPanel.offsetWidth || 220, ph = tableGridPanel.offsetHeight || 200;
+  let x = r.right + 10;
+  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
+  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
+  tableGridPanel.style.left = x + 'px'; tableGridPanel.style.top = y + 'px';
+}
+function updateTableGridBar() {
+  const b = activeTableGridBlock();
+  if (b && editing) {
+    if (tableGridPanelDismissed && tableGridPanel && tableGridPanel.dataset.gid === b.id) {
+      if (!tableGridPanel.hidden) positionTableGridPanel();
+      return;
+    }
+    if (!tableGridPanel || tableGridPanel.hidden || tableGridPanel.dataset.gid !== b.id) openTableGridPanel();
+    else positionTableGridPanel();
+  } else {
+    tableGridPanelDismissed = false;
+    closeTableGridPanel();
+  }
+}
+
+// ── modal de edição de uma tabela do grid ───────────────────────────────────
+// tableEditTarget = { blockId, itemIndex } enquanto a modal está aberta
+let tableEditTarget = null;
+function openTableEditModal(blockId, itemIndex) {
+  const cov = findCoverItem(blockId);
+  const host = cov ? cov.item : blockOf(blockId);
+  if (!host || host.type !== 'table-grid') return;
+  ensureTableGrid(host);
+  const i = itemIndex | 0;
+  if (i < 0 || i >= host.items.length) return;
+  tableEditTarget = { blockId, itemIndex: i };
+  const it = host.items[i];
+  ensureTable(it);
+
+  const modal = document.getElementById('tableEditModal');
+  const hostEl = document.getElementById('tmTableHost');
+  const sideEl = document.getElementById('tmSide');
+  const titleEl = document.getElementById('tmTitle');
+  if (!modal || !hostEl || !sideEl) return;
+
+  if (titleEl) titleEl.textContent = `Editar tabela ${i + 1}`;
+  sideEl.innerHTML = `
+    <div class="eyebrow" style="margin:0">Estilo</div>
+    ${tableStyleFieldsHtml(it)}`;
+  const modalCtx = {
+    commit: () => { save(); scheduleCommit(); },
+    rerender: () => {
+      // rebuild só o conteúdo da modal (estrutura mudou)
+      const keep = tableEditTarget;
+      if (!keep) return;
+      openTableEditModal(keep.blockId, keep.itemIndex);
+    },
+  };
+  // largura generosa na modal (≈ 2 colunas da página)
+  const modalW = Math.min(640, Math.max(360, (innerWidth * 0.55) | 0));
+  hostEl.replaceChildren(buildTableEl(it, true, modalCtx, modalW));
+  // id sintético pra focusCell / chrome
+  const wrap = hostEl.querySelector('.tbl-wrap');
+  if (wrap) wrap.dataset.id = `__tm_${blockId}_${i}`;
+
+  wireTableStyleControls(sideEl, it, {
+    paint: () => {
+      const w = hostEl.querySelector('.tbl-wrap');
+      if (w) applyTableChrome(w, it);
+    },
+    after: () => { save(); scheduleCommit(); },
+  });
+
+  modal.hidden = false;
+  // foca a 1ª célula
+  requestAnimationFrame(() => {
+    const cell = hostEl.querySelector('th, td');
+    if (cell) cell.focus();
+  });
+}
+function closeTableEditModal() {
+  const modal = document.getElementById('tableEditModal');
+  if (modal) modal.hidden = true;
+  const target = tableEditTarget;
+  tableEditTarget = null;
+  if (target) {
+    // re-render da página pra refletir a tabela editada
+    render();
+    const cov = findCoverItem(target.blockId);
+    if (cov) {
+      selectCoverItem(target.blockId);
+    } else {
+      state.activeId = target.blockId;
+      state.sel = null;
+      tableGridPanelDismissed = false;
+      updateTableGridBar();
+      paintActiveBlock(target.blockId);
+      showHandleAtFocused();
+      syncTypeUI('table-grid');
+    }
+  }
+}
+function initTableEditModal() {
+  const modal = document.getElementById('tableEditModal');
+  if (!modal || modal.dataset.ready) return;
+  modal.dataset.ready = '1';
+  document.getElementById('tmClose')?.addEventListener('click', closeTableEditModal);
+  modal.querySelector('.cm-backdrop')?.addEventListener('click', closeTableEditModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal && !modal.hidden) {
+      e.preventDefault();
+      closeTableEditModal();
+    }
+  });
+}
+// init cedo (DOM já montado — script no fim do body via type=module)
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTableEditModal);
+  else initTableEditModal();
+}
+
 // escala da imagem no popover: 10–100 (default 100 = ocupa a largura máxima da coluna).
 // Nunca > 100 — só permite reduzir, nunca esticar além da coluna.
 // Decimais com step 0.1 (digitáveis com "." ou "," via range-snap).
@@ -1743,18 +2194,26 @@ const imageGridCtx = {
   applyCaptionStyle: (el, mode = 'default') => applyCaptionFace(el, mode),
 };
 
+// Grid de tabelas: edição de cada célula na modal (openTableEditor).
+const tableGridCtx = {
+  commit: () => { save(); scheduleCommit(); },
+  rerender: () => render(),
+  removeBlock: (id) => tableCtx.removeBlock(id),
+  openTableEditor: (blockId, itemIndex) => openTableEditModal(blockId, itemIndex),
+};
+
 // bloco genérico (usado na medição e no fluxo da coluna esquerda / largura total)
 function buildBlock(b, editing) {
   const el = buildBlockEl(b, editing);
-  // largura da faixa: 'full' escapa da coluna (499px). image-grid precisa do width
-  // explícito também em inline (o builder calcula frames com colW; zerar aqui
-  // quebrava o layout em 1 coluna). tabela zera pro container herdar.
+  // largura da faixa: 'full' escapa da coluna (499px). image-grid / table-grid precisam
+  // do width explícito também em inline (builders calculam com colW). tabela avulsa
+  // zera pro container herdar.
   // z-index no full: overflow (499px) fica acima da .col-right pra clique/drag.
   if (placementOf(b) === 'full') {
     el.style.width = COL_FULL + 'px';
     if (!el.style.position || el.style.position === 'static') el.style.position = 'relative';
     el.style.zIndex = '2';
-  } else if (b.type === 'image-grid') {
+  } else if (b.type === 'image-grid' || b.type === 'table-grid') {
     el.style.width = colL() + 'px';
   } else {
     el.style.width = '';
@@ -1782,10 +2241,17 @@ function buildBlockEl(b, editing) {
     d.innerHTML = '<span class="e-pbreak-lbl">QUEBRA DE PÁGINA</span>';
     return d;
   }
-  if (b.type === 'table') return buildTableEl(b, editing, tableCtx);   // trilha B (t6)
+  if (b.type === 'table') {
+    const colW = placementOf(b) === 'full' ? COL_FULL : colL();
+    return buildTableEl(b, editing, tableCtx, colW);
+  }
   if (b.type === 'image-grid') {
     const colW = placementOf(b) === 'full' ? COL_FULL : colL();
     return buildImageGridEl(b, editing, imageGridCtx, colW);
+  }
+  if (b.type === 'table-grid') {
+    const colW = placementOf(b) === 'full' ? COL_FULL : colL();
+    return buildTableGridEl(b, editing, tableGridCtx, colW);
   }
   if (b.type === 'icon') return buildIconBlock(b, editing);
   return buildText(b, editing);
@@ -1830,7 +2296,7 @@ function buildIconBlock(b, editing) {
 function numberLists() {
   let counters = [];
   for (const b of state.doc.blocks) {
-    if (b.type === 'image' || b.type === 'image-grid' || b.type === 'icon') continue;
+    if (b.type === 'image' || b.type === 'image-grid' || b.type === 'table-grid' || b.type === 'icon') continue;
     if (!LIST_TYPES.has(b.type)) {
       counters = [];
       continue;
@@ -2025,6 +2491,7 @@ function render(caret /* optional {id,offset,role} */) {
   updateHeadBar();
   updateTableBar();
   updateImageGridBar();
+  updateTableGridBar();
   updateTextPlaceBar();
   {
     const ab = state.activeId && blockOf(state.activeId);
@@ -2656,8 +3123,8 @@ function buildCoverItem(kind, it) {
     el.appendChild(d);
     return el;
   }
-  // ── tabela / grid de imagens / lista / check / callout — reusa o builder do miolo ──
-  if (type === 'table' || type === 'image-grid' || type === 'li' || type === 'ol' || type === 'check' || type === 'callout') {
+  // ── tabela / grid de imagens|tabelas / lista / check / callout — reusa o builder do miolo ──
+  if (type === 'table' || type === 'image-grid' || type === 'table-grid' || type === 'li' || type === 'ol' || type === 'check' || type === 'callout') {
     if (type === 'ol' || type === 'li') {
       // numberLists() só roda no miolo — na capa, um item isolado vira "1." / "•"
       if (it._num == null) it._num = 1;
@@ -2669,6 +3136,10 @@ function buildCoverItem(kind, it) {
     if (type === 'image-grid') {
       const boxW = box.width;
       el.appendChild(buildImageGridEl(it, editing, imageGridCtx, boxW));
+    } else if (type === 'table-grid') {
+      el.appendChild(buildTableGridEl(it, editing, tableGridCtx, box.width));
+    } else if (type === 'table') {
+      el.appendChild(buildTableEl(it, editing, tableCtx, box.width));
     } else {
       el.appendChild(buildBlockEl(it, editing));
     }
@@ -2952,7 +3423,7 @@ pagesEl.addEventListener('keydown', (e) => {
     if (!f) return;
     const type = coverTypeOf(f.item);
     // tabela tem o próprio Enter (próxima célula); imagem/grid/divisor sem enter→novo bloco
-    if (type === 'table' || type === 'image' || type === 'image-grid' || type === 'divider') return;
+    if (type === 'table' || type === 'image' || type === 'image-grid' || type === 'table-grid' || type === 'divider') return;
     if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
       document.execCommand('insertLineBreak');
@@ -3248,7 +3719,7 @@ const slash = initSlashMenu({
     if (def.type === 'pagebreak' || def.type === 'divider' || def.type === 'image') {
       render({ id: b.id, role: 'block', offset: 0 });   // limpa o DOM e devolve o caret ao bloco vazio
       if (def.type === 'image') addImageViaPalette(); else insertSeparatorButton(def.type);
-    } else if (def.type === 'table' || def.type === 'image-grid' || def.type === 'icon') {
+    } else if (def.type === 'table' || def.type === 'image-grid' || def.type === 'table-grid' || def.type === 'icon') {
       // estrutural: nunca converte o bloco ("/table" já limpo; insertBlockAfter faz o resto)
       insertBlockAfter(def.type);
     } else {
@@ -3292,15 +3763,17 @@ function applyCoverItemType(it, type) {
   // limpa campos de outros tipos
   delete it.src; delete it.nw; delete it.nh; delete it.radius; delete it.chart;
   delete it.rows; delete it.colWidths; delete it.headerColor; delete it.hideVLines;
-  delete it.items; delete it.equal; delete it.fill; delete it.size; delete it.color;
+  delete it.borderOuter; delete it.borderInner; delete it.altRows; delete it.headerRow; delete it.headerCol;
+  delete it.items; delete it.equal; delete it.fill; delete it.size; delete it.color; delete it.gap;
   delete it.checked; delete it.icon; delete it.iconSet; delete it.iconStyle; delete it.iconColor; delete it.iconFill;
   it.type = type;
   it.html = '';
   if (type === 'table') {
-    // buildTableEl semeia rows no primeiro render se vazio
-    it.rows = null;
+    ensureTable(it);
   } else if (type === 'image-grid') {
     ensureImageGrid(it);
+  } else if (type === 'table-grid') {
+    ensureTableGrid(it);
   } else if (type === 'icon') {
     it.icon = DEFAULT_MS_ICON;
     it.color = DEFAULT_MS_COLOR;
@@ -3474,6 +3947,7 @@ pagesEl.addEventListener('focusin', (e) => {
   updateCalloutBar();                      // barra flutuante do callout — só aparece se b.type==='callout'
   if (b.type === 'table') tablePanelDismissed = false; // re-focar célula reabre o popover
   if (b.type === 'image-grid') imageGridPanelDismissed = false;
+  if (b.type === 'table-grid') tableGridPanelDismissed = false;
   if (TEXT_PLACE_TYPES.has(b.type)) textPlacePanelDismissed = false;
   // painel de ícone: bloco type=icon OU qualquer heading (H1–H4) — não fechar o de título
   if (b.type === 'icon' || HEAD_TYPES.has(b.type)) {
@@ -3484,6 +3958,7 @@ pagesEl.addEventListener('focusin', (e) => {
   }
   updateTableBar();
   updateImageGridBar();
+  updateTableGridBar();
   updateTextPlaceBar();
   syncColUI();                             // coluna do bloco ativo na aba Conteúdo
 });
@@ -3560,7 +4035,9 @@ pagesEl.addEventListener('mousedown', (e) => {
   const divider = e.target.closest && e.target.closest('.divider.b');
   const pbreak = e.target.closest && e.target.closest('.e-pbreak');   // bug: nunca era selecionável → Backspace não achava o quê remover
   const callout = e.target.closest && e.target.closest('.callout.b');
-  const tbl = e.target.closest && e.target.closest('.tbl-wrap.b');
+  const tblgrid = e.target.closest && e.target.closest('.tblgrid-wrap.b');
+  // tabela avulsa (não preview dentro do grid de tabelas)
+  const tbl = e.target.closest && e.target.closest('.tbl-wrap.b:not(.tblgrid-preview)');
   const imggrid = e.target.closest && e.target.closest('.imggrid-wrap.b');
   const iconBlk = e.target.closest && e.target.closest('.icon-block.b');
   const headWrap = e.target.closest && e.target.closest('.head-wrap.b');
@@ -3573,6 +4050,8 @@ pagesEl.addEventListener('mousedown', (e) => {
   } else if (callout) {
     // qualquer parte do callout (ícone, padding, texto) seleciona e mostra a #calloutBar
     selectBlockFromHandle(callout.dataset.id);
+  } else if (tblgrid) {
+    selectBlockFromHandle(tblgrid.dataset.id);
   } else if (tbl) {
     // clique na moldura/célula da tabela → ativo + popover lateral (célula ainda recebe o focusin)
     selectBlockFromHandle(tbl.dataset.id);
@@ -3827,6 +4306,7 @@ function selectBlockFromHandle(id) {
     updateCalloutBar();
     if (b.type === 'table') tablePanelDismissed = false;
     if (b.type === 'image-grid') imageGridPanelDismissed = false;
+    if (b.type === 'table-grid') tableGridPanelDismissed = false;
     if (TEXT_PLACE_TYPES.has(b.type)) textPlacePanelDismissed = false;
     // não fechar o painel de ícone de título (bug: close antes de updateHeadBar)
     if (b.type === 'icon' || HEAD_TYPES.has(b.type)) {
@@ -3837,6 +4317,7 @@ function selectBlockFromHandle(id) {
     }
     updateTableBar();
     updateImageGridBar();
+    updateTableGridBar();
     updateTextPlaceBar();
     showHandleAtFocused();
   }
@@ -4186,6 +4667,7 @@ function openImgPanel() {
   if (!b || b.type !== 'image') return;
   closeTablePanel();
   closeImageGridPanel();
+  closeTableGridPanel();
   if (!imgPanel) {
     imgPanel = document.createElement('div');
     imgPanel.id = 'imgPanel';
@@ -4432,6 +4914,7 @@ function rightLayerLabel(b) {
   if (b.type === 'icon') return 'Ícone';
   if (b.type === 'table') return 'Tabela';
   if (b.type === 'image-grid') return 'Grid de imagens';
+  if (b.type === 'table-grid') return 'Grid de tabelas';
   if (b.type === 'callout') return 'Callout';
   if (HEAD_TYPES.has(b.type)) return b.type.toUpperCase();
   const raw = stripHtml(b.html || '').replace(/\s+/g, ' ').trim();
@@ -4587,7 +5070,7 @@ document.addEventListener('mousedown', (e) => {
   const t = e.target;
   if (!(t && t.closest)) return;
   // âncoras e popovers que devem permanecer abertos
-  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit, #rightLayerMenu')) return;
+  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit, #rightLayerMenu, #tableEditModal')) return;
   if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu')) return;
   if (t.closest('#btnPrint, #zoomPct, #zoomFit, #bhandle, #badd')) return;
   // imagem: clicar fora limpa a seleção (fecha o painel)
@@ -4595,7 +5078,8 @@ document.addEventListener('mousedown', (e) => {
     setImgSel(null);
   }
   // tabela: fecha o painel sem matar o activeId (continua editável); reabre ao re-focar
-  if (tablePanel && !tablePanel.hidden && !t.closest('.tbl-wrap')) {
+  // (não fecha se o clique foi no preview de um grid de tabelas — tem .tbl-wrap interno)
+  if (tablePanel && !tablePanel.hidden && !t.closest('.tbl-wrap:not(.tblgrid-preview)') && !t.closest('.tblgrid-wrap')) {
     tablePanelDismissed = true;
     closeTablePanel();
   }
@@ -4603,6 +5087,11 @@ document.addEventListener('mousedown', (e) => {
   if (imageGridPanel && !imageGridPanel.hidden && !t.closest('.imggrid-wrap')) {
     imageGridPanelDismissed = true;
     closeImageGridPanel();
+  }
+  // grid de tabelas
+  if (tableGridPanel && !tableGridPanel.hidden && !t.closest('.tblgrid-wrap')) {
+    tableGridPanelDismissed = true;
+    closeTableGridPanel();
   }
   // parágrafo: painel de Largura (1/2 cols)
   if (textPlacePanel && !textPlacePanel.hidden) {
@@ -4748,7 +5237,7 @@ function selectCoverItem(cid) {
   pagesEl.querySelectorAll('.imgsel,.divsel,.cover-sel,.active-block').forEach(el => {
     el.classList.remove('imgsel', 'divsel', 'cover-sel', 'active-block');
   });
-  closeImgPanel(); closeLogoPanel(); closeTablePanel();
+  closeImgPanel(); closeLogoPanel(); closeTablePanel(); closeTableGridPanel();
   const el = pagesEl.querySelector(`.cover-item[data-cid="${cid}"]`);
   if (el) el.classList.add('cover-sel');
   openCoverPanel();
@@ -4765,6 +5254,10 @@ function selectCoverItem(cid) {
   if (f?.item?.type === 'image-grid') {
     imageGridPanelDismissed = false;
     updateImageGridBar();
+  }
+  if (f?.item?.type === 'table-grid') {
+    tableGridPanelDismissed = false;
+    updateTableGridBar();
   }
   showHandleAtFocused();                   // alça de arraste fica visível no bloco selecionado
 }
@@ -4797,7 +5290,7 @@ const COVER_TYPE_LABEL = {
   // antigo e o fallback quando type vinha errado/ausente.
   p: 'Texto', quote: 'Citação',
   li: 'Lista de Pontos', ol: 'Lista Numérica', check: 'Checklist', callout: 'Callout',
-  image: 'Imagem', 'image-grid': 'Grid de Imagens', table: 'Tabela', divider: 'Divisor',
+  image: 'Imagem', 'image-grid': 'Grid de Imagens', 'table-grid': 'Grid de Tabelas', table: 'Tabela', divider: 'Divisor',
 };
 function openCoverPanel() {
   const f = findCoverItem(state.sel); if (!f) return;
@@ -5620,6 +6113,10 @@ function toMarkdown() {
           const line = `![${withT ? (strip(it.title) || '') : ''}](imagem)`;
           return withC && it.caption ? line + `\n*${strip(it.caption)}*` : line;
         }).filter(Boolean).join('\n\n');
+      }
+      case 'table-grid': {
+        ensureTableGrid(b);
+        return b.items.map((it) => tableMd(it.rows, strip)).filter(Boolean).join('\n\n');
       }
       case 'icon': return `:${normalizeMaterialName(b.icon) || 'icon'}:`;
       default: return strip(b.html);
@@ -6646,7 +7143,7 @@ document.querySelectorAll('#blocktypes button[data-type]').forEach(btn => {
     }
     // trilha G (bug): tabela/grid/ícone são ESTRUTURAIS — clicar com um parágrafo/título
     // selecionado NÃO pode converter (destruiria o texto). Sempre insere depois.
-    if (t === 'table' || t === 'image-grid' || t === 'icon') return insertBlockAfter(t);
+    if (t === 'table' || t === 'image-grid' || t === 'table-grid' || t === 'icon') return insertBlockAfter(t);
     setActiveType(t);
   });
 });
@@ -7011,7 +7508,7 @@ function openTextPlacePanel() {
   const b = state.activeId && blockOf(state.activeId);
   if (!b || !editing || !TEXT_PLACE_TYPES.has(b.type)) { closeTextPlacePanel(); return; }
   textPlacePanelDismissed = false;
-  closeImgPanel(); closeTablePanel(); closeImageGridPanel();
+  closeImgPanel(); closeTablePanel(); closeImageGridPanel(); closeTableGridPanel();
   // não fecha iconPanel (não compete com p)
   if (!textPlacePanel) {
     textPlacePanel = document.createElement('div');
@@ -7119,8 +7616,8 @@ function isEmptyTextBlock(b) {
   return !stripHtml(b.html).replace(/\s+/g, ' ').trim();
 }
 
-// trilha G: caminho pros tipos ESTRUTURAIS ('table', 'image-grid', 'icon' — image/divider/
-// pagebreak já inserem-depois pelas próprias funções acima).
+// trilha G: caminho pros tipos ESTRUTURAIS ('table', 'image-grid', 'table-grid', 'icon' —
+// image/divider/pagebreak já inserem-depois pelas próprias funções acima).
 // Com texto real no ativo: NUNCA converte (inserir depois). Com placeholder vazio: substitui.
 function insertBlockAfter(t) {
   const coverKind = activeCoverKind();
@@ -7141,6 +7638,10 @@ function insertBlockAfter(t) {
     imageGridPanelDismissed = false;
     updateImageGridBar();
   }
+  if (t === 'table-grid') {
+    tableGridPanelDismissed = false;
+    updateTableGridBar();
+  }
   if (t === 'icon') {
     paintActiveBlock(nb.id);
     openIconBlockPanel();
@@ -7160,7 +7661,7 @@ function openIconBlockPanel() {
     : (HEAD_TYPES.has(b.type) ? 'head' : null);
   if (!mode) { closeIconBlockPanel(); return; }
 
-  closeImgPanel(); closeTablePanel(); closeImageGridPanel(); closeTextPlacePanel();
+  closeImgPanel(); closeTablePanel(); closeImageGridPanel(); closeTableGridPanel(); closeTextPlacePanel();
   if (!iconPanel) {
     iconPanel = document.createElement('div');
     iconPanel.id = 'iconPanel';
@@ -9771,6 +10272,7 @@ stage.addEventListener('scroll', () => {
   if (!calloutBar.hidden) updateCalloutBar();   // reposiciona (não esconde) — mesmo tratamento do fmtbar
   if (tablePanel && !tablePanel.hidden) positionTablePanel();
   if (imageGridPanel && !imageGridPanel.hidden) positionImageGridPanel();
+  if (tableGridPanel && !tableGridPanel.hidden) positionTableGridPanel();
   if (textPlacePanel && !textPlacePanel.hidden) positionTextPlacePanel();
   if (iconPanel && !iconPanel.hidden) positionIconBlockPanel();
   if (imgPanel && !imgPanel.hidden) positionImgPanel();
@@ -9785,6 +10287,7 @@ stage.addEventListener('scroll', () => {
 addEventListener('resize', () => {
   if (tablePanel && !tablePanel.hidden) positionTablePanel();
   if (imageGridPanel && !imageGridPanel.hidden) positionImageGridPanel();
+  if (tableGridPanel && !tableGridPanel.hidden) positionTableGridPanel();
   if (textPlacePanel && !textPlacePanel.hidden) positionTextPlacePanel();
   if (iconPanel && !iconPanel.hidden) positionIconBlockPanel();
   if (imgPanel && !imgPanel.hidden) positionImgPanel();

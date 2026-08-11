@@ -1090,6 +1090,9 @@
      (todas as colunas reservam o espaço, inclusive placeholder vazio) */
   .page .imggrid-wrap { margin: 0; --b-gap: 10px; }
   .page .imggrid-wrap .imggrid { width: 100%; min-width: 0; }
+  .page .tblgrid-wrap { margin: 0; --b-gap: 10px; }
+  .page .tblgrid-wrap .tblgrid { width: 100%; min-width: 0; }
+  .page.cover-page .cover-item > .tblgrid-wrap { width: 100%; max-width: 100%; }
   /* células usam display:contents (JS) — filhos entram no grid pai e alinham por linha */
   .page .imggrid-wrap .imggrid-cell { min-width: 0; }
   .page .imggrid-wrap .figtitle {
@@ -1308,13 +1311,13 @@
   #fmtbar.caption-mode .sep { display: none; }
 
   /* menus flutuantes: adicionar imagem (clique na coluna direita) + editar imagem selecionada */
-  #addImgMenu, #imgPanel, #tablePanel, #imageGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #downloadMenu, #blockStylePanel, #idxPanel, #resumoPanel {
+  #addImgMenu, #imgPanel, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #downloadMenu, #blockStylePanel, #idxPanel, #resumoPanel {
     position: fixed; z-index: 40; display: grid; gap: .55rem; width: 232px;
     padding: .7rem; border: 1px solid var(--hair-strong); border-radius: 10px;
     background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
     box-shadow: 0 16px 50px -16px #000;
   }
-  #addImgMenu[hidden], #imgPanel[hidden], #tablePanel[hidden], #imageGridPanel[hidden], #iconPanel[hidden], #textPlacePanel[hidden], #coverPanel[hidden], #logoPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden],
+  #addImgMenu[hidden], #imgPanel[hidden], #tablePanel[hidden], #imageGridPanel[hidden], #tableGridPanel[hidden], #iconPanel[hidden], #textPlacePanel[hidden], #coverPanel[hidden], #logoPanel[hidden], #downloadMenu[hidden], #blockStylePanel[hidden],
   #idxPanel[hidden], #resumoPanel[hidden] { display: none; }
   /* menu de camadas da coluna direita (botão direito) — reusa .float-menu do paradigma.css */
   #rightLayerMenu {
@@ -1369,22 +1372,23 @@
   #iconPanel .icon-pick-btn .material-symbols-outlined { font-size: 22px; color: inherit; }
   #imageGridPanel .img-tc-row { flex-wrap: nowrap; gap: .4rem; }
   #imageGridPanel .img-tc-row .fieldbtn { flex: 1; min-width: 0; justify-content: center; }
-  #imageGridPanel button:disabled { opacity: .4; cursor: default; }
-  /* stepper de colunas: [−] n [+] */
-  #imageGridPanel .numstep {
+  #imageGridPanel button:disabled, #tableGridPanel button:disabled { opacity: .4; cursor: default; }
+  /* stepper de colunas: [−] n [+] — image-grid e table-grid */
+  #imageGridPanel .numstep, #tableGridPanel .numstep {
     display: flex; align-items: stretch; gap: 0;
     border: 1px solid var(--hair); border-radius: var(--ctrl-r);
     overflow: hidden; height: var(--ctrl-h); background: color-mix(in srgb, var(--lilac) 6%, transparent);
   }
-  #imageGridPanel .numstep button {
+  #imageGridPanel .numstep button, #tableGridPanel .numstep button {
     width: 2rem; border: 0; background: transparent; color: var(--ink);
     cursor: pointer; font-size: 1rem; line-height: 1; flex: none;
   }
-  #imageGridPanel .numstep button:hover:not(:disabled) {
+  #imageGridPanel .numstep button:hover:not(:disabled),
+  #tableGridPanel .numstep button:hover:not(:disabled) {
     background: color-mix(in srgb, var(--violet) 16%, transparent);
   }
-  #imageGridPanel .numstep button:disabled { opacity: .35; cursor: default; }
-  #imageGridPanel .numstep-val {
+  #imageGridPanel .numstep button:disabled, #tableGridPanel .numstep button:disabled { opacity: .35; cursor: default; }
+  #imageGridPanel .numstep-val, #tableGridPanel .numstep-val {
     flex: 1; display: flex; align-items: center; justify-content: center;
     font-size: .85rem; font-stretch: 90%; font-weight: 600; color: var(--ink);
     border-left: 1px solid var(--hair); border-right: 1px solid var(--hair);
@@ -1559,6 +1563,52 @@
   #chartModal .cm-bar button:hover { background: color-mix(in srgb, var(--lilac) 14%, transparent); color: var(--ink); }
   #chartModal iframe { flex: 1; width: 100%; border: 0; background: var(--ground); }
 
+  /* modal de edição de tabela do grid */
+  #tableEditModal { position: fixed; inset: 0; z-index: 60; }
+  #tableEditModal[hidden] { display: none; }
+  #tableEditModal .cm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+  #tableEditModal .cm-panel {
+    position: absolute; inset: 6vh auto; left: 50%; transform: translateX(-50%);
+    width: min(960px, 92vw); height: min(80vh, 720px);
+    display: flex; flex-direction: column;
+    background: var(--ground); border: 1px solid var(--hair-strong); border-radius: 12px; overflow: hidden;
+    box-shadow: 0 30px 80px -20px #000;
+  }
+  #tableEditModal .cm-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: .55rem .8rem; border-bottom: 1px solid var(--hair);
+    font-size: .78rem; font-weight: 600; font-stretch: 85%; color: var(--lilac);
+  }
+  #tableEditModal .cm-bar button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 1rem; padding: .2rem .5rem; border-radius: 6px; }
+  #tableEditModal .cm-bar button:hover { background: color-mix(in srgb, var(--lilac) 14%, transparent); color: var(--ink); }
+  #tableEditModal .tm-body {
+    flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 232px;
+  }
+  #tableEditModal .tm-table-host {
+    overflow: auto; padding: 1.25rem; display: flex; align-items: flex-start; justify-content: center;
+    background: #f4f4f6;
+  }
+  #tableEditModal .tm-table-host .tbl-wrap { max-width: 100%; }
+  #tableEditModal .tm-side {
+    overflow: auto; padding: .75rem; display: grid; gap: .55rem; align-content: start;
+    border-left: 1px solid var(--hair);
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+  }
+  #tableEditModal .tm-side .field {
+    display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted);
+  }
+  #tableEditModal .tm-side .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #tableEditModal .tm-side .field-val { display: inline-flex; align-items: center; gap: .3rem; }
+  #tableEditModal .tm-side .resetbtn {
+    border: 0; background: transparent; padding: 0 .1rem; margin: 0;
+    color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
+  }
+  #tableEditModal .tm-side .resetbtn:hover { color: var(--ink); }
+  @media (max-width: 720px) {
+    #tableEditModal .tm-body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+    #tableEditModal .tm-side { border-left: 0; border-top: 1px solid var(--hair); max-height: 40vh; }
+  }
+
   .empty { color: var(--muted); font-size: .85rem; margin: 4rem auto; text-align: center; max-width: 34ch; line-height: 1.6; }
 
   /* ===================== toasts (abrir projeto, etc.) ===================== */
@@ -1648,7 +1698,7 @@
     /* padding permanente do editor some no PDF */
     .page .idx-section { padding: 0; }
     .page.editing .col-right::after { display: none; }
-    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #imageGridPanel, #iconPanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #rightLayerMenu, #chartModal, #linkProjectModal, #syncOfferModal, #freePdfModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
+    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #rightLayerMenu, #chartModal, #tableEditModal, #linkProjectModal, #syncOfferModal, #freePdfModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
     #linkedit { display: none !important; }
   }
 
@@ -1772,7 +1822,7 @@
      MESMA declaração aqui: "aside .field" cobre TODOS os divs assim dentro da sidebar (inclusive
      #blockcol); cada popover flutuante precisa do próprio seletor (idx/resumo/blockStyle inclusos —
      sem isso "Largura" no #idxPanel caía no estilo de texto normal, diferente de "Cores" em <label>). */
-  #imgPanel .field, #tablePanel .field, #imageGridPanel .field, #coverPanel .field, #logoPanel .field,
+  #imgPanel .field, #tablePanel .field, #imageGridPanel .field, #tableGridPanel .field, #coverPanel .field, #logoPanel .field,
   #idxPanel .field, #resumoPanel .field, #blockStylePanel .field, aside .field {
     display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted);
   }
@@ -1810,13 +1860,13 @@
      empurrado pra extrema direita do rótulo; o <input> do slider fica FORA desse flex (linha de
      baixo, como já era). (t4) botão de reset discreto colado ao lado do valor, no mesmo grupo.
      `aside` cobre o slider de tamanho do Logo da Paradigma na sidebar esquerda (capa/contracapa). */
-  #imgPanel .field-row, #tablePanel .field-row, #imageGridPanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, #idxPanel .field-row, #resumoPanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
-  #imgPanel .field-val, #tablePanel .field-val, #imageGridPanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, #idxPanel .field-val, #resumoPanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
-  #imgPanel .resetbtn, #imageGridPanel .resetbtn, #coverPanel .resetbtn, #logoPanel .resetbtn, #blockStylePanel .resetbtn, #idxPanel .resetbtn, #resumoPanel .resetbtn, aside .resetbtn {
+  #imgPanel .field-row, #tablePanel .field-row, #imageGridPanel .field-row, #tableGridPanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, #idxPanel .field-row, #resumoPanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
+  #imgPanel .field-val, #tablePanel .field-val, #imageGridPanel .field-val, #tableGridPanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, #idxPanel .field-val, #resumoPanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
+  #imgPanel .resetbtn, #imageGridPanel .resetbtn, #tablePanel .resetbtn, #tableGridPanel .resetbtn, #coverPanel .resetbtn, #logoPanel .resetbtn, #blockStylePanel .resetbtn, #idxPanel .resetbtn, #resumoPanel .resetbtn, aside .resetbtn {
     border: 0; background: transparent; padding: 0 .1rem; margin: 0;
     color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
   }
-  #imgPanel .resetbtn:hover, #imageGridPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #logoPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover, #idxPanel .resetbtn:hover, #resumoPanel .resetbtn:hover, aside .resetbtn:hover { color: var(--ink); }
+  #imgPanel .resetbtn:hover, #imageGridPanel .resetbtn:hover, #tablePanel .resetbtn:hover, #tableGridPanel .resetbtn:hover, #coverPanel .resetbtn:hover, #logoPanel .resetbtn:hover, #blockStylePanel .resetbtn:hover, #idxPanel .resetbtn:hover, #resumoPanel .resetbtn:hover, aside .resetbtn:hover { color: var(--ink); }
   /* picker de símbolo da lista de pontos (menu ⋮) */
   #blockStylePanel .markerpick {
     display: flex; flex-wrap: wrap; gap: .3rem;
@@ -2391,6 +2441,7 @@
             <div class="blockrow"><button data-type="callout"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5a4.5 4.5 0 0 0-2.5 8.25c.4.28.5.7.5 1.05v.7h4v-.7c0-.35.1-.77.5-1.05A4.5 4.5 0 0 0 8 1.5Z"/><path d="M6.5 14h3"/><path d="M7 12.5h2"/></svg></span><span class="lbl">Callout</span></button><button type="button" class="blockmenu" data-styletype="callout" title="Editar estilo do Callout"></button></div>
             <button data-type="icon" title="Ícone (Google Symbols)"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.2v3.2M8 10.6h.01"/></svg></span><span class="lbl">Ícones</span></button>
             <button data-type="table"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2 6.5h12M2 10h12M6.5 3v10"/></svg></span><span class="lbl">Tabela</span></button>
+            <button data-type="table-grid" title="Até 4 tabelas em colunas iguais"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1.5" y="3" width="5.5" height="10" rx="1"/><path d="M1.5 6h5.5M1.5 9h5.5M4.25 3v10"/><rect x="9" y="3" width="5.5" height="10" rx="1"/><path d="M9 6h5.5M9 9h5.5M11.75 3v10"/></svg></span><span class="lbl">Grid de Tabelas</span></button>
             <button data-type="image-grid" title="Até 4 imagens em colunas iguais"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1.5" y="3" width="5.5" height="10" rx="1"/><rect x="9" y="3" width="5.5" height="10" rx="1"/><circle cx="3.5" cy="5.8" r=".7"/><path d="M2.2 11.5l1.5-1.4 1.1 1 1-.9 1 1"/><circle cx="11" cy="5.8" r=".7"/><path d="M9.7 11.5l1.5-1.4 1.1 1 1-.9 1 1"/></svg></span><span class="lbl">Grid de Imagens</span></button>
             <button data-type="image"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.6" cy="6.4" r="1"/><path d="M3 12l3.4-3.2 2.4 2.2 2.2-2 2 1.8"/></svg></span><span class="lbl">Imagem</span></button>
             <button data-type="chart" title="Gráfico editável"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2v12h12"/><rect x="4.2" y="8" width="2" height="4" fill="currentColor" stroke="none"/><rect x="7.2" y="5.5" width="2" height="6.5" fill="currentColor" stroke="none"/><rect x="10.2" y="3.5" width="2" height="8.5" fill="currentColor" stroke="none"/></svg></span><span class="lbl">Gráfico</span></button>
@@ -2452,6 +2503,17 @@
   <div class="cm-panel">
     <div class="cm-bar"><span id="cmTitle">Extrair / montar gráfico</span><button id="cmClose" title="Fechar">✕</button></div>
     <iframe id="cmFrame" title="Extrair gráfico"></iframe>
+  </div>
+</div>
+
+<div id="tableEditModal" hidden>
+  <div class="cm-backdrop"></div>
+  <div class="cm-panel">
+    <div class="cm-bar"><span id="tmTitle">Editar tabela</span><button type="button" id="tmClose" title="Fechar">✕</button></div>
+    <div class="tm-body">
+      <div class="tm-table-host" id="tmTableHost"></div>
+      <aside class="tm-side" id="tmSide"></aside>
+    </div>
   </div>
 </div>
 

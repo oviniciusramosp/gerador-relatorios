@@ -29,6 +29,21 @@ const COL_FULL = 499;
 const MIN_COL_FR = 0.08;   // ~8% da largura — evita coluna colapsar no resize
 const seed = () => [['Coluna 1', 'Coluna 2'], ['', '']];
 
+/** Defaults de estilo visual (borda, raio, tipografia, alinhamento). Só persistem se ≠ default. */
+export const DEFAULT_HEADER_BG = '#F1F1F4';
+export const DEFAULT_BORDER_OUTER = '#C9C9C9';
+export const DEFAULT_BORDER_INNER = '#C9C9C9';
+export const DEFAULT_TABLE_RADIUS = 0;
+export const TABLE_RADIUS_MAX = 24;
+export const DEFAULT_TABLE_FONT_SIZE = 10;   // px — bate com o CSS histórico do .tbl
+export const TABLE_FONT_SIZE_MIN = 6;
+export const TABLE_FONT_SIZE_MAX = 24;
+export const DEFAULT_TABLE_LINE_HEIGHT = 1.35; // unitless
+export const TABLE_LINE_HEIGHT_MIN = 1;
+export const TABLE_LINE_HEIGHT_MAX = 2.5;
+export const DEFAULT_TABLE_ALIGN = 'left';     // left | center | right
+export const DEFAULT_TABLE_VALIGN = 'top';     // top | middle | bottom
+
 function nColsOf(b) {
   return Math.max(1, ...(b.rows || []).map((r) => r.length), 1);
 }
@@ -40,6 +55,155 @@ function ensureMatrix(b) {
     while (row.length < cols) row.push('');
     return row.slice(0, cols);
   });
+}
+
+/** Matriz + flags de estilo. Idempotente; defaults não poluem o JSON. */
+export function ensureTable(b) {
+  if (!b || typeof b !== 'object') return b;
+  ensureMatrix(b);
+  if (b.headerRow === true) delete b.headerRow; // true é o default
+  if (b.headerCol === false) delete b.headerCol;
+  if (b.hideVLines === false) delete b.hideVLines;
+  if (b.altRows === false) delete b.altRows;
+  if (b.headerColor === DEFAULT_HEADER_BG) delete b.headerColor;
+  if (b.borderOuter === DEFAULT_BORDER_OUTER) delete b.borderOuter;
+  if (b.borderInner === DEFAULT_BORDER_INNER) delete b.borderInner;
+  // radius 0 = default → some do JSON
+  if (b.radius != null) {
+    const r = clampTableRadius(b.radius);
+    if (r === DEFAULT_TABLE_RADIUS) delete b.radius;
+    else b.radius = r;
+  }
+  // alinhamento: só persiste se ≠ default
+  if (b.align != null) {
+    const a = normalizeTableAlign(b.align);
+    if (a === DEFAULT_TABLE_ALIGN) delete b.align;
+    else b.align = a;
+  }
+  if (b.valign != null) {
+    const v = normalizeTableValign(b.valign);
+    if (v === DEFAULT_TABLE_VALIGN) delete b.valign;
+    else b.valign = v;
+  }
+  if (b.fontSize != null) {
+    const fs = clampTableFontSize(b.fontSize);
+    if (fs === DEFAULT_TABLE_FONT_SIZE) delete b.fontSize;
+    else b.fontSize = fs;
+  }
+  if (b.lineHeight != null) {
+    const lh = clampTableLineHeight(b.lineHeight);
+    if (Math.abs(lh - DEFAULT_TABLE_LINE_HEIGHT) < 1e-9) delete b.lineHeight;
+    else b.lineHeight = lh;
+  }
+  return b;
+}
+
+export function clampTableRadius(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return DEFAULT_TABLE_RADIUS;
+  return Math.max(0, Math.min(TABLE_RADIUS_MAX, v));
+}
+
+export function clampTableFontSize(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return DEFAULT_TABLE_FONT_SIZE;
+  return Math.max(TABLE_FONT_SIZE_MIN, Math.min(TABLE_FONT_SIZE_MAX, v));
+}
+
+export function clampTableLineHeight(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return DEFAULT_TABLE_LINE_HEIGHT;
+  const clamped = Math.max(TABLE_LINE_HEIGHT_MIN, Math.min(TABLE_LINE_HEIGHT_MAX, v));
+  // 2 casas — evita 1.35000001 no JSON
+  return Math.round(clamped * 100) / 100;
+}
+
+export function normalizeTableAlign(v) {
+  return v === 'center' || v === 'right' ? v : 'left';
+}
+
+export function normalizeTableValign(v) {
+  return v === 'middle' || v === 'bottom' ? v : 'top';
+}
+
+export function tableHeaderBg(b) { return (b && b.headerColor) || DEFAULT_HEADER_BG; }
+export function borderOuterOf(b) { return (b && b.borderOuter) || DEFAULT_BORDER_OUTER; }
+export function borderInnerOf(b) { return (b && b.borderInner) || DEFAULT_BORDER_INNER; }
+export function tableRadiusOf(b) {
+  return b && b.radius != null ? clampTableRadius(b.radius) : DEFAULT_TABLE_RADIUS;
+}
+export function tableAlignOf(b) {
+  return b && b.align != null ? normalizeTableAlign(b.align) : DEFAULT_TABLE_ALIGN;
+}
+export function tableValignOf(b) {
+  return b && b.valign != null ? normalizeTableValign(b.valign) : DEFAULT_TABLE_VALIGN;
+}
+export function tableFontSizeOf(b) {
+  return b && b.fontSize != null ? clampTableFontSize(b.fontSize) : DEFAULT_TABLE_FONT_SIZE;
+}
+export function tableLineHeightOf(b) {
+  return b && b.lineHeight != null ? clampTableLineHeight(b.lineHeight) : DEFAULT_TABLE_LINE_HEIGHT;
+}
+
+/** Aplica CSS vars de borda/raio/tipografia/alinhamento (live paint sem rebuild). */
+export function applyTableChrome(host, b) {
+  if (!host) return;
+  const frame = host.classList?.contains('tbl-frame') ? host : host.querySelector?.('.tbl-frame');
+  const table = host.matches?.('table.tbl') ? host : host.querySelector?.('table.tbl');
+  const outer = borderOuterOf(b);
+  const inner = borderInnerOf(b);
+  const radius = tableRadiusOf(b);
+  const headerBg = tableHeaderBg(b);
+  const align = tableAlignOf(b);
+  const valign = tableValignOf(b);
+  const fontSize = tableFontSizeOf(b);
+  const lineHeight = tableLineHeightOf(b);
+  const target = frame || table || host;
+  if (target && target.style) {
+    target.style.setProperty('--tbl-border-outer', outer);
+    target.style.setProperty('--tbl-border-inner', inner);
+    target.style.setProperty('--tbl-radius', radius + 'px');
+    target.style.setProperty('--tbl-header-bg', headerBg);
+    target.style.setProperty('--tbl-align', align);
+    target.style.setProperty('--tbl-valign', valign);
+    target.style.setProperty('--tbl-font-size', fontSize + 'px');
+    target.style.setProperty('--tbl-line-height', String(lineHeight));
+  }
+  if (frame && frame.style) {
+    frame.style.borderRadius = radius + 'px';
+    frame.style.borderColor = outer;
+  }
+  if (table) {
+    table.style.setProperty('--tbl-header-bg', headerBg);
+    table.style.setProperty('--tbl-border-outer', outer);
+    table.style.setProperty('--tbl-border-inner', inner);
+    table.style.setProperty('--tbl-radius', radius + 'px');
+    table.style.setProperty('--tbl-align', align);
+    table.style.setProperty('--tbl-valign', valign);
+    table.style.setProperty('--tbl-font-size', fontSize + 'px');
+    table.style.setProperty('--tbl-line-height', String(lineHeight));
+    table.style.fontSize = fontSize + 'px';
+    table.style.lineHeight = String(lineHeight);
+    table.classList.toggle('no-vlines', b && b.hideVLines === true);
+    table.classList.toggle('alt-rows', !!(b && b.altRows));
+    table.classList.toggle('no-header-row', b && b.headerRow === false);
+    table.classList.toggle('header-col', !!(b && b.headerCol));
+    table.querySelectorAll('th, td').forEach((cell) => {
+      cell.style.textAlign = align;
+      cell.style.verticalAlign = valign;
+    });
+    table.querySelectorAll('th, .tbl-head-cell').forEach((cell) => {
+      cell.style.background = headerBg;
+    });
+    if (b && b.altRows) {
+      [...table.rows].forEach((tr, r) => {
+        const isHead = b.headerRow !== false && r === 0;
+        tr.classList.toggle('alt', !isHead && r % 2 === 0);
+      });
+    } else {
+      table.querySelectorAll('tr.alt').forEach((tr) => tr.classList.remove('alt'));
+    }
+  }
 }
 /** frações normalizadas (soma 1), uma por coluna */
 export function colWidthsOf(b) {
@@ -172,21 +336,27 @@ function openTblMenu(anchor, items, onClose) {
   return menu;
 }
 
-const DEFAULT_HEADER_BG = '#F1F1F4';
-function tableHeaderBg(b) { return b.headerColor || DEFAULT_HEADER_BG; }
 function isHeaderRow(b, r) { return b.headerRow !== false && r === 0; }
 function isHeaderCol(b, c) { return !!b.headerCol && c === 0; }
 function isHeaderCell(b, r, c) { return isHeaderRow(b, r) || isHeaderCol(b, c); }
 
-export function buildTableEl(b, editing, ctx) {
-  ensureMatrix(b);
+/**
+ * Monta o DOM da tabela.
+ * @param {object} b
+ * @param {boolean} editing
+ * @param {{ commit?:Function, rerender?:Function, removeBlock?:Function }} ctx
+ * @param {number} [widthPx] largura do wrap (default COL_FULL = 499)
+ */
+export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
+  ensureTable(b);
   const widths = colWidthsOf(b);
   const cols = widths.length;
+  const w = Math.max(1, +widthPx || COL_FULL);
 
   const wrap = document.createElement('div');
   wrap.className = 'tbl-wrap b' + (editing ? ' tbl-editing' : '');
-  wrap.dataset.id = b.id;
-  wrap.style.width = COL_FULL + 'px';
+  if (b.id) wrap.dataset.id = b.id;
+  wrap.style.width = w + 'px';
 
   const frame = document.createElement('div');
   frame.className = 'tbl-frame';
@@ -197,7 +367,6 @@ export function buildTableEl(b, editing, ctx) {
     + (b.altRows ? ' alt-rows' : '')
     + (b.headerRow === false ? ' no-header-row' : '')
     + (b.headerCol ? ' header-col' : '');
-  table.style.setProperty('--tbl-header-bg', tableHeaderBg(b));
   const cg = document.createElement('colgroup');
   widths.forEach((fr) => {
     const col = document.createElement('col');
@@ -227,7 +396,7 @@ export function buildTableEl(b, editing, ctx) {
         td.lang = 'pt-BR';
         td.addEventListener('input', () => {
           b.rows[r][c] = td.innerHTML;
-          ctx.commit();
+          ctx.commit?.();
         });
         td.addEventListener('paste', (e) => {
           const txt = e.clipboardData.getData('text/plain');
@@ -238,7 +407,7 @@ export function buildTableEl(b, editing, ctx) {
           e.stopPropagation();
           b.rows = m;
           delete b.colWidths;
-          ctx.rerender();
+          ctx.rerender?.();
         });
         td.addEventListener('keydown', (e) => onCellKey(e, b, r, c, ctx, table));
       }
@@ -246,6 +415,8 @@ export function buildTableEl(b, editing, ctx) {
     });
     table.appendChild(tr);
   });
+  applyTableChrome(frame, b);
+  applyTableChrome(table, b);
   frame.appendChild(table);
 
   if (editing) {
@@ -652,7 +823,11 @@ function onCellKey(e, b, r, c, ctx, table) {
 }
 
 function focusCell(tableId, r, c) {
-  const wrap = document.querySelector(`.tbl-wrap[data-id="${tableId}"]`);
+  // id do bloco (miolo) ou fallback: tabela aberta na modal do grid
+  let wrap = tableId
+    ? document.querySelector(`.tbl-wrap[data-id="${CSS.escape(String(tableId))}"]`)
+    : null;
+  if (!wrap) wrap = document.querySelector('#tmTableHost .tbl-wrap');
   if (!wrap) return;
   const cell = wrap.querySelector(`tr[data-row="${r}"] [data-col="${c}"]`)
     || wrap.querySelectorAll('tr')[r]?.cells?.[c];
@@ -678,20 +853,45 @@ function focusCell(tableId, r, c) {
   /* flow-root: BFC próprio — a margem do bloco seguinte (p com margin-top) não colapsa
      com nada dentro da tabela e o vão padrão da página (PARA_LH) aparece de verdade. */
   .tbl-wrap { position: relative; z-index: 2; overflow: visible; display: flow-root; }
-  .tbl-frame { position: relative; overflow: visible; }
+  /* frame: borda EXTERNA + radius (overflow clipa cantos; células só pintam internas) */
+  .tbl-frame {
+    position: relative; overflow: hidden;
+    border: 1px solid var(--tbl-border-outer, #C9C9C9);
+    border-radius: var(--tbl-radius, 0px);
+    box-sizing: border-box;
+    background: #fff;
+  }
+  .tbl-editing .tbl-frame { overflow: visible; }
   .tbl { width: 100%; table-layout: fixed; border-collapse: collapse;
-    font-size: 10px; line-height: 1.35; color: #000; }
-  .tbl th, .tbl td { border: 1px solid #C9C9C9; padding: 4px 6px; text-align: left;
-    vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }
+    font-size: var(--tbl-font-size, 10px); line-height: var(--tbl-line-height, 1.35); color: #000;
+    --tbl-border-outer: #C9C9C9;
+    --tbl-border-inner: #C9C9C9;
+    --tbl-radius: 0px;
+    --tbl-align: left;
+    --tbl-valign: top;
+    --tbl-font-size: 10px;
+    --tbl-line-height: 1.35;
+  }
+  .tbl th, .tbl td {
+    border: 1px solid var(--tbl-border-inner, #C9C9C9);
+    padding: 4px 6px;
+    text-align: var(--tbl-align, left);
+    vertical-align: var(--tbl-valign, top);
+    word-wrap: break-word; overflow-wrap: break-word;
+  }
+  /* borda externa vive no .tbl-frame — remove o contorno das células pra não dobrar */
+  .tbl tr:first-child > * { border-top: none; }
+  .tbl tr:last-child > * { border-bottom: none; }
+  .tbl tr > :first-child { border-left: none; }
+  .tbl tr > :last-child { border-right: none; }
   .tbl th, .tbl .tbl-head-cell { background: var(--tbl-header-bg, #F1F1F4); font-weight: 700; }
   .tbl td:empty::after, .tbl th:empty::after { content: "\\200b"; }
   .tbl.no-vlines th, .tbl.no-vlines td {
     border-left-color: transparent; border-right-color: transparent; }
-  .tbl.no-vlines tr > :first-child { border-left-color: #C9C9C9; }
-  .tbl.no-vlines tr > :last-child { border-right-color: #C9C9C9; }
   .tbl.alt-rows tr.alt > td:not(.tbl-head-cell) {
     background: color-mix(in srgb, var(--tbl-header-bg, #F1F1F4) 35%, #fff); }
-  .page.editing .tbl th:focus, .page.editing .tbl td:focus {
+  .page.editing .tbl th:focus, .page.editing .tbl td:focus,
+  .tm-table-host .tbl th:focus, .tm-table-host .tbl td:focus {
     outline: 2px solid var(--violet, #4E39FF); outline-offset: -2px; }
 
   /* camadas de chrome: 4px mais perto da tabela (era -14 → -10) */
