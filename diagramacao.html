@@ -914,6 +914,7 @@
 
   /* ---------- página de índice (Índice + Resumo) ---------- */
   .page .idx-content { position: absolute; left: 48px; right: 48px; top: 88px; bottom: 88px; overflow: hidden; }
+  /* tipografia base = H1; JS (applyIdxTitleStyle) sobrescreve com blockStyles.h1 (cor/tamanho/…) */
   .page .idx-title { font-weight: 700; font-size: 24px; line-height: 31px; color: #000; margin: 0 0 12px; letter-spacing: -0.01em; }
   /* sem margin-bottom no .toc: o 24px antigo sobrava sob a lista (diferente do gap de
      parágrafo = 14px entre blocos). Espaço Índice→Resumo fica no + .idx-section. */
@@ -1120,6 +1121,25 @@
   }
   .page.editing .imggrid-wrap .imggrid-has { cursor: pointer; }
   .page.editing .imggrid-wrap .imggrid-has:hover { outline: 1.5px solid color-mix(in srgb, #4E39FF 45%, transparent); outline-offset: 1px; }
+  /* botão remover imagem: só no hover do frame (edição) */
+  .page.editing .imggrid-wrap .imggrid-rm {
+    position: absolute; top: 4px; right: 4px; z-index: 2;
+    width: 22px; height: 22px; padding: 0; margin: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 6px; cursor: pointer;
+    color: #fff; background: color-mix(in srgb, #c0392b 88%, #000);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+    opacity: 0; pointer-events: none;
+    transition: opacity .12s ease;
+  }
+  .page.editing .imggrid-wrap .imggrid-frame:hover .imggrid-rm,
+  .page.editing .imggrid-wrap .imggrid-rm:focus-visible {
+    opacity: 1; pointer-events: auto;
+  }
+  .page.editing .imggrid-wrap .imggrid-rm:hover {
+    background: #c0392b;
+  }
+  .page.editing .imggrid-wrap .imggrid-rm svg { display: block; }
   .page .imggrid-wrap .figtitle:empty, .page .imggrid-wrap figcaption:empty { min-height: 1lh; }
   .page.editing .imggrid-wrap .figtitle:empty::before,
   .page.editing .imggrid-wrap figcaption:empty::before {

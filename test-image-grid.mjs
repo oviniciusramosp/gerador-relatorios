@@ -3,6 +3,7 @@
  *
  * Sem este teste quebraria calado:
  * - equal=width deixando de gerar colunas iguais (larguras diferentes)
+ * - equal=width: slot vazio com aspect 4:3 alto empurrando legenda abaixo das fotos
  * - equal=height sem normalizar a soma das larguras na faixa total
  * - ensureImageGrid aceitando >4 itens ou 0 itens
  * - default de equal/titles/captions/gap poluindo o JSON
@@ -108,6 +109,36 @@ import {
   for (const f of frames) {
     assert.ok(Math.abs(f.w - colW) < 1e-6);
   }
+  // c é o mais alto (AR 0.5 → h = 2×colW)
+  assert.ok(Math.abs(frames[2].h - colW * 2) < 1e-6);
+}
+
+// ── equal width: slot vazio herda altura da imagem mais alta (não 4:3 fixo) ──
+// Sem este assert, placeholder alto empurrava legenda/conteúdo abaixo das fotos.
+{
+  const tall = { src: 'tall', nw: 100, nh: 200 }; // AR 0.5
+  const empty = { src: null, nw: 0, nh: 0 };
+  const totalW = 400;
+  const gap = 8;
+  const frames = layoutImageFrames([tall, empty], totalW, gap, 'width');
+  const colW = (totalW - gap) / 2;
+  const tallH = colW / (100 / 200);
+  assert.ok(Math.abs(frames[0].h - tallH) < 1e-6, 'imagem mantém proporção');
+  assert.ok(Math.abs(frames[1].h - tallH) < 1e-6, 'vazio = altura da imagem mais alta');
+  // se o vazio usasse 4:3, seria colW*(3/4) — bem menor que tallH (2×colW)
+  assert.ok(frames[1].h > colW, 'vazio não cai no 4:3 baixo');
+}
+
+// só vazios → fallback 4:3 (sem imagem de referência)
+{
+  const frames = layoutImageFrames(
+    [{ src: null }, { src: null }],
+    400, 8, 'width',
+  );
+  const colW = (400 - 8) / 2;
+  const h43 = colW / (4 / 3);
+  assert.ok(Math.abs(frames[0].h - h43) < 1e-6);
+  assert.ok(Math.abs(frames[1].h - h43) < 1e-6);
 }
 
 // ── layout equal height + gap custom ────────────────────────────────────────

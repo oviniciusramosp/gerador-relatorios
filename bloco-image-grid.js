@@ -87,6 +87,9 @@ export function itemAspect(it) {
 
 /**
  * Dimensões da área de imagem de cada célula (sem título/legenda).
+ * equal=width: colunas iguais; slot vazio herda a altura da imagem MAIS ALTA
+ * (não o aspect 4:3 fixo — isso empurrava legenda/conteúdo abaixo das fotos).
+ * equal=height: mesma altura; larguras proporcionais ao aspect.
  * @returns {{ w: number, h: number }[]}
  */
 export function layoutImageFrames(items, totalW, gap = IMAGE_GRID_GAP, equal = 'width') {
@@ -104,7 +107,17 @@ export function layoutImageFrames(items, totalW, gap = IMAGE_GRID_GAP, equal = '
     return ars.map((ar) => ({ w: H * ar, h: H }));
   }
   const colW = avail / n;
-  return ars.map((ar) => ({ w: colW, h: colW / ar }));
+  const frames = ars.map((ar) => ({ w: colW, h: colW / ar }));
+  // placeholder vazio: altura = max das células com imagem; se só vazios, 4:3
+  let maxFilledH = 0;
+  for (let i = 0; i < n; i++) {
+    if (slice[i] && slice[i].src) maxFilledH = Math.max(maxFilledH, frames[i].h);
+  }
+  const emptyH = maxFilledH > 0 ? maxFilledH : colW / IMAGE_GRID_EMPTY_AR;
+  for (let i = 0; i < n; i++) {
+    if (!slice[i] || !slice[i].src) frames[i].h = emptyH;
+  }
+  return frames;
 }
 
 export function addGridItem(b) {
@@ -273,9 +286,6 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
     frame.style.gridRow = String(imgRow);
     frame.style.width = '100%';
     frame.style.borderRadius = radius + 'px';
-    if (equal === 'height') {
-      frame.style.height = fr.h + 'px';
-    }
 
     if (it.src) {
       const img = document.createElement('img');
@@ -288,6 +298,8 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
         img.style.height = 'auto';
         img.style.display = 'block';
       } else {
+        // equal height: frame já tem height fixo
+        frame.style.height = fr.h + 'px';
         img.style.width = '100%';
         img.style.height = '100%';
         img.style.objectFit = 'contain';
@@ -299,13 +311,30 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
         frame.classList.add('imggrid-has');
         frame.title = 'Clique para substituir';
         frame.addEventListener('click', (e) => {
+          // ignora clique no botão de remover
+          if (e.target.closest && e.target.closest('.imggrid-rm')) return;
           e.stopPropagation();
           ctx.pickImage?.(b.id, i);
         });
+        // remover só a imagem (slot fica vazio — não tira a coluna)
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'imggrid-rm';
+        rm.title = 'Remover imagem';
+        rm.setAttribute('aria-label', 'Remover imagem');
+        rm.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4h10M6 4V3h4v1M5 4l.5 9h5L11 4"/></svg>';
+        rm.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!clearGridItemImage(b, i)) return;
+          ctx.commit?.();
+          ctx.rerender?.();
+        });
+        frame.appendChild(rm);
       }
     } else {
-      // placeholder: aspect 4:3 pra ocupar a linha de imagem
-      if (equal === 'width') frame.style.aspectRatio = '4 / 3';
+      // placeholder: altura do layout (= max das imagens com equal=width; ou H comum em height)
+      frame.style.height = fr.h + 'px';
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'imggrid-empty';

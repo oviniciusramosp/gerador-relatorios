@@ -150,8 +150,10 @@ function colRightX() { return colL() + GAP; }
 // direto — senão documentos antigos (sem o campo) perdem o default do tipo.
 const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid']);
 const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : 'inline');
-// tipos com seletor "1 coluna / 2 colunas" na fmtbar e segment de 2 opções na sidebar
-const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p']);
+// tipos com seletor "1 coluna / 2 colunas" (sidebar; fmtbar só headers/p — ver COL_FMTBAR_TYPES)
+const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'image-grid']);
+// subset que aparece no select da fmtbar (só com seleção de texto editável)
+const COL_FMTBAR_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p']);
 
 // Espaçamento vertical ANTES de um bloco — depende do tipo do bloco de cima (prev).
 // Calculado no JS (não em CSS) porque é contextual; a paginação e o render usam o
@@ -309,6 +311,16 @@ function applyTypeStyle(el, type) {
     const border = typeStyleOf('quote').borderColor;
     if (border) el.style.borderLeftColor = border;
   }
+}
+/** Títulos "Índice" / "Resumo": espelham o H1 global (⋮ da paleta), inclusive cor.
+ *  Usa typeStyleOf (default + override) — não só blockStyles, senão cor default some. */
+function applyIdxTitleStyle(el) {
+  if (!el) return;
+  const o = typeStyleOf('h1');
+  if (o.fontSize != null) el.style.fontSize = o.fontSize + 'px';
+  if (o.lineHeight != null) el.style.lineHeight = o.lineHeight + 'px';
+  if (o.color) el.style.color = o.color;
+  if (o.letterSpacing != null) el.style.letterSpacing = o.letterSpacing + 'em';
 }
 
 // ─────────────────────────── estado ─────────────────────────────────────────
@@ -1211,15 +1223,18 @@ function openImageGridPanel() {
   const RADIUS_SLIDER_MAX = 24;
   const RADIUS_DEFAULT = 4;
   const radius = b.radius != null ? b.radius : RADIUS_DEFAULT;
+  // largura na página (1/2 colunas do miolo). Na capa o span fica no #coverPanel.
+  const mioloGrid = !!(state.activeId && blockOf(state.activeId)?.id === b.id);
   imageGridPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Grid de Imagens</div>
+    ${mioloGrid ? `<div class="field">Largura<div data-slot="place"></div></div>` : ''}
     <div class="row img-tc-row">
       <button type="button" class="fieldbtn" data-a="title">${hasTitle ? minus : plus}<span>Título</span></button>
       <button type="button" class="fieldbtn" data-a="caption">${hasCap ? minus : plus}<span>Legenda</span></button>
     </div>
     ${hasCap ? `<div class="field">Estilo da legenda<div data-slot="capstyle"></div></div>` : ''}
     <div class="field">Igualar por<div data-slot="equal"></div></div>
-    <div class="field"><span class="field-row">Colunas</span>
+    <div class="field"><span class="field-row">Colunas do grid</span>
       <div class="numstep" data-role="cols">
         <button type="button" data-a="col-" ${n <= 1 ? 'disabled' : ''} title="Menos colunas" aria-label="Menos colunas">−</button>
         <span class="numstep-val" data-role="coln">${n}</span>
@@ -1239,6 +1254,19 @@ function openImageGridPanel() {
     render();
     if (state.activeId === b.id || state.sel === b.id) openImageGridPanel();
   };
+
+  // 1 coluna (esq) | 2 colunas (largura total) — só miolo; capa usa span no coverPanel
+  const placeSlot = imageGridPanel.querySelector('[data-slot="place"]');
+  if (placeSlot) {
+    const pl = placementOf(b) === 'full' ? 'full' : 'inline';
+    placeSlot.append(widthSeg(pl, [
+      { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
+      { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
+    ], (v) => {
+      setBlockPlacement(b.id, v);
+      if (state.activeId === b.id) openImageGridPanel();
+    }));
+  }
 
   // seta de duas pontas: horizontal = igualar por largura; vertical = por altura
   const EQ_W_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h12M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg>';
@@ -1556,15 +1584,16 @@ const imageGridCtx = {
 // bloco genérico (usado na medição e no fluxo da coluna esquerda / largura total)
 function buildBlock(b, editing) {
   const el = buildBlockEl(b, editing);
-  // largura da faixa: só o 'full' escapa da coluna (as demais herdam a largura do
-  // container — .col-left 258px ou .rimg 217px). O '' zera larguras que o próprio
-  // builder cravou inline (a tabela nasce com 499px), pra tabela poder ir pra uma coluna.
-  // z-index no full: o overflow (499px) precisa ficar acima da .col-right pra clicar
-  // na metade direita da tabela/título — ver z-index de .col-left/.col-right no CSS.
+  // largura da faixa: 'full' escapa da coluna (499px). image-grid precisa do width
+  // explícito também em inline (o builder calcula frames com colW; zerar aqui
+  // quebrava o layout em 1 coluna). tabela zera pro container herdar.
+  // z-index no full: overflow (499px) fica acima da .col-right pra clique/drag.
   if (placementOf(b) === 'full') {
     el.style.width = COL_FULL + 'px';
     if (!el.style.position || el.style.position === 'static') el.style.position = 'relative';
     el.style.zIndex = '2';
+  } else if (b.type === 'image-grid') {
+    el.style.width = colL() + 'px';
   } else {
     el.style.width = '';
   }
@@ -1813,6 +1842,7 @@ function render(caret /* optional {id,offset,role} */) {
   updateCalloutBar();
   updateHeadBar();
   updateTableBar();
+  updateImageGridBar();
   {
     const ab = state.activeId && blockOf(state.activeId);
     if (ab?.type === 'icon') openIconBlockPanel();
@@ -2225,6 +2255,7 @@ function renderIndexPage(toc, contentStart, number) {
     if ((idx.width || 'curto') === 'curto') sec.style.width = TOC_SHORT_W + 'px';
     else sec.style.width = COL_FULL + 'px';
     const h1 = document.createElement('div'); h1.className = 'idx-title'; h1.textContent = 'Índice';
+    applyIdxTitleStyle(h1);
     const list = document.createElement('div');
     const colorScheme = idx.color === 'cinza' ? 'cinza' : idx.color === 'custom' ? 'custom' : 'padrao';
     list.className = 'toc'
@@ -2265,6 +2296,7 @@ function renderIndexPage(toc, contentStart, number) {
     if (idx.resumoWidth === 'left') sec.style.width = colL() + 'px';
     else sec.style.width = COL_FULL + 'px';
     const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo';
+    applyIdxTitleStyle(h2);
     const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
     res.dataset.ph = 'Escreva o resumo…'; res.innerHTML = state.doc.index.resumo || '';
     // tipografia: default = parágrafo; override via painel do Resumo
@@ -6441,8 +6473,8 @@ function syncColUI() {
     return;
   }
   setSidebarReveal(blockColEl, true);
-  // headers + parágrafo: 1 coluna (esq) | 2 colunas (largura total). Demais blocos
-  // (imagem, tabela, lista…) mantêm as 3 posições, inclusive coluna direita.
+  // headers / parágrafo / grid de imagens: 1 coluna | 2 colunas.
+  // Demais (imagem, tabela, lista…) mantêm as 3 posições, inclusive coluna direita.
   const opts = COL_FMT_TYPES.has(b.type)
     ? [
         { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
@@ -6532,8 +6564,8 @@ function setActiveType(t) {
     if (!LIST_TYPES.has(t)) delete b.indent; // indent só faz sentido em lista
     // ícone de título (Material Symbols) só vale em H1–H4
     if (wasHead && !HEAD_TYPES.has(t)) clearHeadIconFields(b);
-    // headers/parágrafo não usam coluna direita no UI — se vinha de lista/imagem na
-    // direita, volta pro fluxo (default do tipo: H1–H4 = 2 cols, p = 1 col).
+    // tipos 1/2 col não usam coluna direita no UI — se vinha de right, volta ao fluxo
+    // (default do tipo: H1–H4/grid = 2 cols, p = 1 col).
     if (COL_FMT_TYPES.has(t) && b.placement === 'right') {
       delete b.placement; delete b.y; delete b.page; delete b.anchor;
     }
@@ -8954,7 +8986,7 @@ typeSelect.addEventListener('change', () => {
 if (colSelect) colSelect.addEventListener('change', () => {
   const id = state.activeId;
   const b = id && blockOf(id);
-  if (!b || !COL_FMT_TYPES.has(b.type)) return;
+  if (!b || !COL_FMTBAR_TYPES.has(b.type)) return;
   // 'inline' | 'full' — 1 coluna ou 2 colunas
   setBlockPlacement(b.id, colSelect.value === 'full' ? 'full' : 'inline');
   updateFmtbar();
@@ -9084,9 +9116,9 @@ function updateFmtbar() {
   // só troca o valor do <select> se o tipo do bloco estiver entre as opções (ex.: callout
   // não está na lista — mantém o dropdown como estava em vez de ficar num estado inválido)
   if (blk && [...typeSelect.options].some(o => o.value === blk.type)) typeSelect.value = blk.type;
-  // colunas (1 / 2): só headers + parágrafo no miolo
+  // colunas (1 / 2): só headers + parágrafo no miolo (grid tem o painel próprio)
   if (colSelect) {
-    const showCol = !!(blk && COL_FMT_TYPES.has(blk.type));
+    const showCol = !!(blk && COL_FMTBAR_TYPES.has(blk.type));
     colSelect.hidden = !showCol;
     if (showCol) {
       const pl = placementOf(blk);
