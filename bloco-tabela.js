@@ -1253,7 +1253,7 @@ function focusCell(tableId, r, c) {
   let wrap = tableId
     ? document.querySelector(`.tbl-wrap[data-id="${CSS.escape(String(tableId))}"]`)
     : null;
-  if (!wrap) wrap = document.querySelector('#tmTableHost .tbl-wrap');
+  if (!wrap) wrap = document.querySelector('.tblgrid-wrap .tbl-wrap.tbl-editing, .tblgrid-wrap .tbl-wrap');
   if (!wrap) return;
   const cell = wrap.querySelector(`tr[data-row="${r}"] [data-col="${c}"]`)
     || wrap.querySelectorAll('tr')[r]?.cells?.[c];
@@ -1424,9 +1424,11 @@ function focusCell(tableId, r, c) {
   .tbl-editing.tbl-near-right .tbl-add-col,
   .tbl-edge-add:hover { opacity: 1; }
   .tbl-edge-add:hover { background: color-mix(in srgb, #4E39FF 10%, #fff); }
-  /* modal: “+” sempre à vista (overflow do host tem padding extra) */
-  #tmTableHost .tbl-editing .tbl-edge-add { opacity: .85; }
-  #tmTableHost .tbl-editing .tbl-edge-add:hover { opacity: 1; }
+  /* grid de tabelas: “+” de borda um pouco mais visíveis (hover ainda reforça) */
+  .tblgrid-wrap .tbl-editing .tbl-edge-add { opacity: .55; }
+  .tblgrid-wrap .tbl-editing.tbl-near-bot .tbl-add-row,
+  .tblgrid-wrap .tbl-editing.tbl-near-right .tbl-add-col,
+  .tblgrid-wrap .tbl-editing .tbl-edge-add:hover { opacity: 1; }
   /* “+” posicionados em JS sobre a borda da table (parent = wrap) */
   .tbl-add-row { transform: translate(-50%, -50%); }
   .tbl-add-col { transform: translate(-50%, -50%); }

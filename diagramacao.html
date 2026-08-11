@@ -1564,56 +1564,10 @@
   #chartModal .cm-bar button:hover { background: color-mix(in srgb, var(--lilac) 14%, transparent); color: var(--ink); }
   #chartModal iframe { flex: 1; width: 100%; border: 0; background: var(--ground); }
 
-  /* modal de edição de tabela do grid */
-  #tableEditModal { position: fixed; inset: 0; z-index: 60; }
-  #tableEditModal[hidden] { display: none; }
-  #tableEditModal .cm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
-  #tableEditModal .cm-panel {
-    position: absolute; inset: 6vh auto; left: 50%; transform: translateX(-50%);
-    width: min(960px, 92vw); height: min(80vh, 720px);
-    display: flex; flex-direction: column;
-    background: var(--ground); border: 1px solid var(--hair-strong); border-radius: 12px; overflow: hidden;
-    box-shadow: 0 30px 80px -20px #000;
-  }
-  #tableEditModal .cm-bar {
-    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-    padding: .55rem .8rem; border-bottom: 1px solid var(--hair);
-    font-size: .78rem; font-weight: 600; font-stretch: 85%; color: var(--lilac);
-  }
-  #tableEditModal .cm-bar button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 1rem; padding: .2rem .5rem; border-radius: 6px; }
-  #tableEditModal .cm-bar button:hover { background: color-mix(in srgb, var(--lilac) 14%, transparent); color: var(--ink); }
-  #tableEditModal .tm-body {
-    flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 232px;
-  }
-  #tableEditModal .tm-table-host {
-    overflow: auto;
-    /* padding generoso: “+” de linha/coluna e alças não ficam clipados */
-    padding: 1.75rem 2rem 2.25rem;
-    display: flex; align-items: flex-start; justify-content: center;
-    background: #f4f4f6;
-  }
-  #tableEditModal .tm-table-host .tbl-wrap { max-width: 100%; overflow: visible; }
-  #tableEditModal .tm-side {
-    overflow: auto; padding: .75rem; display: grid; gap: .55rem; align-content: start;
-    border-left: 1px solid var(--hair);
-    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
-  }
-  #tableEditModal .tm-side .field {
-    display: grid; gap: .3rem; font-size: .74rem; font-stretch: 85%; color: var(--muted);
-  }
-  #tableEditModal .tm-side .field-row { display: flex; justify-content: space-between; align-items: baseline; }
-  #tableEditModal .tm-side .field-val { display: inline-flex; align-items: center; gap: .3rem; }
-  #tableEditModal .tm-side .resetbtn {
-    border: 0; background: transparent; padding: 0 .1rem; margin: 0;
-    color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
-  }
-  #tableEditModal .tm-side .resetbtn:hover { color: var(--ink); }
-  @media (max-width: 720px) {
-    #tableEditModal .tm-body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
-    #tableEditModal .tm-side { border-left: 0; border-top: 1px solid var(--hair); max-height: 40vh; }
-  }
-
   .empty { color: var(--muted); font-size: .85rem; margin: 4rem auto; text-align: center; max-width: 34ch; line-height: 1.6; }
+  /* segment Grid/Tabela N no painel — muitas opções cabem com scroll horizontal */
+  #tableGridPanel [data-slot="focus"] { max-width: 100%; }
+  #tableGridPanel [data-slot="focus"] .segment { min-width: max-content; }
 
   /* ===================== toasts (abrir projeto, etc.) ===================== */
   #toastHost {
@@ -1702,7 +1656,7 @@
     /* padding permanente do editor some no PDF */
     .page .idx-section { padding: 0; }
     .page.editing .col-right::after { display: none; }
-    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #rightLayerMenu, #chartModal, #tableEditModal, #linkProjectModal, #syncOfferModal, #freePdfModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
+    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #rightLayerMenu, #chartModal, #linkProjectModal, #syncOfferModal, #freePdfModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
     #linkedit { display: none !important; }
   }
 
@@ -2507,17 +2461,6 @@
   <div class="cm-panel">
     <div class="cm-bar"><span id="cmTitle">Extrair / montar gráfico</span><button id="cmClose" title="Fechar">✕</button></div>
     <iframe id="cmFrame" title="Extrair gráfico"></iframe>
-  </div>
-</div>
-
-<div id="tableEditModal" hidden>
-  <div class="cm-backdrop"></div>
-  <div class="cm-panel">
-    <div class="cm-bar"><span id="tmTitle">Editar tabela</span><button type="button" id="tmClose" title="Fechar">✕</button></div>
-    <div class="tm-body">
-      <div class="tm-table-host" id="tmTableHost"></div>
-      <aside class="tm-side" id="tmSide"></aside>
-    </div>
   </div>
 </div>
 

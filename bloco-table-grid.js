@@ -1,15 +1,15 @@
-/* Bloco Grid de Tabelas — 1 a 4 colunas; cada célula é uma tabela editável em modal.
+/* Bloco Grid de Tabelas — 1 a 4 colunas.
  *
  *   buildTableGridEl(b, editing, ctx, colW) → DOM
  *     b.items[]  — por tabela: { rows, colWidths?, merges?, bg?, headerColor?,
  *                  headerTextColor?, color? }
  *     Estilo COMPARTILHADO (igual em todas): fontSize, lineHeight, borderWidth,
  *       borderOuter, borderInner, radius  → no bloco grid, não no item.
- *     b.equal    — 'width' (default) | 'height'
- *     b.gap      — px entre colunas (default TABLE_GRID_GAP)
- *     ctx        — { commit, rerender, removeBlock, openTableEditor }
+ *     b.equal / b.gap
+ *     ctx        — { commit, rerender, removeBlock, selectGridItem, activeItemIndex }
  *
- * Fora da modal: gap + equal + estilo compartilhado. Edição de conteúdo → modal.
+ * Conteúdo edita-se nas células (editing). Clique numa tabela → selectGridItem
+ * (painel flutuante troca o segment Grid / Tabela N).
  */
 
 import {
@@ -34,7 +34,6 @@ export function ensureTableGrid(b) {
   if (!Array.isArray(b.items) || !b.items.length) {
     b.items = [seedTableItem(), seedTableItem()];
   }
-  // promove estilos compartilhados que ainda estejam só no 1º item (docs antigos)
   for (const k of TABLE_GRID_SHARED_KEYS) {
     if (b[k] == null && b.items[0] && b.items[0][k] != null) {
       b[k] = b.items[0][k];
@@ -44,7 +43,6 @@ export function ensureTableGrid(b) {
     const it = raw && typeof raw === 'object' ? { ...raw } : seedTableItem();
     delete it.id;
     delete it.type;
-    // tira do item o que agora é compartilhado
     for (const k of TABLE_GRID_SHARED_KEYS) delete it[k];
     ensureTable(it);
     return it;
@@ -100,7 +98,7 @@ export function layoutTableGridCols(n, totalW, gap = TABLE_GRID_GAP) {
  * Monta o DOM do grid de tabelas.
  * @param {object} b
  * @param {boolean} editing
- * @param {{ commit?:Function, rerender?:Function, removeBlock?:Function, openTableEditor?:(blockId:string, itemIndex:number)=>void }} ctx
+ * @param {{ commit?:Function, rerender?:Function, removeBlock?:Function, selectGridItem?:(blockId:string, itemIndex:number)=>void, activeItemIndex?:number }} ctx
  * @param {number} [colW]
  */
 export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
@@ -109,6 +107,7 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
   const gap = tableGridGapOf(b);
   const n = b.items.length;
   const colWidths = layoutTableGridCols(n, colW, gap);
+  const activeItem = ctx.activeItemIndex != null ? +ctx.activeItemIndex : -1;
 
   const wrap = document.createElement('div');
   wrap.className = 'tblgrid-wrap b';
@@ -127,16 +126,41 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
 
   b.items.forEach((it, i) => {
     const cell = document.createElement('div');
-    cell.className = 'tblgrid-cell';
+    cell.className = 'tblgrid-cell' + (activeItem === i ? ' is-active' : '');
     cell.dataset.item = String(i);
     cell.style.minWidth = '0';
     if (equal === 'height') cell.style.display = 'flex';
 
-    // estilo compartilhado do grid + cores próprias do item
+    // estilo compartilhado + cores do item; mesma ref de rows/merges do item
     const resolved = resolveGridTableItem(b, it);
-    const tbl = buildTableEl(resolved, false, {}, colWidths[i]);
-    tbl.removeAttribute('data-id');
-    tbl.classList.add('tblgrid-preview');
+    resolved.rows = it.rows;
+    if (it.colWidths) resolved.colWidths = it.colWidths;
+    if (it.merges) resolved.merges = it.merges;
+
+    const syncStructure = () => {
+      if (resolved.merges && resolved.merges.length) it.merges = resolved.merges;
+      else delete it.merges;
+      if (resolved.colWidths) it.colWidths = resolved.colWidths;
+      else delete it.colWidths;
+    };
+
+    const itemCtx = {
+      commit: () => {
+        syncStructure();
+        ctx.commit?.();
+      },
+      rerender: () => {
+        syncStructure();
+        ctx.rerender?.();
+      },
+    };
+
+    const tbl = buildTableEl(resolved, editing, itemCtx, colWidths[i]);
+    // id sintético p/ focusCell / Tab na tabela do grid
+    tbl.dataset.id = `__tg_${b.id}_${i}`;
+    tbl.dataset.gridId = b.id;
+    tbl.dataset.item = String(i);
+    tbl.classList.add('tblgrid-table');
     tbl.style.width = '100%';
     if (equal === 'height') {
       tbl.style.flex = '1 1 auto';
@@ -153,28 +177,13 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     cell.appendChild(tbl);
 
     if (editing) {
-      cell.classList.add('tblgrid-cell-edit');
-      const overlay = document.createElement('button');
-      overlay.type = 'button';
-      overlay.className = 'tblgrid-edit';
-      overlay.title = 'Editar tabela';
-      overlay.setAttribute('aria-label', `Editar tabela ${i + 1}`);
-      overlay.innerHTML = '<span class="tblgrid-edit-ico" aria-hidden="true">'
-        + '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
-        + '<path d="M11.5 2.5l2 2L5 13H3v-2L11.5 2.5z"/>'
-        + '</svg></span><span>Editar</span>';
-      overlay.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        ctx.openTableEditor?.(b.id, i);
-      });
-      cell.appendChild(overlay);
-      cell.addEventListener('click', (e) => {
-        if (e.target.closest && e.target.closest('.tblgrid-edit')) return;
-        e.preventDefault();
-        e.stopPropagation();
-        ctx.openTableEditor?.(b.id, i);
-      });
+      // clique / foco numa célula → painel seleciona "Tabela N"
+      const pick = () => ctx.selectGridItem?.(b.id, i);
+      cell.addEventListener('mousedown', (e) => {
+        // não impede edição; só atualiza o segment do painel
+        pick();
+      }, true);
+      cell.addEventListener('focusin', () => pick());
     }
 
     grid.appendChild(cell);
@@ -194,28 +203,9 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
   .tblgrid { width: 100%; min-width: 0; }
   .tblgrid-cell { position: relative; min-width: 0; }
   .tblgrid-cell .tbl-wrap { width: 100% !important; }
-  .tblgrid-preview { pointer-events: none; }
-  .tblgrid-cell-edit { cursor: pointer; }
-  .tblgrid-cell-edit:hover .tblgrid-preview .tbl-frame {
-    outline: 1.5px solid color-mix(in srgb, #4E39FF 45%, transparent);
-    outline-offset: 1px;
-  }
-  .tblgrid-edit {
-    position: absolute; top: 6px; right: 6px; z-index: 3;
-    display: inline-flex; align-items: center; gap: .3rem;
-    padding: .28rem .5rem; border: 0; border-radius: 6px;
-    background: color-mix(in srgb, #4E39FF 92%, #000);
-    color: #fff; font-size: 11px; font-weight: 600; font-stretch: 90%;
-    cursor: pointer; opacity: 0; pointer-events: none;
-    transition: opacity .12s; box-shadow: 0 4px 14px -4px rgba(0,0,0,.35);
-  }
-  .tblgrid-cell-edit:hover .tblgrid-edit,
-  .tblgrid-cell-edit:focus-within .tblgrid-edit { opacity: 1; pointer-events: auto; }
-  .tblgrid-edit:hover { background: #4E39FF; }
-  .tblgrid-edit-ico { display: grid; place-items: center; }
-  .tblgrid-edit-ico svg { display: block; }
-  @media print {
-    .tblgrid-edit { display: none !important; }
+  .page.editing .tblgrid-cell.is-active .tbl-frame {
+    outline: 1.5px solid color-mix(in srgb, #4E39FF 55%, transparent);
+    outline-offset: 2px;
   }
   `;
   document.head.appendChild(s);

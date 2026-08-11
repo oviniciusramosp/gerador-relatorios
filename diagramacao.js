@@ -1891,9 +1891,13 @@ function updateImageGridBar() {
   }
 }
 
-// ── popover do Grid de Tabelas (gap, equal, colunas — edição de célula na modal) ─
+// ── popover do Grid de Tabelas ──────────────────────────────────────────────
+// Segment Grid | Tabela 1 | Tabela 2… no painel; clique numa tabela troca o foco.
+// Conteúdo edita-se nas células (inline). tableGridFocus: 'grid' | 0 | 1 | …
 let tableGridPanel;
 let tableGridPanelDismissed = false;
+let tableGridFocus = 'grid';
+
 function activeTableGridBlock() {
   const b = state.activeId && blockOf(state.activeId);
   if (b && b.type === 'table-grid') return b;
@@ -1904,10 +1908,61 @@ function activeTableGridBlock() {
   return null;
 }
 function closeTableGridPanel() { if (tableGridPanel) tableGridPanel.hidden = true; }
+
+/** Outline da tabela ativa no grid (is-active no .tblgrid-cell). */
+function paintTableGridFocus(blockId, focus) {
+  const host = pagesEl.querySelector(`.tblgrid-wrap[data-id="${blockId}"]`);
+  if (!host) return;
+  host.querySelectorAll('.tblgrid-cell').forEach((cell) => {
+    const i = +cell.dataset.item;
+    cell.classList.toggle('is-active', focus !== 'grid' && i === +focus);
+  });
+}
+
+/** Clique / foco numa tabela do grid → seleciona o bloco e o item no painel. */
+function selectTableGridItem(blockId, itemIndex) {
+  const cov = findCoverItem(blockId);
+  const b = cov ? cov.item : blockOf(blockId);
+  if (!b || b.type !== 'table-grid') return;
+  ensureTableGrid(b);
+  const i = Math.max(0, Math.min(b.items.length - 1, itemIndex | 0));
+  const sameFocus = tableGridFocus === i
+    && tableGridPanel && !tableGridPanel.hidden
+    && tableGridPanel.dataset.gid === blockId;
+  tableGridFocus = i;
+  tableGridPanelDismissed = false;
+  if (cov) {
+    if (state.sel !== blockId) {
+      state.sel = blockId;
+      state.activeId = null;
+      selectCoverItem(blockId);
+      return; // selectCoverItem já abre o painel
+    }
+  } else {
+    state.activeId = blockId;
+    state.sel = null;
+    paintActiveBlock(blockId);
+    showHandleAtFocused();
+    syncTypeUI('table-grid');
+  }
+  // evita rebuild completo do painel a cada clique na mesma tabela (preserva caret)
+  if (sameFocus) {
+    paintTableGridFocus(blockId, tableGridFocus);
+    positionTableGridPanel();
+    return;
+  }
+  openTableGridPanel();
+}
+
 function openTableGridPanel() {
   const b = activeTableGridBlock();
   if (!b || !editing) { closeTableGridPanel(); return; }
   ensureTableGrid(b);
+  // clamp do foco se o nº de colunas mudou
+  if (tableGridFocus !== 'grid') {
+    const i = +tableGridFocus;
+    if (!Number.isFinite(i) || i < 0 || i >= b.items.length) tableGridFocus = 'grid';
+  }
   tableGridPanelDismissed = false;
   closeImgPanel();
   closeTablePanel();
@@ -1923,106 +1978,185 @@ function openTableGridPanel() {
   const equal = tableGridEqualModeOf(b);
   const gap = tableGridGapOf(b);
   const mioloGrid = !!(state.activeId && blockOf(state.activeId)?.id === b.id);
+  const focusVal = tableGridFocus === 'grid' ? 'grid' : String(tableGridFocus);
+  const onItem = tableGridFocus !== 'grid';
+  const itemIdx = onItem ? +tableGridFocus : -1;
+  const it = onItem ? b.items[itemIdx] : null;
+
+  // segment: Grid + Tabela 1…N
+  // body: layout/shared OU cores da tabela + estrutura
   tableGridPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Grid de Tabelas</div>
-    ${mioloGrid ? `<div class="field">Largura<div data-slot="place"></div></div>` : ''}
-    <div class="field">Igualar por<div data-slot="equal"></div></div>
-    <div class="field"><span class="field-row">Colunas do grid</span>
-      <div class="numstep" data-role="cols">
-        <button type="button" data-a="col-" ${n <= 1 ? 'disabled' : ''} title="Menos colunas" aria-label="Menos colunas">−</button>
-        <span class="numstep-val" data-role="coln">${n}</span>
-        <button type="button" data-a="col+" ${n >= TABLE_GRID_MAX ? 'disabled' : ''} title="Mais colunas" aria-label="Mais colunas">+</button>
-      </div>
-    </div>
-    <label class="field"><span class="field-row">Espaço entre colunas <span class="field-val"><span data-role="gapv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${gap}</span>px<button type="button" class="resetbtn" data-a="gapreset" title="Redefinir para ${TABLE_GRID_GAP}px">↺</button></span></span>
-      <input type="range" data-a="gap" min="0" max="${TABLE_GRID_GAP_MAX}" step="1" value="${gap}" data-snaps="0,4,8,12,16,24,32,48" data-edit="off">
-    </label>
-    <div class="eyebrow" style="margin:.2rem 0 0">Estilo comum</div>
-    ${tableStyleFieldsHtml(b, 'shared')}
-    <p class="hint" style="margin:0;font-size:.72rem;opacity:.8">Clique numa tabela para editar conteúdo e cores</p>
+    <div class="field">Editando<div data-slot="focus"></div></div>
+    <div data-slot="body"></div>
     <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
   tableGridPanel.hidden = false;
+
+  const body = tableGridPanel.querySelector('[data-slot="body"]');
+  if (onItem && it) {
+    body.innerHTML = `
+      <div class="eyebrow" style="margin:0">Tabela ${itemIdx + 1}</div>
+      <div class="row img-tc-row" style="display:flex;gap:.4rem">
+        <button type="button" class="fieldbtn" data-a="addrow" style="flex:1;justify-content:center">+ Linha</button>
+        <button type="button" class="fieldbtn" data-a="addcol" style="flex:1;justify-content:center">+ Coluna</button>
+      </div>
+      ${tableStyleFieldsHtml(it, 'item')}`;
+  } else {
+    body.innerHTML = `
+      ${mioloGrid ? `<div class="field">Largura<div data-slot="place"></div></div>` : ''}
+      <div class="field">Igualar por<div data-slot="equal"></div></div>
+      <div class="field"><span class="field-row">Colunas do grid</span>
+        <div class="numstep" data-role="cols">
+          <button type="button" data-a="col-" ${n <= 1 ? 'disabled' : ''} title="Menos colunas" aria-label="Menos colunas">−</button>
+          <span class="numstep-val" data-role="coln">${n}</span>
+          <button type="button" data-a="col+" ${n >= TABLE_GRID_MAX ? 'disabled' : ''} title="Mais colunas" aria-label="Mais colunas">+</button>
+        </div>
+      </div>
+      <label class="field"><span class="field-row">Espaço entre colunas <span class="field-val"><span data-role="gapv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${gap}</span>px<button type="button" class="resetbtn" data-a="gapreset" title="Redefinir para ${TABLE_GRID_GAP}px">↺</button></span></span>
+        <input type="range" data-a="gap" min="0" max="${TABLE_GRID_GAP_MAX}" step="1" value="${gap}" data-snaps="0,4,8,12,16,24,32,48" data-edit="off">
+      </label>
+      <div class="eyebrow" style="margin:.2rem 0 0">Estilo comum</div>
+      ${tableStyleFieldsHtml(b, 'shared')}`;
+  }
 
   const reopen = () => {
     render();
     if (state.activeId === b.id || state.sel === b.id) openTableGridPanel();
   };
 
-  // estilo compartilhado: paint live em todas as tabelas do grid
-  wireTableStyleControls(tableGridPanel, b, {
-    sharedOnly: true,
-    paint: () => {
-      ensureTableGrid(b);
-      // re-render leve: só chrome de cada preview
-      const host = pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"]`);
-      if (!host) return;
-      host.querySelectorAll('.tblgrid-cell').forEach((cell) => {
-        const idx = +cell.dataset.item;
-        const it = b.items[idx];
-        if (!it) return;
-        const wrap = cell.querySelector('.tbl-wrap');
-        if (wrap) applyTableChrome(wrap, resolveGridTableItem(b, it));
-      });
-    },
-    after: () => { save(); scheduleCommit(); },
-  });
-
-  const placeSlot = tableGridPanel.querySelector('[data-slot="place"]');
-  if (placeSlot) {
-    const pl = placementOf(b) === 'full' ? 'full' : 'inline';
-    placeSlot.append(widthSeg(pl, [
-      { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
-      { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
-    ], (v) => {
-      setBlockPlacement(b.id, v);
-      if (state.activeId === b.id) openTableGridPanel();
+  // ── segment Editando ────────────────────────────────────────────────────
+  const focusOpts = [{ val: 'grid', label: 'Grid' }];
+  for (let i = 0; i < n; i++) focusOpts.push({ val: String(i), label: `Tabela ${i + 1}` });
+  // widthSeg com 3+ vira cols-3; com muitas tabelas usa scroll horizontal no slot
+  const focusSlot = tableGridPanel.querySelector('[data-slot="focus"]');
+  if (focusSlot) {
+    focusSlot.style.overflowX = 'auto';
+    focusSlot.append(widthSeg(focusVal, focusOpts, (v) => {
+      tableGridFocus = v === 'grid' ? 'grid' : +v;
+      openTableGridPanel();
+      paintTableGridFocus(b.id, tableGridFocus);
     }));
   }
 
-  const EQ_W_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h12M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg>';
-  const EQ_H_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M4.5 5.5 8 2l3.5 3.5M4.5 10.5 8 14l3.5-3.5"/></svg>';
-  tableGridPanel.querySelector('[data-slot="equal"]').append(
-    widthSeg(equal, [
-      { val: 'width', label: 'Largura (colunas iguais)', icon: EQ_W_ICO },
-      { val: 'height', label: 'Altura (mesma altura)', icon: EQ_H_ICO },
-    ], (v) => {
-      b.equal = v === 'height' ? 'height' : 'width';
-      if (b.equal === 'width') delete b.equal;
-      reopen();
-    }));
-
-  const gapv = tableGridPanel.querySelector('[data-role="gapv"]');
-  const paintGap = (raw, { reflow = false, syncText = true } = {}) => {
-    const g = clampTableGridGap(raw);
-    if (g === TABLE_GRID_GAP) delete b.gap;
-    else b.gap = g;
-    if (syncText && gapv && document.activeElement !== gapv) gapv.textContent = String(g);
-    const range = tableGridPanel.querySelector('input[data-a="gap"]');
-    if (range && document.activeElement !== range) range.value = String(g);
-    if (reflow) reopen();
-    else {
-      const grid = pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"] .tblgrid`);
-      if (grid) grid.style.columnGap = g + 'px';
-      save(); scheduleCommit();
-    }
-  };
-  if (gapv) {
-    wireFieldEditKeys(gapv, {
-      onInput: (raw) => {
-        const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
-        if (!Number.isFinite(n)) return;
-        paintGap(n, { reflow: false, syncText: false });
+  if (onItem && it) {
+    wireTableStyleControls(body, it, {
+      paint: () => {
+        const host = pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"] .tblgrid-cell[data-item="${itemIdx}"] .tbl-wrap`);
+        if (host) applyTableChrome(host, resolveGridTableItem(b, it));
       },
-      onCommit: (raw) => {
-        const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
-        paintGap(Number.isFinite(n) ? n : tableGridGapOf(b), { reflow: true, syncText: true });
-        gapv.textContent = String(tableGridGapOf(b));
-      },
-      onCancel: () => {
-        gapv.textContent = String(tableGridGapOf(b));
-        paintGap(tableGridGapOf(b), { reflow: false, syncText: true });
-      },
+      after: () => { save(); scheduleCommit(); },
     });
+    body.querySelector('[data-a="addrow"]')?.addEventListener('click', () => {
+      addTableRow(it, null);
+      reopen();
+    });
+    body.querySelector('[data-a="addcol"]')?.addEventListener('click', () => {
+      addTableCol(it, null);
+      reopen();
+    });
+  } else {
+    wireTableStyleControls(body, b, {
+      sharedOnly: true,
+      paint: () => {
+        ensureTableGrid(b);
+        const host = pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"]`);
+        if (!host) return;
+        host.querySelectorAll('.tblgrid-cell').forEach((cell) => {
+          const idx = +cell.dataset.item;
+          const item = b.items[idx];
+          if (!item) return;
+          const tw = cell.querySelector('.tbl-wrap');
+          if (tw) applyTableChrome(tw, resolveGridTableItem(b, item));
+        });
+      },
+      after: () => { save(); scheduleCommit(); },
+    });
+
+    const placeSlot = body.querySelector('[data-slot="place"]');
+    if (placeSlot) {
+      const pl = placementOf(b) === 'full' ? 'full' : 'inline';
+      placeSlot.append(widthSeg(pl, [
+        { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
+        { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
+      ], (v) => {
+        setBlockPlacement(b.id, v);
+        if (state.activeId === b.id) openTableGridPanel();
+      }));
+    }
+
+    const EQ_W_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h12M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></svg>';
+    const EQ_H_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M4.5 5.5 8 2l3.5 3.5M4.5 10.5 8 14l3.5-3.5"/></svg>';
+    const equalSlot = body.querySelector('[data-slot="equal"]');
+    if (equalSlot) {
+      equalSlot.append(widthSeg(equal, [
+        { val: 'width', label: 'Largura (colunas iguais)', icon: EQ_W_ICO },
+        { val: 'height', label: 'Altura (mesma altura)', icon: EQ_H_ICO },
+      ], (v) => {
+        b.equal = v === 'height' ? 'height' : 'width';
+        if (b.equal === 'width') delete b.equal;
+        reopen();
+      }));
+    }
+
+    const gapv = body.querySelector('[data-role="gapv"]');
+    const paintGap = (raw, { reflow = false, syncText = true } = {}) => {
+      const g = clampTableGridGap(raw);
+      if (g === TABLE_GRID_GAP) delete b.gap;
+      else b.gap = g;
+      if (syncText && gapv && document.activeElement !== gapv) gapv.textContent = String(g);
+      const range = body.querySelector('input[data-a="gap"]');
+      if (range && document.activeElement !== range) range.value = String(g);
+      if (reflow) reopen();
+      else {
+        const grid = pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"] .tblgrid`);
+        if (grid) grid.style.columnGap = g + 'px';
+        save(); scheduleCommit();
+      }
+    };
+    if (gapv) {
+      wireFieldEditKeys(gapv, {
+        onInput: (raw) => {
+          const n0 = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+          if (!Number.isFinite(n0)) return;
+          paintGap(n0, { reflow: false, syncText: false });
+        },
+        onCommit: (raw) => {
+          const n0 = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+          paintGap(Number.isFinite(n0) ? n0 : tableGridGapOf(b), { reflow: true, syncText: true });
+          gapv.textContent = String(tableGridGapOf(b));
+        },
+        onCancel: () => {
+          gapv.textContent = String(tableGridGapOf(b));
+          paintGap(tableGridGapOf(b), { reflow: false, syncText: true });
+        },
+      });
+    }
+    body.querySelectorAll('button[data-a], input[data-a]').forEach((el) => {
+      const isRange = el.type === 'range';
+      el.addEventListener(isRange ? 'input' : 'click', () => {
+        const a = el.dataset.a;
+        if (a === 'gap') { paintGap(+el.value, { reflow: false }); return; }
+        if (a === 'gapreset') { paintGap(TABLE_GRID_GAP, { reflow: true }); return; }
+        if (a === 'col+') {
+          if (b.items.length < TABLE_GRID_MAX) {
+            setTableGridCols(b, b.items.length + 1);
+            reopen();
+          }
+          return;
+        }
+        if (a === 'col-') {
+          if (b.items.length > 1) {
+            setTableGridCols(b, b.items.length - 1);
+            if (tableGridFocus !== 'grid' && +tableGridFocus >= b.items.length) tableGridFocus = 'grid';
+            reopen();
+          }
+        }
+      });
+    });
+    const gapRange = body.querySelector('input[data-a="gap"]');
+    if (gapRange) {
+      gapRange.addEventListener('change', () => paintGap(+gapRange.value, { reflow: true }));
+    }
   }
 
   tableGridPanel.querySelectorAll('.resetbtn').forEach((btn) => {
@@ -2030,30 +2164,13 @@ function openTableGridPanel() {
   });
   enhanceAll(tableGridPanel);
 
-  tableGridPanel.querySelectorAll('button[data-a], input[data-a]').forEach((el) => {
-    const isRange = el.type === 'range';
-    el.addEventListener(isRange ? 'input' : 'click', () => {
-      const a = el.dataset.a;
-      if (a === 'gap') { paintGap(+el.value, { reflow: false }); return; }
-      if (a === 'gapreset') { paintGap(TABLE_GRID_GAP, { reflow: true }); return; }
-      if (a === 'col+') {
-        if (b.items.length < TABLE_GRID_MAX) { setTableGridCols(b, b.items.length + 1); reopen(); }
-        return;
-      }
-      if (a === 'col-') {
-        if (b.items.length > 1) { setTableGridCols(b, b.items.length - 1); reopen(); }
-        return;
-      }
-      if (a === 'del') {
-        tableGridCtx.removeBlock(b.id);
-        closeTableGridPanel();
-      }
-    });
+  tableGridPanel.querySelector('[data-a="del"]')?.addEventListener('click', () => {
+    tableGridCtx.removeBlock(b.id);
+    tableGridFocus = 'grid';
+    closeTableGridPanel();
   });
-  const gapRange = tableGridPanel.querySelector('input[data-a="gap"]');
-  if (gapRange) {
-    gapRange.addEventListener('change', () => paintGap(+gapRange.value, { reflow: true }));
-  }
+
+  paintTableGridFocus(b.id, tableGridFocus);
   positionTableGridPanel();
 }
 function positionTableGridPanel() {
@@ -2076,138 +2193,15 @@ function updateTableGridBar() {
       return;
     }
     if (!tableGridPanel || tableGridPanel.hidden || tableGridPanel.dataset.gid !== b.id) openTableGridPanel();
-    else positionTableGridPanel();
+    else {
+      positionTableGridPanel();
+      paintTableGridFocus(b.id, tableGridFocus);
+    }
   } else {
     tableGridPanelDismissed = false;
+    if (!b) tableGridFocus = 'grid';
     closeTableGridPanel();
   }
-}
-
-// ── modal de edição de uma tabela do grid ───────────────────────────────────
-// tableEditTarget = { blockId, itemIndex } enquanto a modal está aberta
-let tableEditTarget = null;
-function openTableEditModal(blockId, itemIndex) {
-  const cov = findCoverItem(blockId);
-  const host = cov ? cov.item : blockOf(blockId);
-  if (!host || host.type !== 'table-grid') return;
-  ensureTableGrid(host);
-  const i = itemIndex | 0;
-  if (i < 0 || i >= host.items.length) return;
-  tableEditTarget = { blockId, itemIndex: i };
-  const it = host.items[i];
-  ensureTable(it);
-
-  const modal = document.getElementById('tableEditModal');
-  const hostEl = document.getElementById('tmTableHost');
-  const sideEl = document.getElementById('tmSide');
-  const titleEl = document.getElementById('tmTitle');
-  if (!modal || !hostEl || !sideEl) return;
-
-  if (titleEl) titleEl.textContent = `Editar tabela ${i + 1}`;
-  sideEl.innerHTML = `
-    <div class="eyebrow" style="margin:0">Estrutura</div>
-    <div class="row img-tc-row" style="display:flex;gap:.4rem">
-      <button type="button" class="fieldbtn" data-a="addrow" style="flex:1;justify-content:center">+ Linha</button>
-      <button type="button" class="fieldbtn" data-a="addcol" style="flex:1;justify-content:center">+ Coluna</button>
-    </div>
-    <div class="eyebrow" style="margin:.15rem 0 0">Cores desta tabela</div>
-    ${tableStyleFieldsHtml(it, 'item')}`;
-
-  // estilo compartilhado do grid + cores do item (shallow copy + refs de estrutura)
-  const resolved = resolveGridTableItem(host, it);
-  resolved.rows = it.rows; // mesma matriz — edição de célula grava no item
-  if (it.colWidths) resolved.colWidths = it.colWidths;
-  if (it.merges) resolved.merges = it.merges;
-  const syncStructureBack = () => {
-    // merges/colWidths podem ter sido reatribuídos no resolved
-    if (resolved.merges && resolved.merges.length) it.merges = resolved.merges;
-    else delete it.merges;
-    if (resolved.colWidths) it.colWidths = resolved.colWidths;
-    else delete it.colWidths;
-  };
-  const modalCtx = {
-    commit: () => {
-      syncStructureBack();
-      save(); scheduleCommit();
-    },
-    rerender: () => {
-      syncStructureBack();
-      const keep = tableEditTarget;
-      if (!keep) return;
-      openTableEditModal(keep.blockId, keep.itemIndex);
-    },
-  };
-  const modalW = Math.min(640, Math.max(360, (innerWidth * 0.55) | 0));
-  hostEl.replaceChildren(buildTableEl(resolved, true, modalCtx, modalW));
-  const wrap = hostEl.querySelector('.tbl-wrap');
-  if (wrap) wrap.dataset.id = `__tm_${blockId}_${i}`;
-
-  wireTableStyleControls(sideEl, it, {
-    paint: () => {
-      const w = hostEl.querySelector('.tbl-wrap');
-      if (w) applyTableChrome(w, resolveGridTableItem(host, it));
-    },
-    after: () => { save(); scheduleCommit(); },
-  });
-
-  sideEl.querySelector('[data-a="addrow"]')?.addEventListener('click', () => {
-    addTableRow(resolved, null);
-    syncStructureBack();
-    modalCtx.rerender();
-  });
-  sideEl.querySelector('[data-a="addcol"]')?.addEventListener('click', () => {
-    addTableCol(resolved, null);
-    syncStructureBack();
-    modalCtx.rerender();
-  });
-
-  modal.hidden = false;
-  requestAnimationFrame(() => {
-    const cell = hostEl.querySelector('th, td');
-    if (cell) cell.focus();
-  });
-}
-function closeTableEditModal() {
-  const modal = document.getElementById('tableEditModal');
-  if (modal) modal.hidden = true;
-  if (fmtbar) fmtbar.hidden = true;
-  if (typeof closeLinkEdit === 'function') try { closeLinkEdit(); } catch { /* */ }
-  const target = tableEditTarget;
-  tableEditTarget = null;
-  if (target) {
-    // re-render da página pra refletir a tabela editada
-    render();
-    const cov = findCoverItem(target.blockId);
-    if (cov) {
-      selectCoverItem(target.blockId);
-    } else {
-      state.activeId = target.blockId;
-      state.sel = null;
-      tableGridPanelDismissed = false;
-      updateTableGridBar();
-      paintActiveBlock(target.blockId);
-      showHandleAtFocused();
-      syncTypeUI('table-grid');
-    }
-  }
-}
-function initTableEditModal() {
-  const modal = document.getElementById('tableEditModal');
-  if (!modal || modal.dataset.ready) return;
-  modal.dataset.ready = '1';
-  document.getElementById('tmClose')?.addEventListener('click', closeTableEditModal);
-  modal.querySelector('.cm-backdrop')?.addEventListener('click', closeTableEditModal);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modal && !modal.hidden) {
-      e.preventDefault();
-      closeTableEditModal();
-    }
-  });
-}
-// init cedo (DOM já montado — script no fim do body via type=module)
-if (typeof document !== 'undefined') {
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initTableEditModal);
-  else initTableEditModal();
 }
 
 // escala da imagem no popover: 10–100 (default 100 = ocupa a largura máxima da coluna).
@@ -2353,12 +2347,16 @@ const imageGridCtx = {
   applyCaptionStyle: (el, mode = 'default') => applyCaptionFace(el, mode),
 };
 
-// Grid de tabelas: edição de cada célula na modal (openTableEditor).
+// Grid de tabelas: edição inline; selectGridItem troca o segment do painel.
 const tableGridCtx = {
   commit: () => { save(); scheduleCommit(); },
   rerender: () => render(),
   removeBlock: (id) => tableCtx.removeBlock(id),
-  openTableEditor: (blockId, itemIndex) => openTableEditModal(blockId, itemIndex),
+  selectGridItem: (blockId, itemIndex) => selectTableGridItem(blockId, itemIndex),
+  get activeItemIndex() {
+    if (tableGridFocus === 'grid') return -1;
+    return +tableGridFocus;
+  },
 };
 
 // bloco genérico (usado na medição e no fluxo da coluna esquerda / largura total)
@@ -4090,8 +4088,18 @@ pagesEl.addEventListener('focusin', (e) => {
   // a célula editável da tabela não carrega data-id (quem carrega é o envelope .tbl-wrap) →
   // sobe até o bloco, senão a sidebar (tipo + coluna) continuaria falando do bloco ANTERIOR
   // enquanto se digita dentro da tabela.
+  // table-grid: wrap da célula tem id sintético __tg_<blockId>_<i> — resolve pro bloco pai.
   const holder = host.dataset.id ? host : (host.closest && host.closest('[data-id]'));
-  const b = holder && blockOf(holder.dataset.id);
+  let b = holder && blockOf(holder.dataset.id);
+  if (!b) {
+    const syn = holder?.dataset?.id || '';
+    const m = /^__tg_(.+)_(\d+)$/.exec(syn);
+    if (m) b = blockOf(m[1]);
+  }
+  if (!b) {
+    const gw = host.closest && host.closest('.tblgrid-wrap[data-id]');
+    if (gw) b = blockOf(gw.dataset.id);
+  }
   if (!b) return;
   clearIdxFocus();
   state.activeId = b.id; syncTypeUI(b.type);
@@ -5232,7 +5240,7 @@ document.addEventListener('mousedown', (e) => {
   const t = e.target;
   if (!(t && t.closest)) return;
   // âncoras e popovers que devem permanecer abertos
-  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit, #rightLayerMenu, #tableEditModal')) return;
+  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit, #rightLayerMenu')) return;
   if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu')) return;
   if (t.closest('#btnPrint, #zoomPct, #zoomFit, #bhandle, #badd')) return;
   // imagem: clicar fora limpa a seleção (fecha o painel)
@@ -10300,7 +10308,7 @@ function clearHiliteInSelection() {
 fmtbar.querySelector('.linkbtn').addEventListener('click', openLinkEdit);
 
 /** contenteditable editável no miolo (#pages) OU na modal de tabela do grid. */
-const EDITABLE_HOST_SEL = '#pages [contenteditable], #tableEditModal [contenteditable], #tmTableHost [contenteditable]';
+const EDITABLE_HOST_SEL = '#pages [contenteditable]';
 
 // sobe de um nó até o contenteditable do miolo / modal de tabela (ou null)
 function editableHostOfRange(range) {
@@ -10379,7 +10387,6 @@ function colorsFromFmtSelection() {
       // para no envelope de bloco; NÃO para em .tbl-wrap.b (célula da modal/miolo)
       if (n.classList?.contains('page')) break;
       if (n.classList?.contains('b') && !n.classList?.contains('tbl-wrap') && !n.classList?.contains('tbl-editing')) break;
-      if (n.id === 'tmTableHost' || n.id === 'tableEditModal') break;
       n = n.parentNode;
     }
   }
@@ -10397,11 +10404,11 @@ function updateFmtbar() {
   }
   if (!host) { fmtbar.hidden = true; return; }
   const role = host.dataset.role || 'block';
-  // miolo: data-id de bloco real; modal de tabela / capa / legenda → só marcas (sem troca de tipo)
-  const inTableModal = !!(host.closest && host.closest('#tableEditModal, #tmTableHost'));
-  const isMiolo = !inTableModal && !!host.dataset.id && role === 'block'
+  // célula de table-grid: data-id sintético __tg_… — trata como “não miolo de tipo”
+  const isGridCell = !!(host.closest && host.closest('.tblgrid-wrap'));
+  const isMiolo = !isGridCell && !!host.dataset.id && role === 'block'
     && !!blockOf(host.dataset.id);
-  fmtbar.classList.toggle('caption-mode', !isMiolo);
+  fmtbar.classList.toggle('caption-mode', !isMiolo || isGridCell);
   fmtbar.querySelectorAll('.markbtn').forEach(b =>
     b.classList.toggle('on', document.queryCommandState(b.dataset.cmd)));
   // trilha A (t2): reflete se a seleção está sobre um link existente
