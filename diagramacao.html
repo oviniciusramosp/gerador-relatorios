@@ -991,6 +991,9 @@
   .page.cover-page .cover-item.h2,
   .page.cover-page .cover-item.h3,
   .page.cover-page .cover-item.h4 { font-weight: 700; }
+  /* weight 800/900 no título: Plex var só vai a 700 — permitir negrito sintético */
+  .page.cover-page .cover-item.title,
+  .page.cover-page .cover-item.subtitle { font-synthesis: weight style; }
   .page.editing.cover-page .cover-item:hover { background: color-mix(in srgb, #4E39FF 6%, transparent); }
   .page.editing.cover-page .cover-item.cover-sel { outline: none; }
   .page.editing.cover-page .cover-item.cover-sel::after {
@@ -1124,26 +1127,35 @@
   .page .imggrid-wrap .imggrid-empty-ico {
     font-size: 16px; line-height: 1; font-weight: 400;
   }
-  .page.editing .imggrid-wrap .imggrid-has { cursor: pointer; }
+  /* foto preenchida: sem clique-para-substituir; ações no hover (Substituir / Remover) */
+  .page.editing .imggrid-wrap .imggrid-has { cursor: default; }
   .page.editing .imggrid-wrap .imggrid-has:hover { outline: 1.5px solid color-mix(in srgb, #4E39FF 45%, transparent); outline-offset: 1px; }
-  /* botão remover imagem: só no hover do frame (edição) */
-  .page.editing .imggrid-wrap .imggrid-rm {
+  .page.editing .imggrid-wrap .imggrid-actions {
     position: absolute; top: 4px; right: 4px; z-index: 2;
-    width: 22px; height: 22px; padding: 0; margin: 0;
-    display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: 6px; cursor: pointer;
-    color: #fff; background: color-mix(in srgb, #c0392b 88%, #000);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+    display: inline-flex; gap: 4px; align-items: center;
     opacity: 0; pointer-events: none;
     transition: opacity .12s ease;
   }
-  .page.editing .imggrid-wrap .imggrid-frame:hover .imggrid-rm,
-  .page.editing .imggrid-wrap .imggrid-rm:focus-visible {
+  .page.editing .imggrid-wrap .imggrid-frame:hover .imggrid-actions,
+  .page.editing .imggrid-wrap .imggrid-actions:focus-within {
     opacity: 1; pointer-events: auto;
   }
-  .page.editing .imggrid-wrap .imggrid-rm:hover {
-    background: #c0392b;
+  .page.editing .imggrid-wrap .imggrid-rep,
+  .page.editing .imggrid-wrap .imggrid-rm {
+    width: 22px; height: 22px; padding: 0; margin: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 6px; cursor: pointer;
+    color: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
   }
+  .page.editing .imggrid-wrap .imggrid-rep {
+    background: color-mix(in srgb, #4E39FF 88%, #000);
+  }
+  .page.editing .imggrid-wrap .imggrid-rep:hover { background: #4E39FF; }
+  .page.editing .imggrid-wrap .imggrid-rm {
+    background: color-mix(in srgb, #c0392b 88%, #000);
+  }
+  .page.editing .imggrid-wrap .imggrid-rm:hover { background: #c0392b; }
+  .page.editing .imggrid-wrap .imggrid-rep svg,
   .page.editing .imggrid-wrap .imggrid-rm svg { display: block; }
   .page .imggrid-wrap .figtitle:empty, .page .imggrid-wrap figcaption:empty { min-height: 1lh; }
   .page.editing .imggrid-wrap .figtitle:empty::before,
@@ -2185,6 +2197,20 @@
             <div class="field">Largura do resumo
               <div data-slot="resumowidth"></div>
             </div>
+          </div>
+        </div>
+      </details>
+
+      <details data-sec="miolo-rules">
+        <summary class="sum-info">Regras do Miolo<button type="button" class="infoicon" data-tip="Regras de paginação do fluxo principal (coluna de texto). Ligam/desligam sem reescrever o conteúdo — só mudam onde os blocos cortam entre páginas." aria-label="Sobre as regras do miolo">ⓘ</button></summary>
+        <div class="body">
+          <div class="swrow" title="Todo H1 começa em página nova (primeiro elemento da página)">
+            <span>Capítulo sempre em Nova Página</span>
+            <button class="sw" data-miolorule="h1NewPage" role="switch" aria-checked="false"></button>
+          </div>
+          <div class="swrow" title="H1–H4 não ficam sozinhos no fim da página — sobem com o bloco seguinte">
+            <span>Títulos sempre com o conteúdo</span>
+            <button class="sw" data-miolorule="headKeepWithNext" role="switch" aria-checked="false"></button>
           </div>
         </div>
       </details>

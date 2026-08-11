@@ -33,7 +33,7 @@ import {
   COL_L_DEFAULT, COL_L_MIN, COL_L_MAX, clampColL,
   hasOwn, clampFootAlign, clampRuleW, defaultLogo, ensureCoverType,
   migrateSpecialPages, normalizeOpenedDoc,
-  INDEX_COLOR_DEFAULTS, ensureIndexColors, ensureCoverBgFit,
+  INDEX_COLOR_DEFAULTS, ensureIndexColors, ensureCoverBgFit, ensureMioloRules,
   PNUM_COLOR_DEFAULT, FOOT_COLOR_DEFAULT,
 } from './doc-migrate.js';  // defaults/migração ao abrir .pdgm (puro; compartilhado com test-pdgm-compat)
 import { projectFormatFromName, projectBaseName, shouldReloadLinkedProject } from './project-link.js';
@@ -429,7 +429,8 @@ function seedDoc() {
     // bgFit: 'fill' (cover, recorta) | 'fit' (contain, mostra inteira); itens por coluna + y livre.
     cover: { on: true, bg: null, bgX: 50, bgY: 50, bgScale: 100, bgFit: 'fill', logo: defaultLogo(), items: [
       // title/subtitle = tipos da capa (40px/15px) — retrocompat com o visual antigo
-      // weight opcional no item (100–700); ausente → 700 (bold histórico)
+      // weight opcional no item (100–900; >700 sintético no Plex); ausente → 700
+      // letterSpacing (em) e lineHeight (unitless) opcionais — defaults no CSS / helpers
       coverItem('Título do relatório', 40, 'full', 'left', null, 330, 'title'),
       coverItem('Subtítulo · Paradigma Education', 15, 'full', 'left', null, 392, 'subtitle'),
     ] },
@@ -463,6 +464,10 @@ function seedDoc() {
       locked: null,           // mode=page: índices de página (null = default freemium)
       lockedSections: null,   // mode=section: ids de H1/H2 (null = default freemium)
     },
+    // Regras do Miolo (sidebar Documento) — paginação, default off (aditivo).
+    // h1NewPage: cada H1 inicia página nova.
+    // headKeepWithNext: H1–H4 não ficam órfãos no fim da página (grudam no bloco seguinte).
+    mioloRules: { h1NewPage: false, headKeepWithNext: false },
   };
 }
 
@@ -760,6 +765,33 @@ function splitFit(b, lines, from, room) {
   let k = 0;
   for (let i = MIN_LINES; i <= restantes - MIN_LINES; i++) if (lines[i0 + i - 1] - from <= room) k = i;
   return k ? lines[i0 + k - 1] : null;
+}
+/** Regras de paginação do miolo (sidebar Documento → Regras do Miolo). */
+function mioloRulesOf() {
+  return ensureMioloRules(state.doc || {});
+}
+/** Próximo bloco de fluxo após `b` (pula pagebreak). */
+function nextFlowBlock(stream, b) {
+  const i = stream.indexOf(b);
+  if (i < 0) return null;
+  for (let j = i + 1; j < stream.length; j++) {
+    if (stream[j].type !== 'pagebreak') return stream[j];
+  }
+  return null;
+}
+/**
+ * Altura mínima do começo de um bloco (keep-with-next).
+ * splittable: primeiras MIN_LINES; senão o bloco inteiro.
+ */
+function minLeadHeight(b) {
+  if (!b) return 0;
+  if (splittable(b)) {
+    const lines = measureLines(b);
+    if (!lines.length) return measure(b);
+    const n = Math.min(MIN_LINES, lines.length);
+    return Math.ceil(lines[n - 1]);
+  }
+  return measure(b);
 }
 
 // defaults do callout: cinza do swatch (#94A3B8) — fundo a 10% de opacidade, ícone a 100%.
@@ -1741,6 +1773,7 @@ function paginate() {
   const newPage = () => { pages.push({ left: [], right: [] }); trialClear(); used = 0; };
 
   const PBREAK_H = 10, PBREAK_GAP = 8;
+  const rules = mioloRulesOf();
   for (const b of stream) {
     if (b.type === 'pagebreak') {
       // trilha E: no editor a quebra MANUAL vira uma barra arrastável no fim da página que
@@ -1752,15 +1785,34 @@ function paginate() {
       }
       newPage(); continue;
     }
+    // Regra: Capítulo sempre em Nova Página — H1 é o 1º bloco de fluxo da página
+    if (rules.h1NewPage && b.type === 'h1' && pages[pages.length - 1].left.length > 0) {
+      newPage();
+    }
     const h = measure(b);
     // Um bloco pode render em VÁRIAS páginas: colocamos pedaço a pedaço até acabar. Um parágrafo
     // maior que a página inteira (que antes vazava por cima do rodapé) sai partido em 3, 4, N.
     let lines = null, posto = 0, primeiro = true;
+    // keep-with-next: próximo bloco de fluxo (só no 1º pedaço do heading)
+    const nextKeep = (rules.headKeepWithNext && HEAD_TYPES.has(b.type))
+      ? nextFlowBlock(stream, b)
+      : null;
+    const nextKeepLead = nextKeep ? minLeadHeight(nextKeep) : 0;
     while (true) {
       const pi = pages.length - 1;
       const cur = pages[pi];
       const prev = cur.left.length ? cur.left[cur.left.length - 1].b : null;
       const gap = primeiro && prev && prev.type !== 'pagebreak' ? gapBefore(b, prev) : 0;
+      // Regra: Títulos sempre com o conteúdo — H1–H4 + início do bloco seguinte
+      // têm que caber juntos; senão o título sobe pra próxima página (não fica órfão).
+      if (primeiro && nextKeep && cur.left.length > 0) {
+        const gNext = gapBefore(nextKeep, b);
+        const need = gap + h + gNext + nextKeepLead;
+        if (used + need > CONTENT_H) {
+          newPage();
+          continue;
+        }
+      }
       const room = CONTENT_H - used - gap, resto = h - posto;
       // tenta colocar; se o stack real estourar e a página já tem coisa, desfaz e reabre página.
       const tryPush = (f) => {
@@ -2516,25 +2568,51 @@ function buildCoverItem(kind, it) {
   el.classList.add('b', cls);
   el.style.fontSize = (it.size || COVER_TYPE_SIZE[type] || 18) + 'px';
   if (it.color) el.style.color = it.color;
-  // title/subtitle: weight configurável no painel (default 700); h1–h4 fixo em 700
-  if (type === 'title' || type === 'subtitle') el.style.fontWeight = String(coverItemWeight(it));
+  // title/subtitle: weight/LS/lh no painel; h1–h4 fixo em 700
+  if (type === 'title' || type === 'subtitle') applyCoverTitleFace(el, it);
   else if (COVER_HEAD_TYPES.has(type)) el.style.fontWeight = '700';
   el.innerHTML = it.html || '';
-  // h1–h4/p/caption/quote: estilo global do miolo; title/subtitle só usam size/cor/weight do item
+  // h1–h4/p/caption/quote: estilo global do miolo; title/subtitle só usam size/cor/face do item
   if (HEAD_TYPES.has(type) || type === 'p' || type === 'caption' || type === 'quote') applyTypeStyle(el, type);
-  // size/cor/weight do item de capa vencem o estilo global do tipo (slider do painel)
+  // size/cor/face do item de capa vencem o estilo global do tipo (slider do painel)
   if (it.size) el.style.fontSize = it.size + 'px';
   if (it.color) el.style.color = it.color;
-  if (type === 'title' || type === 'subtitle') el.style.fontWeight = String(coverItemWeight(it));
+  if (type === 'title' || type === 'subtitle') applyCoverTitleFace(el, it);
   if (editing) { el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR'; }
   return el;
 }
 
-/** Peso (font-weight) de title/subtitle da capa: 100–700, default 700 (bold histórico). */
+// Defaults da face de title/subtitle (espelham o CSS de .cover-item).
+// weight > 700 é sintético (Plex var só vai a 700) — font-synthesis: weight no CSS.
+const COVER_WEIGHT_DEFAULT = 700;
+const COVER_WEIGHT_MAX = 900;
+const COVER_LS_DEFAULT = -0.01;   // em
+const COVER_LH_DEFAULT = 1.15;    // unitless (escala com o tamanho)
+
+/** Peso (font-weight) de title/subtitle da capa: 100–900, default 700. */
 function coverItemWeight(it) {
-  const w = it && it.weight != null ? +it.weight : 700;
-  if (!Number.isFinite(w)) return 700;
-  return Math.min(700, Math.max(100, Math.round(w / 100) * 100));
+  const w = it && it.weight != null ? +it.weight : COVER_WEIGHT_DEFAULT;
+  if (!Number.isFinite(w)) return COVER_WEIGHT_DEFAULT;
+  return Math.min(COVER_WEIGHT_MAX, Math.max(100, Math.round(w / 100) * 100));
+}
+/** Letter-spacing (em) de title/subtitle. */
+function coverItemLetterSpacing(it) {
+  const v = it && it.letterSpacing != null ? +it.letterSpacing : COVER_LS_DEFAULT;
+  if (!Number.isFinite(v)) return COVER_LS_DEFAULT;
+  return Math.max(-0.1, Math.min(0.2, Math.round(v * 100) / 100));
+}
+/** Line-height unitless de title/subtitle. */
+function coverItemLineHeight(it) {
+  const v = it && it.lineHeight != null ? +it.lineHeight : COVER_LH_DEFAULT;
+  if (!Number.isFinite(v)) return COVER_LH_DEFAULT;
+  return Math.max(0.8, Math.min(2.5, Math.round(v * 100) / 100));
+}
+/** Aplica weight + letter-spacing + line-height no nó do título/subtítulo. */
+function applyCoverTitleFace(el, it) {
+  if (!el) return;
+  el.style.fontWeight = String(coverItemWeight(it));
+  el.style.letterSpacing = coverItemLetterSpacing(it) + 'em';
+  el.style.lineHeight = String(coverItemLineHeight(it));
 }
 
 /** Aplica CSS vars de cores Custom no .toc (live + render). */
@@ -4453,14 +4531,22 @@ function openCoverPanel() {
   const replace = typeof REPLACE_ICO !== 'undefined' ? REPLACE_ICO : uiIco('repeat', 16, 'outline');
   const sizeVal = it.size || COVER_TYPE_SIZE[type] || 18;
   const weightVal = coverItemWeight(it);
+  const lsVal = coverItemLetterSpacing(it);
+  const lhVal = coverItemLineHeight(it);
+  const fmtLs = (n) => (Number.isFinite(+n) ? +n : COVER_LS_DEFAULT).toFixed(2) + 'em';
+  const fmtLh = (n) => (Number.isFinite(+n) ? +n : COVER_LH_DEFAULT).toFixed(2);
   coverPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">${COVER_TYPE_LABEL[type] || 'Bloco'}</div>
     ${isPlain ? `
     <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${sizeVal}px</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir">↺</button></span></span>
       <input type="range" data-a="size" min="8" max="120" step="1" value="${sizeVal}" data-snaps="8,14,18,32,64,120"></label>
     ${isTitleSub ? `
-    <label class="field"><span class="field-row">Espessura <span class="field-val"><span data-role="wtv">${weightVal}</span><button type="button" class="resetbtn" data-a="weightreset" title="Redefinir para 700">↺</button></span></span>
-      <input type="range" data-a="weight" min="100" max="700" step="100" value="${weightVal}" data-snaps="100,200,300,400,500,600,700" data-edit="off"></label>` : ''}
+    <label class="field"><span class="field-row">Espessura <span class="field-val"><span data-role="wtv">${weightVal}</span><button type="button" class="resetbtn" data-a="weightreset" title="Redefinir para ${COVER_WEIGHT_DEFAULT}">↺</button></span></span>
+      <input type="range" data-a="weight" min="100" max="${COVER_WEIGHT_MAX}" step="100" value="${weightVal}" data-snaps="100,200,300,400,500,600,700,800,900" data-edit="off"></label>
+    <label class="field"><span class="field-row">Espaço entre letras <span class="field-val"><span data-role="lsv">${fmtLs(lsVal)}</span><button type="button" class="resetbtn" data-a="lsreset" title="Redefinir para ${fmtLs(COVER_LS_DEFAULT)}">↺</button></span></span>
+      <input type="range" data-a="letterSpacing" min="-0.05" max="0.15" step="0.01" value="${lsVal}" data-snaps="-0.05,-0.01,0,0.05,0.1,0.15"></label>
+    <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lhv">${fmtLh(lhVal)}</span><button type="button" class="resetbtn" data-a="lhreset" title="Redefinir para ${fmtLh(COVER_LH_DEFAULT)}">↺</button></span></span>
+      <input type="range" data-a="lineHeight" min="0.8" max="2.5" step="0.05" value="${lhVal}" data-snaps="0.8,1,1.15,1.2,1.5,2,2.5"></label>` : ''}
     <label class="field">Cor <button type="button" class="colorfield" data-cf style="background:${it.color || '#000000'}"></button></label>` : ''}
     <div class="field">Coluna<div data-slot="col"></div></div>
     ${showAlign ? `<div class="field">Alinhamento<div data-slot="align"></div></div>` : ''}
@@ -4498,10 +4584,7 @@ function openCoverPanel() {
       save(); scheduleCommit();
     }, it.color || '#000000'));
   }
-  const szReset = coverPanel.querySelector('[data-a="sizereset"]');
-  if (szReset) szReset.addEventListener('mousedown', (e) => e.preventDefault());
-  const wtReset = coverPanel.querySelector('[data-a="weightreset"]');
-  if (wtReset) wtReset.addEventListener('mousedown', (e) => e.preventDefault());
+  coverPanel.querySelectorAll('.resetbtn').forEach(b => b.addEventListener('mousedown', (e) => e.preventDefault()));
   enhanceAll(coverPanel);
   positionCoverPanel();
   coverPanel.querySelectorAll('[data-a]').forEach(el => {
@@ -4525,15 +4608,45 @@ function openCoverPanel() {
       }
       if (a === 'weight' || a === 'weightreset') {
         const oldH = node ? node.offsetHeight : 0;
-        cur.item.weight = a === 'weightreset' ? 700 : coverItemWeight({ weight: +el.value });
+        cur.item.weight = a === 'weightreset' ? COVER_WEIGHT_DEFAULT : coverItemWeight({ weight: +el.value });
         if (a === 'weightreset') {
           const range = coverPanel.querySelector('input[data-a="weight"]');
           if (range) range.value = cur.item.weight;
         }
-        if (node) node.style.fontWeight = String(cur.item.weight);
+        if (node) applyCoverTitleFace(node, cur.item);
         coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);
         const wtv = coverPanel.querySelector('[data-role="wtv"]');
         if (wtv) wtv.textContent = String(cur.item.weight);
+        save(); scheduleCommit(); return;
+      }
+      if (a === 'letterSpacing' || a === 'lsreset') {
+        const oldH = node ? node.offsetHeight : 0;
+        cur.item.letterSpacing = a === 'lsreset'
+          ? COVER_LS_DEFAULT
+          : coverItemLetterSpacing({ letterSpacing: +el.value });
+        if (a === 'lsreset') {
+          const range = coverPanel.querySelector('input[data-a="letterSpacing"]');
+          if (range) range.value = cur.item.letterSpacing;
+        }
+        if (node) applyCoverTitleFace(node, cur.item);
+        coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);
+        const lsv = coverPanel.querySelector('[data-role="lsv"]');
+        if (lsv) lsv.textContent = fmtLs(cur.item.letterSpacing);
+        save(); scheduleCommit(); return;
+      }
+      if (a === 'lineHeight' || a === 'lhreset') {
+        const oldH = node ? node.offsetHeight : 0;
+        cur.item.lineHeight = a === 'lhreset'
+          ? COVER_LH_DEFAULT
+          : coverItemLineHeight({ lineHeight: +el.value });
+        if (a === 'lhreset') {
+          const range = coverPanel.querySelector('input[data-a="lineHeight"]');
+          if (range) range.value = cur.item.lineHeight;
+        }
+        if (node) applyCoverTitleFace(node, cur.item);
+        coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);
+        const lhv = coverPanel.querySelector('[data-role="lhv"]');
+        if (lhv) lhv.textContent = fmtLh(cur.item.lineHeight);
         save(); scheduleCommit(); return;
       }
       if (a === 'replace') {
@@ -7514,6 +7627,14 @@ function syncSpecialUI() {
   document.querySelectorAll('.sw[data-idxlvl]').forEach(sw => {
     sw.setAttribute('aria-checked', String(!!(state.doc.index.levels || {})[sw.dataset.idxlvl]));
   });
+  // Regras do Miolo (paginação)
+  {
+    const rules = mioloRulesOf();
+    document.querySelectorAll('.sw[data-miolorule]').forEach(sw => {
+      const k = sw.dataset.miolorule;
+      sw.setAttribute('aria-checked', String(!!rules[k]));
+    });
+  }
   ensureIndexColors(state.doc.index);
   document.querySelectorAll('select[data-idxopt]').forEach(s => { s.value = state.doc.index[s.dataset.idxopt]; });
   // pickers Custom do índice: só visíveis com color==='custom'
@@ -7690,6 +7811,15 @@ document.querySelectorAll('.sw[data-idxlvl]').forEach(sw => sw.addEventListener(
   const lv = (state.doc.index.levels ||= { h1: true, h2: true }), k = sw.dataset.idxlvl;
   lv[k] = !lv[k]; sw.setAttribute('aria-checked', String(lv[k]));
   render();
+}));
+// Regras do Miolo — paginação (H1 em página nova / títulos com conteúdo)
+document.querySelectorAll('.sw[data-miolorule]').forEach(sw => sw.addEventListener('click', () => {
+  const rules = ensureMioloRules(state.doc);
+  const k = sw.dataset.miolorule;
+  if (k !== 'h1NewPage' && k !== 'headKeepWithNext') return;
+  rules[k] = !rules[k];
+  sw.setAttribute('aria-checked', String(!!rules[k]));
+  render(); // re-pagina
 }));
 // cores / largura do índice / largura do resumo: o value do <select> É o valor guardado
 document.querySelectorAll('select[data-idxopt]').forEach(s => s.addEventListener('change', () => {

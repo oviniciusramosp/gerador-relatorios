@@ -308,11 +308,20 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
       }
       frame.appendChild(img);
       if (editing) {
+        // ações no hover: Substituir / Remover — clique na foto NÃO abre o file picker
+        // (evita troca acidental; vazio continua com o botão + do placeholder)
         frame.classList.add('imggrid-has');
-        frame.title = 'Clique para substituir';
-        frame.addEventListener('click', (e) => {
-          // ignora clique no botão de remover
-          if (e.target.closest && e.target.closest('.imggrid-rm')) return;
+        const actions = document.createElement('div');
+        actions.className = 'imggrid-actions';
+        const rep = document.createElement('button');
+        rep.type = 'button';
+        rep.className = 'imggrid-rep';
+        rep.title = 'Substituir imagem';
+        rep.setAttribute('aria-label', 'Substituir imagem');
+        // ion-icon "repeat-outline" simplificado (mesmo sentido do Substituir da imagem avulsa)
+        rep.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 7a5 5 0 0 0-8.5-3.5L3 5"/><path d="M3 2v3h3"/><path d="M3 9a5 5 0 0 0 8.5 3.5L13 11"/><path d="M13 14v-3h-3"/></svg>';
+        rep.addEventListener('click', (e) => {
+          e.preventDefault();
           e.stopPropagation();
           ctx.pickImage?.(b.id, i);
         });
@@ -330,7 +339,8 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
           ctx.commit?.();
           ctx.rerender?.();
         });
-        frame.appendChild(rm);
+        actions.append(rep, rm);
+        frame.appendChild(actions);
       }
     } else {
       // placeholder: altura do layout (= max das imagens com equal=width; ou H comum em height)

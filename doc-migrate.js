@@ -140,8 +140,22 @@ export function normalizeOpenedDoc(doc, raw = null) {
     // cores Custom do índice: aditivo — docs antigos sem colors usam o default do esquema Padrão
     ensureIndexColors(doc.index);
   }
+  // Regras do Miolo (paginação): default off; docs antigos sem o campo não reflowam
+  ensureMioloRules(doc);
   migrateSpecialPages(doc);
   return doc;
+}
+
+/** Defaults das regras de paginação do miolo. Mutates `doc`. */
+export function ensureMioloRules(doc) {
+  if (!doc || typeof doc !== 'object') return { h1NewPage: false, headKeepWithNext: false };
+  if (!doc.mioloRules || typeof doc.mioloRules !== 'object') doc.mioloRules = {};
+  const r = doc.mioloRules;
+  if (r.h1NewPage == null) r.h1NewPage = false;
+  else r.h1NewPage = !!r.h1NewPage;
+  if (r.headKeepWithNext == null) r.headKeepWithNext = false;
+  else r.headKeepWithNext = !!r.headKeepWithNext;
+  return r;
 }
 
 /** Cores default do rodapé — batem com .page .foot .pnum / .site no CSS. */

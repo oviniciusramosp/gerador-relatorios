@@ -15,7 +15,7 @@ import { serializeDoc, deserializeDoc, serializeDocZip, loadDocZip } from './doc
 import {
   RULE_W_DEFAULT, RULE_W_LEGACY, COL_L_DEFAULT, COL_L_MIN, COL_L_MAX,
   clampColL, defaultLogo, normalizeOpenedDoc,
-  INDEX_COLOR_DEFAULTS, ensureIndexColors, ensureCoverBgFit,
+  INDEX_COLOR_DEFAULTS, ensureIndexColors, ensureCoverBgFit, ensureMioloRules,
   PNUM_COLOR_DEFAULT, FOOT_COLOR_DEFAULT,
 } from './doc-migrate.js';
 
@@ -147,24 +147,29 @@ assert.equal(capaAntiga.cover.bgFit, 'fill', 'capa antiga sem bgFit → fill');
 // weight ausente no item: UI trata como 700 (não injeta no open — aditivo opcional)
 assert.equal(capaAntiga.cover.items[0].weight, undefined);
 
-// bgFit 'fit' + weight no title preservados no open
+// bgFit 'fit' + weight/letterSpacing/lineHeight no title preservados no open
 const capaFit = openCompat({
   blocks: [],
   cover: {
     on: true,
     bgFit: 'fit',
-    items: [{ id: 't1', type: 'title', html: 'Bold free', y: 100, weight: 400 }],
+    items: [{
+      id: 't1', type: 'title', html: 'Bold free', y: 100,
+      weight: 900, letterSpacing: 0.02, lineHeight: 1.3,
+    }],
   },
   back: { on: false, bgFit: 'fit', items: [] },
   index: { on: true, color: 'custom', colors: { num: '#FF0000', text: '#111111', page: '#999999' } },
 });
 assert.equal(capaFit.cover.bgFit, 'fit');
 assert.equal(capaFit.back.bgFit, 'fit');
-assert.equal(capaFit.cover.items[0].weight, 400, 'weight do título da capa sobrevive ao open');
+assert.equal(capaFit.cover.items[0].weight, 900, 'weight 900 do título da capa sobrevive ao open');
+assert.equal(capaFit.cover.items[0].letterSpacing, 0.02, 'letterSpacing do título sobrevive ao open');
+assert.equal(capaFit.cover.items[0].lineHeight, 1.3, 'lineHeight do título sobrevive ao open');
 assert.equal(capaFit.index.color, 'custom');
 assert.deepEqual(capaFit.index.colors, { num: '#FF0000', text: '#111111', page: '#999999' });
 
-// ensureIndexColors / ensureCoverBgFit: helpers puros
+// ensureIndexColors / ensureCoverBgFit / ensureMioloRules: helpers puros
 const idxBare = {};
 ensureIndexColors(idxBare);
 assert.deepEqual(idxBare.colors, INDEX_COLOR_DEFAULTS);
@@ -172,6 +177,22 @@ assert.equal(idxBare.color, 'padrao');
 const covBare = {};
 ensureCoverBgFit(covBare);
 assert.equal(covBare.bgFit, 'fill');
+
+// mioloRules ausente → defaults off; flags true sobrevivem ao open
+const semRegras = openCompat({ blocks: [], cover: { on: false, items: [] }, back: { on: false, items: [] }, index: { on: false } });
+assert.deepEqual(semRegras.mioloRules, { h1NewPage: false, headKeepWithNext: false }, 'mioloRules default off');
+const comRegras = openCompat({
+  blocks: [],
+  cover: { on: false, items: [] },
+  back: { on: false, items: [] },
+  index: { on: false },
+  mioloRules: { h1NewPage: true, headKeepWithNext: true },
+});
+assert.equal(comRegras.mioloRules.h1NewPage, true);
+assert.equal(comRegras.mioloRules.headKeepWithNext, true);
+const rBare = {};
+ensureMioloRules(rBare);
+assert.deepEqual(rBare.mioloRules, { h1NewPage: false, headKeepWithNext: false });
 ensureCoverBgFit({ bgFit: 'fit' });
 assert.equal(ensureCoverBgFit({ bgFit: 'fit' }).bgFit, 'fit');
 assert.equal(ensureCoverBgFit({ bgFit: 'nope' }).bgFit, 'fill', 'bgFit inválido → fill');
