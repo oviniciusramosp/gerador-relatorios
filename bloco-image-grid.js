@@ -293,19 +293,16 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
       img.draggable = false;
       img.alt = '';
       img.style.borderRadius = radius + 'px';
-      if (equal === 'width') {
-        img.style.width = '100%';
-        img.style.height = 'auto';
-        img.style.display = 'block';
-      } else {
-        // equal height: frame já tem height fixo
-        frame.style.height = fr.h + 'px';
-        img.style.width = '100%';
-        img.style.height = '100%';
-        img.style.objectFit = 'contain';
-        img.style.display = 'block';
-        // sem fundo: PNG/SVG transparentes mostram o papel da página
-      }
+      // Altura do frame SEMPRE de layoutImageFrames (nw/nh), nunca height:auto no <img>.
+      // height:auto só fecha depois do decode — a paginação media o grid “baixo”, cabia
+      // no resto da página, e ao carregar a foto a legenda vazava da área de conteúdo.
+      frame.style.height = Math.max(1, fr.h) + 'px';
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.display = 'block';
+      // equal=width: aspect do frame = nw/nh → cover preenche sem letterbox.
+      // equal=height: frames já têm H comum e W proporcional; contain evita crop.
+      img.style.objectFit = equal === 'height' ? 'contain' : 'cover';
       frame.appendChild(img);
       if (editing) {
         // ações no hover: Substituir / Remover — clique na foto NÃO abre o file picker
