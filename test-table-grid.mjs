@@ -20,7 +20,7 @@ import {
   ensureTable, resolveGridTableItem, mergeCells, unmergeCells, isCellCovered,
   mergeOriginAt, ensureMerges, addTableRow, addTableCol,
   setTableHeaderRow, setTableHeaderCol, unwrapTableData,
-  resolveMergeRange, mergeSelectionOrNeighbor,
+  resolveMergeRange, mergeSelectionOrNeighbor, getMerges,
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   tableHeaderTextOf, tableTextColorOf,
@@ -344,6 +344,11 @@ import {
   assert.equal(mergeSelectionOrNeighbor(t, { r0: 0, c0: 0, r1: 0, c1: 0 }), true);
   assert.deepEqual(t.merges[0], { r: 0, c: 0, cs: 2, rs: 1 });
   assert.equal(isCellCovered(t, 0, 1), true);
+  // contrato Google Sheets: origem + cobertas; 1ª linha renderiza 2 células (span 2 + C)
+  let visible = 0;
+  for (let c = 0; c < 3; c++) if (!isCellCovered(t, 0, c)) visible++;
+  assert.equal(visible, 2, 'linha com merge 2-col = 2 células visíveis');
+  assert.equal(mergeOriginAt(t, 0, 0)?.cs, 2);
 
   // última col da linha: estende p/ baixo
   const t2 = { rows: [['A', 'B'], ['1', '2']] };
@@ -351,13 +356,15 @@ import {
     r0: 0, c0: 1, r1: 1, c1: 1,
   });
 
-  // multi já definido
+  // multi 2×2
   const t3 = { rows: [['A', 'B', 'C'], ['1', '2', '3']] };
   assert.deepEqual(resolveMergeRange(t3, { r0: 0, c0: 0, r1: 1, c1: 1 }), {
     r0: 0, c0: 0, r1: 1, c1: 1,
   });
   assert.equal(mergeSelectionOrNeighbor(t3, { r0: 0, c0: 0, r1: 1, c1: 1 }), true);
   assert.deepEqual(t3.merges[0], { r: 0, c: 0, cs: 2, rs: 2 });
+  assert.equal(isCellCovered(t3, 1, 1), true);
+  assert.equal(getMerges(t3).length, 1);
 }
 
 console.log('test-table-grid: ok');

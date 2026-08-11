@@ -34,6 +34,7 @@ import {
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   clampTableFontSize, clampTableLineHeight, normalizeTableAlign, normalizeTableValign,
   setTableHeaderRow, setTableHeaderCol, tableLiveActive, tableLiveFromEl,
+  mergeSelectionOrNeighbor, unmergeCells,
   DEFAULT_HEADER_BG, DEFAULT_HEADER_TEXT, DEFAULT_TEXT_COLOR,
   DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_BG,
   DEFAULT_TABLE_RADIUS, DEFAULT_BORDER_WIDTH,
@@ -1616,24 +1617,55 @@ function wireTableStyleControls(root, b, hooks = {}) {
     btn.addEventListener('mousedown', (e) => e.preventDefault());
   });
 
-  // Mesclar / Desagrupar — usa a seleção viva da tabela ativa (arraste ou Shift+clique)
+  // Mesclar / Desagrupar — live API (DOM span) com fallback no bloco real + render
   const liveFor = () => {
     if (hooks.tableHost) return tableLiveFromEl(hooks.tableHost()) || tableLiveActive();
     return tableLiveActive();
+  };
+  const selFromHost = (host) => {
+    if (!host) return { r0: 0, c0: 0, r1: 0, c1: 0 };
+    const selected = [...host.querySelectorAll('th.tbl-sel, td.tbl-sel')];
+    if (selected.length) {
+      const rows = selected.map((el) => +el.dataset.row).filter(Number.isFinite);
+      const cols = selected.map((el) => +el.dataset.col).filter(Number.isFinite);
+      if (rows.length && cols.length) {
+        return {
+          r0: Math.min(...rows), r1: Math.max(...rows),
+          c0: Math.min(...cols), c1: Math.max(...cols),
+        };
+      }
+    }
+    const ae = document.activeElement;
+    const td = (ae && host.contains(ae) && ae.closest?.('th, td'))
+      || host.querySelector('th:focus, td:focus')
+      || host.querySelector('th, td');
+    if (td) {
+      const r = +td.dataset.row;
+      const c = +td.dataset.col;
+      if (Number.isFinite(r) && Number.isFinite(c)) return { r0: r, c0: c, r1: r, c1: c };
+    }
+    return { r0: 0, c0: 0, r1: 0, c1: 0 };
   };
   root.querySelector('[data-a="merge"]')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     const live = liveFor();
-    if (!live?.merge) return;
-    if (!live.merge()) {
-      // sem range multi: nada a fazer (usuário precisa arrastar / Shift+clique)
+    if (live?.merge?.()) {
+      hooks.after?.();
+      return;
     }
+    // fallback: muta o bloco e re-render (cria célula com colspan/rowspan)
+    if (typeof hooks.onMerge === 'function') hooks.onMerge(selFromHost(hooks.tableHost?.()));
   });
   root.querySelector('[data-a="unmerge"]')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    liveFor()?.unmerge?.();
+    const live = liveFor();
+    if (live?.unmerge?.()) {
+      hooks.after?.();
+      return;
+    }
+    if (typeof hooks.onUnmerge === 'function') hooks.onUnmerge(selFromHost(hooks.tableHost?.()));
   });
 
   enhanceAll(root);
@@ -1672,6 +1704,18 @@ function openTablePanel() {
       if (state.activeId === b.id || state.sel === b.id) openTablePanel();
     },
     tableHost: () => pagesEl.querySelector(`.tbl-wrap[data-id="${b.id}"]`),
+    onMerge: (sel) => {
+      if (!mergeSelectionOrNeighbor(b, sel)) return;
+      save(); scheduleCommit();
+      render();
+      if (state.activeId === b.id || state.sel === b.id) openTablePanel();
+    },
+    onUnmerge: (sel) => {
+      if (!unmergeCells(b, sel.r0, sel.c0)) return;
+      save(); scheduleCommit();
+      render();
+      if (state.activeId === b.id || state.sel === b.id) openTablePanel();
+    },
     after: () => { save(); scheduleCommit(); },
   });
   tablePanel.querySelector('[data-a="del"]').addEventListener('click', () => {
@@ -2129,6 +2173,17 @@ function openTableGridPanel() {
       tableHost: () => pagesEl.querySelector(
         `.tblgrid-wrap[data-id="${b.id}"] .tblgrid-cell[data-item="${itemIdx}"] .tbl-wrap`,
       ),
+      onMerge: (sel) => {
+        // item real do grid — merge grava colspan no modelo e rebuild
+        if (!mergeSelectionOrNeighbor(b.items[itemIdx], sel)) return;
+        save(); scheduleCommit();
+        reopen();
+      },
+      onUnmerge: (sel) => {
+        if (!unmergeCells(b.items[itemIdx], sel.r0, sel.c0)) return;
+        save(); scheduleCommit();
+        reopen();
+      },
       after: () => { save(); scheduleCommit(); },
     });
     body.querySelector('[data-a="addrow"]')?.addEventListener('click', (e) => {

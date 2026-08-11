@@ -276,20 +276,22 @@ export function setTableHeaderCol(b, on) {
 // não são renderizadas. Conteúdo fica só na origem.
 
 export function getMerges(b) {
-  return Array.isArray(b?.merges) ? b.merges : [];
+  const t = unwrapTableData(b) || b;
+  return Array.isArray(t?.merges) ? t.merges : [];
 }
 
 /** Valida e limpa merges (bounds, overlaps, 1×1). */
 export function ensureMerges(b) {
-  if (!b || !Array.isArray(b.merges) || !b.merges.length) {
-    if (b) delete b.merges;
-    return b;
+  const t = unwrapTableData(b) || b;
+  if (!t || !Array.isArray(t.merges) || !t.merges.length) {
+    if (t) delete t.merges;
+    return t;
   }
-  ensureMatrix(b);
-  const nR = b.rows.length;
-  const nC = nColsOf(b);
+  ensureMatrix(t);
+  const nR = t.rows.length;
+  const nC = nColsOf(t);
   const cleaned = [];
-  for (const raw of b.merges) {
+  for (const raw of t.merges) {
     if (!raw || typeof raw !== 'object') continue;
     const r = Math.max(0, raw.r | 0);
     const c = Math.max(0, raw.c | 0);
@@ -319,9 +321,9 @@ export function ensureMerges(b) {
     }
     out.push(m);
   }
-  if (!out.length) delete b.merges;
-  else b.merges = out;
-  return b;
+  if (!out.length) delete t.merges;
+  else t.merges = out;
+  return t;
 }
 
 /** Célula coberta por um merge (não é a origem). */
@@ -341,6 +343,62 @@ export function mergeOriginAt(b, r, c) {
 export function findMergeCovering(b, r, c) {
   return getMerges(b).find((m) =>
     r >= m.r && r < m.r + m.rs && c >= m.c && c < m.c + m.cs) || null;
+}
+
+/**
+ * Aplica colspan/rowspan no DOM ao vivo (estilo Google Sheets):
+ * remove células cobertas e expande a origem. Não mexe em b.merges —
+ * o caller já gravou o modelo.
+ */
+export function applyMergeDom(table, r0, c0, r1, c1) {
+  if (!table) return false;
+  const rMin = Math.min(r0 | 0, r1 | 0);
+  const rMax = Math.max(r0 | 0, r1 | 0);
+  const cMin = Math.min(c0 | 0, c1 | 0);
+  const cMax = Math.max(c0 | 0, c1 | 0);
+  const cs = cMax - cMin + 1;
+  const rs = rMax - rMin + 1;
+  if (cs <= 1 && rs <= 1) return false;
+  const origin = table.querySelector(`[data-row="${rMin}"][data-col="${cMin}"]`);
+  if (!origin) return false;
+  // remove cobertas ANTES de setar span (evita layout estranho no meio)
+  for (let r = rMin; r <= rMax; r++) {
+    for (let c = cMin; c <= cMax; c++) {
+      if (r === rMin && c === cMin) continue;
+      const el = table.querySelector(`[data-row="${r}"][data-col="${c}"]`);
+      if (el) el.remove();
+    }
+  }
+  origin.colSpan = cs;
+  origin.rowSpan = rs;
+  origin.setAttribute('colspan', String(cs));
+  origin.setAttribute('rowspan', String(rs));
+  origin.classList.add('tbl-merged');
+  return true;
+}
+
+/** Desfaz span no DOM (origem volta a 1×1; células cobertas só voltam no rebuild). */
+export function applyUnmergeDom(table, r, c) {
+  if (!table) return false;
+  const origin = table.querySelector(`[data-row="${r}"][data-col="${c}"]`)
+    || table.querySelector(`th.tbl-merged, td.tbl-merged`);
+  // acha a célula que cobre (r,c)
+  let cell = null;
+  table.querySelectorAll('th, td').forEach((el) => {
+    const rr = +el.dataset.row;
+    const cc = +el.dataset.col;
+    const cs = el.colSpan || 1;
+    const rs = el.rowSpan || 1;
+    if (r >= rr && r < rr + rs && c >= cc && c < cc + cs) cell = el;
+  });
+  if (!cell) cell = origin;
+  if (!cell) return false;
+  cell.colSpan = 1;
+  cell.rowSpan = 1;
+  cell.removeAttribute('colspan');
+  cell.removeAttribute('rowspan');
+  cell.classList.remove('tbl-merged');
+  return true;
 }
 
 /** Mescla o retângulo inclusivo. Conteúdo coberto some; origem mantém o seu. */
@@ -933,6 +991,12 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
   // frame SÓ com a table — overflow:hidden clipa header/cantos; chrome fica no wrap
   frame.appendChild(table);
   wrap.appendChild(frame);
+  // debug/contrato: merges do modelo (empty = sem merge)
+  {
+    const ms = getMerges(b);
+    if (ms.length) wrap.dataset.merges = JSON.stringify(ms);
+    else delete wrap.dataset.merges;
+  }
 
   if (editing) {
     // barra de mesclar / desagrupar (visível com seleção) — fora do frame (não clipa)
@@ -1071,26 +1135,33 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     const runMerge = () => {
       const data = unwrapTableData(b) || b;
       const sel = anchorSel();
-      const ok = mergeSelectionOrNeighbor(data, sel);
-      if (ok) {
-        cellSel = null;
-        ctx.commit?.();
-        ctx.rerender?.();
-      }
-      return ok;
+      const range = resolveMergeRange(data, sel);
+      if (!range) return false;
+      const ok = mergeCells(data, range.r0, range.c0, range.r1, range.c1);
+      if (!ok) return false;
+      // 1) DOM ao vivo: célula maior de verdade (colspan/rowspan) — sem esperar rebuild
+      applyMergeDom(table, range.r0, range.c0, range.r1, range.c1);
+      // 2) persiste no modelo + rebuild (garante alças/colgroup/estado)
+      cellSel = null;
+      wrap.dataset.merges = JSON.stringify(data.merges || []);
+      ctx.commit?.();
+      ctx.rerender?.();
+      return true;
     };
     const runUnmerge = () => {
       const data = unwrapTableData(b) || b;
       const sel = anchorSel();
       const r = Math.min(sel.r0, sel.r1 ?? sel.r0);
       const c = Math.min(sel.c0, sel.c1 ?? sel.c0);
+      const covering = findMergeCovering(data, r, c);
       const ok = unmergeCells(data, r, c);
-      if (ok) {
-        cellSel = null;
-        ctx.commit?.();
-        ctx.rerender?.();
-      }
-      return ok;
+      if (!ok) return false;
+      if (covering) applyUnmergeDom(table, covering.r, covering.c);
+      cellSel = null;
+      wrap.dataset.merges = JSON.stringify(data.merges || []);
+      ctx.commit?.();
+      ctx.rerender?.();
+      return true;
     };
     const doMerge = (e) => {
       e.preventDefault();
