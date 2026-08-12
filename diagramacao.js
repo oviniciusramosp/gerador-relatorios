@@ -429,6 +429,7 @@ function collectDiagramacaoDocColors(doc) {
     if (!t || typeof t !== 'object') return;
     addBg(t.headerColor);
     addBg(t.bg);
+    addBg(t.altColor);
     addText(t.headerTextColor);
     // body text — em icon/cover `color` é outra coisa; aqui só se parece tabela
     if (t.rows || t.headerColor != null || t.bg != null || t.headerTextColor != null) {
