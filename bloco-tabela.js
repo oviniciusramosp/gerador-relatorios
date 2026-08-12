@@ -150,6 +150,7 @@ export function ensureTable(b) {
     if (Math.abs(lh - DEFAULT_TABLE_LINE_HEIGHT) < 1e-9) delete b.lineHeight;
     else b.lineHeight = lh;
   }
+  pruneCellStyleMaps(b);
   return b;
 }
 
@@ -423,6 +424,8 @@ export function mergeCells(b, r0, c0, r1, c1) {
   kept.push({ r: rMin, c: cMin, cs, rs });
   t.merges = kept;
   ensureMerges(t);
+  // overrides de alinhamento só na origem do merge
+  pruneCellStyleMaps(t);
   return !!(t.merges && t.merges.length);
 }
 
@@ -551,6 +554,110 @@ export function tableAlignOf(b) {
 export function tableValignOf(b) {
   return b && b.valign != null ? normalizeTableValign(b.valign) : DEFAULT_TABLE_VALIGN;
 }
+
+// ── alinhamento por célula (override fino; global = b.align / b.valign) ──────
+// b.cellAlign / b.cellValign = { "r,c": "center" } — só células ≠ default da tabela
+
+function cellStyleKey(r, c) { return `${r | 0},${c | 0}`; }
+function parseCellStyleKey(k) {
+  const [rs, cs] = String(k).split(',');
+  const r = +rs, c = +cs;
+  return Number.isFinite(r) && Number.isFinite(c) ? { r, c } : null;
+}
+
+/** Alinhamento horizontal efetivo da célula (override ou global). */
+export function cellAlignOf(b, r, c) {
+  const map = b && b.cellAlign;
+  const v = map && map[cellStyleKey(r, c)];
+  if (v != null) return normalizeTableAlign(v);
+  return tableAlignOf(b);
+}
+/** Alinhamento vertical efetivo da célula. */
+export function cellValignOf(b, r, c) {
+  const map = b && b.cellValign;
+  const v = map && map[cellStyleKey(r, c)];
+  if (v != null) return normalizeTableValign(v);
+  return tableValignOf(b);
+}
+/** true se a célula tem override horizontal explícito. */
+export function cellHasAlignOverride(b, r, c) {
+  return !!(b && b.cellAlign && b.cellAlign[cellStyleKey(r, c)] != null);
+}
+export function cellHasValignOverride(b, r, c) {
+  return !!(b && b.cellValign && b.cellValign[cellStyleKey(r, c)] != null);
+}
+
+/**
+ * Define align da célula. Se igual ao global da tabela, remove o override
+ * (célula volta a seguir o controle global).
+ */
+export function setCellAlign(b, r, c, v) {
+  if (!b || typeof b !== 'object') return;
+  const key = cellStyleKey(r, c);
+  const a = normalizeTableAlign(v);
+  if (a === tableAlignOf(b)) {
+    if (b.cellAlign) {
+      delete b.cellAlign[key];
+      if (!Object.keys(b.cellAlign).length) delete b.cellAlign;
+    }
+    return;
+  }
+  if (!b.cellAlign) b.cellAlign = {};
+  b.cellAlign[key] = a;
+}
+export function setCellValign(b, r, c, v) {
+  if (!b || typeof b !== 'object') return;
+  const key = cellStyleKey(r, c);
+  const a = normalizeTableValign(v);
+  if (a === tableValignOf(b)) {
+    if (b.cellValign) {
+      delete b.cellValign[key];
+      if (!Object.keys(b.cellValign).length) delete b.cellValign;
+    }
+    return;
+  }
+  if (!b.cellValign) b.cellValign = {};
+  b.cellValign[key] = a;
+}
+
+/** Remapeia cellAlign/cellValign: mapFn(r,c) → {r,c}|null (null = apaga). */
+function remapCellStyleMaps(b, mapFn) {
+  for (const field of ['cellAlign', 'cellValign']) {
+    const src = b[field];
+    if (!src || typeof src !== 'object') continue;
+    const next = {};
+    for (const [k, v] of Object.entries(src)) {
+      const p = parseCellStyleKey(k);
+      if (!p) continue;
+      const dest = mapFn(p.r, p.c);
+      if (!dest) continue;
+      next[cellStyleKey(dest.r, dest.c)] = v;
+    }
+    if (Object.keys(next).length) b[field] = next;
+    else delete b[field];
+  }
+}
+
+/** Remove overrides fora da matriz ou em células cobertas por merge. */
+function pruneCellStyleMaps(b) {
+  if (!b) return;
+  ensureMatrix(b);
+  const nR = b.rows.length;
+  const nC = nColsOf(b);
+  for (const field of ['cellAlign', 'cellValign']) {
+    const src = b[field];
+    if (!src || typeof src !== 'object') continue;
+    const next = {};
+    for (const [k, v] of Object.entries(src)) {
+      const p = parseCellStyleKey(k);
+      if (!p || p.r < 0 || p.c < 0 || p.r >= nR || p.c >= nC) continue;
+      if (isCellCovered(b, p.r, p.c)) continue;
+      next[k] = v;
+    }
+    if (Object.keys(next).length) b[field] = next;
+    else delete b[field];
+  }
+}
 export function tableFontSizeOf(b) {
   return b && b.fontSize != null ? clampTableFontSize(b.fontSize) : DEFAULT_TABLE_FONT_SIZE;
 }
@@ -628,8 +735,8 @@ export function applyTableChrome(host, b) {
         const rs = Math.max(1, cell.rowSpan | 0);
         const rr = Number.isFinite(r) ? r : 0;
         const cc = Number.isFinite(c) ? c : 0;
-        cell.style.textAlign = align;
-        cell.style.verticalAlign = valign;
+        cell.style.textAlign = cellAlignOf(b, rr, cc);
+        cell.style.verticalAlign = cellValignOf(b, rr, cc);
         cell.style.borderColor = inner;
         cell.style.borderStyle = 'solid';
         cell.style.borderTopWidth = rr === 0 ? '0' : bwI;
@@ -695,6 +802,7 @@ function addRow(b, at /* null = fim */) {
     }).filter(Boolean);
     ensureMerges(b);
   }
+  remapCellStyleMaps(b, (r, c) => (r >= i ? { r: r + 1, c } : { r, c }));
 }
 function addCol(b, at /* null = fim */) {
   ensureMatrix(b);
@@ -717,6 +825,7 @@ function addCol(b, at /* null = fim */) {
     }).filter(Boolean);
     ensureMerges(b);
   }
+  remapCellStyleMaps(b, (r, c) => (c >= i ? { r, c: c + 1 } : { r, c }));
 }
 function delRow(b, r) {
   ensureMatrix(b);
@@ -730,6 +839,11 @@ function delRow(b, r) {
     }).filter(Boolean);
     ensureMerges(b);
   }
+  remapCellStyleMaps(b, (rr, c) => {
+    if (rr === r) return null;
+    if (rr > r) return { r: rr - 1, c };
+    return { r: rr, c };
+  });
   return true;
 }
 function delCol(b, c) {
@@ -747,6 +861,11 @@ function delCol(b, c) {
     }).filter(Boolean);
     ensureMerges(b);
   }
+  remapCellStyleMaps(b, (r, cc) => {
+    if (cc === c) return null;
+    if (cc > c) return { r, c: cc - 1 };
+    return { r, c: cc };
+  });
   return true;
 }
 /** reordena linha de dados (header r=0 fica fixo) */
@@ -771,6 +890,13 @@ function moveRow(b, from, to) {
     });
     ensureMerges(b);
   }
+  remapCellStyleMaps(b, (r, c) => {
+    if (r === from) return { r: to, c };
+    if (from < to) {
+      if (r > from && r <= to) return { r: r - 1, c };
+    } else if (r >= to && r < from) return { r: r + 1, c };
+    return { r, c };
+  });
   return true;
 }
 function moveCol(b, from, to) {
@@ -798,6 +924,13 @@ function moveCol(b, from, to) {
     });
     ensureMerges(b);
   }
+  remapCellStyleMaps(b, (r, c) => {
+    if (c === from) return { r, c: to };
+    if (from < to) {
+      if (c > from && c <= to) return { r, c: c - 1 };
+    } else if (c >= to && c < from) return { r, c: c + 1 };
+    return { r, c };
+  });
   return true;
 }
 
@@ -980,6 +1113,9 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
         }
         td.classList.add('tbl-merged');
       }
+      // alinhamento efetivo (global ou override da célula)
+      td.style.textAlign = cellAlignOf(b, r, c);
+      td.style.verticalAlign = cellValignOf(b, r, c);
       if (head) {
         td.classList.add('tbl-head-cell');
         td.style.background = tableHeaderBg(b);
@@ -1026,9 +1162,13 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
 
   if (editing) {
     // seleção de range (highlight .tbl-sel). Mesclar/Desagrupar só no painel flutuante.
+    let onSelectionChange = null;
     paintCellSel = () => {
       table.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
-      if (!cellSel) return;
+      if (!cellSel) {
+        onSelectionChange?.(null);
+        return;
+      }
       const rMin = Math.min(cellSel.r0, cellSel.r1);
       const rMax = Math.max(cellSel.r0, cellSel.r1);
       const cMin = Math.min(cellSel.c0, cellSel.c1);
@@ -1042,6 +1182,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
         const hit = !(rr + rs - 1 < rMin || rr > rMax || cc + cs - 1 < cMin || cc > cMax);
         if (hit) el.classList.add('tbl-sel');
       });
+      onSelectionChange?.(cellSel);
     };
 
     // seleção de range (estilo planilha):
@@ -1157,8 +1298,8 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       ctx.rerender?.();
       return true;
     };
-    // painel flutuante (direita) chama merge/unmerge via WeakMap — sem botões sob a tabela
-    liveByWrap.set(wrap, {
+    // painel flutuante (direita) chama merge/unmerge e alinhamento da célula via WeakMap
+    const liveApi = {
       wrap,
       getSelection: () => cellSel,
       setSelection: (s) => { cellSel = s; paintCellSel(); },
@@ -1166,6 +1307,59 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       unmerge: runUnmerge,
       data: () => unwrapTableData(b) || b,
       paintSel: paintCellSel,
+      /** âncora da seleção (canto superior-esquerdo) p/ alinhamento fino */
+      activeCell: () => {
+        if (cellSel) {
+          return {
+            r: Math.min(cellSel.r0, cellSel.r1),
+            c: Math.min(cellSel.c0, cellSel.c1),
+          };
+        }
+        const ae = typeof document !== 'undefined' ? document.activeElement : null;
+        const td = ae && ae.closest && ae.closest('th, td');
+        if (td && table.contains(td)) {
+          const r = +td.dataset.row, c = +td.dataset.col;
+          if (Number.isFinite(r) && Number.isFinite(c)) return { r, c };
+        }
+        return null;
+      },
+      setAlign: (align) => {
+        const cell = liveApi.activeCell();
+        if (!cell) return false;
+        const data = unwrapTableData(b) || b;
+        setCellAlign(data, cell.r, cell.c, align);
+        const el = table.querySelector(`[data-row="${cell.r}"][data-col="${cell.c}"]`);
+        if (el) el.style.textAlign = cellAlignOf(data, cell.r, cell.c);
+        ctx.commit?.();
+        return true;
+      },
+      setValign: (valign) => {
+        const cell = liveApi.activeCell();
+        if (!cell) return false;
+        const data = unwrapTableData(b) || b;
+        setCellValign(data, cell.r, cell.c, valign);
+        const el = table.querySelector(`[data-row="${cell.r}"][data-col="${cell.c}"]`);
+        if (el) el.style.verticalAlign = cellValignOf(data, cell.r, cell.c);
+        ctx.commit?.();
+        return true;
+      },
+      set onSelectionChange(fn) { onSelectionChange = typeof fn === 'function' ? fn : null; },
+      get onSelectionChange() { return onSelectionChange; },
+    };
+    liveByWrap.set(wrap, liveApi);
+
+    // foco em célula também atualiza o painel (alinhamento fino)
+    table.addEventListener('focusin', (e) => {
+      const td = e.target.closest && e.target.closest('th, td');
+      if (!td || !table.contains(td)) return;
+      const r = +td.dataset.row, c = +td.dataset.col;
+      if (!Number.isFinite(r) || !Number.isFinite(c)) return;
+      if (!cellSel || cellSel.r0 !== r || cellSel.c0 !== c || cellSel.r1 !== r || cellSel.c1 !== c) {
+        cellSel = { r0: r, c0: c, r1: r, c1: c };
+        paintCellSel();
+      } else {
+        onSelectionChange?.(cellSel);
+      }
     });
 
     // hover contextual: alça da row/col sob o cursor; “+” só perto da borda

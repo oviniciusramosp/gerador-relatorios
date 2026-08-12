@@ -23,6 +23,7 @@ import {
   resolveMergeRange, mergeSelectionOrNeighbor, getMerges,
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
   tableBorderWidthOuterOf, tableBorderWidthInnerOf, tableAltRowBgOf,
+  cellAlignOf, cellValignOf, setCellAlign, setCellValign,
   DEFAULT_ALT_ROW_BG,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   tableHeaderTextOf, tableTextColorOf,
@@ -361,6 +362,34 @@ import {
   assert.equal(b.items[0].headerCol, true);
   setTableHeaderCol(again, false);
   assert.equal(b.items[0].headerCol, undefined);
+}
+
+// ── alinhamento por célula: override fino; global como fallback ─────────────
+{
+  const t = { rows: [['A', 'B'], ['1', '2'], ['3', '4']] };
+  ensureTable(t);
+  assert.equal(cellAlignOf(t, 0, 0), DEFAULT_TABLE_ALIGN);
+  setCellAlign(t, 1, 0, 'center');
+  assert.equal(cellAlignOf(t, 1, 0), 'center');
+  assert.equal(cellAlignOf(t, 0, 0), DEFAULT_TABLE_ALIGN, 'outras células seguem global');
+  assert.equal(t.cellAlign['1,0'], 'center');
+  // igual ao global → remove override
+  setCellAlign(t, 1, 0, DEFAULT_TABLE_ALIGN);
+  assert.equal(t.cellAlign, undefined);
+  // global muda, célula com override não segue
+  t.align = 'right';
+  setCellAlign(t, 0, 1, 'center');
+  assert.equal(cellAlignOf(t, 0, 1), 'center');
+  assert.equal(cellAlignOf(t, 1, 1), 'right');
+  // addRow empurra overrides
+  setCellValign(t, 1, 0, 'middle');
+  addTableRow(t, 1); // insere na linha 1; antiga 1 vira 2
+  assert.equal(cellValignOf(t, 2, 0), 'middle');
+  assert.equal(t.cellValign['1,0'], undefined);
+  // merge descarta override da coberta
+  setCellAlign(t, 0, 1, 'center');
+  mergeCells(t, 0, 0, 0, 1);
+  assert.equal(t.cellAlign && t.cellAlign['0,1'], undefined);
 }
 
 // ── ensureTableGrid preserva a MESMA ref do item (merge no canvas não some) ─

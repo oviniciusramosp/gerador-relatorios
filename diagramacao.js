@@ -33,6 +33,7 @@ import {
   tableBorderWidthOuterOf, tableBorderWidthInnerOf, tableAltRowBgOf,
   clampTableRadius, clampTableBorderWidth,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
+  cellAlignOf, cellValignOf, setCellAlign, setCellValign,
   clampTableFontSize, clampTableLineHeight, normalizeTableAlign, normalizeTableValign,
   setTableHeaderRow, setTableHeaderCol, tableLiveActive, tableLiveFromEl,
   mergeSelectionOrNeighbor, unmergeCells,
@@ -1361,8 +1362,30 @@ function tableStyleFieldsHtml(b, mode = 'full') {
     html += `
     <div class="swrow"><span>Linhas Verticais</span>
       <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>
-    <div class="field">Alinhamento horizontal<div data-slot="align"></div></div>
-    <div class="field">Alinhamento vertical<div data-slot="valign"></div></div>`;
+    <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
+    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>
+    <div class="field" data-role="cell-align-block">
+      <span class="field-row">Alinhamento (célula)<span data-role="cell-coord" class="field-val" style="opacity:.7;font-size:.7rem"></span></span>
+      <div data-slot="cell-align"></div>
+    </div>
+    <div class="field" data-role="cell-valign-block">
+      Vertical (célula)
+      <div data-slot="cell-valign"></div>
+    </div>`;
+  }
+  // grid item: alinhamento global daquela tabela + fino por célula
+  if (isItem) {
+    html += `
+    <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
+    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>
+    <div class="field" data-role="cell-align-block">
+      <span class="field-row">Alinhamento (célula)<span data-role="cell-coord" class="field-val" style="opacity:.7;font-size:.7rem"></span></span>
+      <div data-slot="cell-align"></div>
+    </div>
+    <div class="field" data-role="cell-valign-block">
+      Vertical (célula)
+      <div data-slot="cell-valign"></div>
+    </div>`;
   }
   if (showAlt) {
     html += `
@@ -1476,7 +1499,7 @@ function wireTableStyleControls(root, b, hooks = {}) {
     });
   });
 
-  // alinhamento horizontal / vertical (segments)
+  // alinhamento horizontal / vertical da TABELA (global)
   const alignSlot = root.querySelector('[data-slot="align"]');
   if (alignSlot) {
     const mountAlign = () => {
@@ -1488,8 +1511,10 @@ function wireTableStyleControls(root, b, hooks = {}) {
         const a = normalizeTableAlign(v);
         if (a === DEFAULT_TABLE_ALIGN) delete b.align;
         else b.align = a;
+        // células sem override seguem o global no paint
         paint();
         mountAlign();
+        refreshCellAlignUI();
       }));
     };
     mountAlign();
@@ -1507,9 +1532,82 @@ function wireTableStyleControls(root, b, hooks = {}) {
         else b.valign = vv;
         paint();
         mountValign();
+        refreshCellAlignUI();
       }));
     };
     mountValign();
+  }
+
+  // alinhamento fino da CÉLULA ativa (override; limpa se igual ao global)
+  const cellAlignSlot = root.querySelector('[data-slot="cell-align"]');
+  const cellValignSlot = root.querySelector('[data-slot="cell-valign"]');
+  const cellCoordEl = root.querySelector('[data-role="cell-coord"]');
+  const liveForAlign = () => {
+    if (hooks.tableHost) return tableLiveFromEl(hooks.tableHost()) || tableLiveActive();
+    return tableLiveActive();
+  };
+  const refreshCellAlignUI = () => {
+    if (!cellAlignSlot && !cellValignSlot) return;
+    const live = liveForAlign();
+    const cell = live?.activeCell?.() || null;
+    const data = live?.data?.() || b;
+    if (cellCoordEl) {
+      cellCoordEl.textContent = cell ? `L${cell.r + 1}·C${cell.c + 1}` : 'selecione';
+    }
+    const disabled = !cell;
+    if (cellAlignSlot) {
+      const cur = cell ? cellAlignOf(data, cell.r, cell.c) : tableAlignOf(data);
+      cellAlignSlot.replaceChildren(widthSeg(cur, [
+        { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
+        { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
+        { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
+      ], (v) => {
+        if (!cell) return;
+        if (live?.setAlign?.(v)) {
+          refreshCellAlignUI();
+          hooks.after?.();
+          return;
+        }
+        setCellAlign(data, cell.r, cell.c, v);
+        paint();
+        refreshCellAlignUI();
+      }));
+      cellAlignSlot.style.opacity = disabled ? '.45' : '';
+      cellAlignSlot.style.pointerEvents = disabled ? 'none' : '';
+    }
+    if (cellValignSlot) {
+      const cur = cell ? cellValignOf(data, cell.r, cell.c) : tableValignOf(data);
+      cellValignSlot.replaceChildren(widthSeg(cur, [
+        { val: 'top', label: 'Topo', icon: VALIGN_ICON.top },
+        { val: 'middle', label: 'Meio', icon: VALIGN_ICON.middle },
+        { val: 'bottom', label: 'Base', icon: VALIGN_ICON.bottom },
+      ], (v) => {
+        if (!cell) return;
+        if (live?.setValign?.(v)) {
+          refreshCellAlignUI();
+          hooks.after?.();
+          return;
+        }
+        setCellValign(data, cell.r, cell.c, v);
+        paint();
+        refreshCellAlignUI();
+      }));
+      cellValignSlot.style.opacity = disabled ? '.45' : '';
+      cellValignSlot.style.pointerEvents = disabled ? 'none' : '';
+    }
+  };
+  if (cellAlignSlot || cellValignSlot) {
+    refreshCellAlignUI();
+    const live = liveForAlign();
+    if (live) {
+      live.onSelectionChange = () => refreshCellAlignUI();
+    }
+    // re-sincroniza se o host ainda não existia no open (próximo tick)
+    requestAnimationFrame(() => {
+      const l2 = liveForAlign();
+      if (l2) l2.onSelectionChange = () => refreshCellAlignUI();
+      refreshCellAlignUI();
+    });
   }
 
   /** Atualiza visual do chip (fill = fundo; text = underline no “A”, estilo fmtbar). */
