@@ -21,6 +21,53 @@ export const TABLE_GRID_MAX = 4;
 export const TABLE_GRID_GAP = 8;
 export const TABLE_GRID_GAP_MAX = 48;
 
+/**
+ * Estilos por tabela no grid (cores, alt, alinhamento de tabela).
+ * Não inclui rows/merges/colWidths (estrutura) nem cellAlign (por célula).
+ * Fonte/bordas/raio vivem em TABLE_GRID_SHARED_KEYS no bloco (já comuns a todas).
+ */
+export const TABLE_ITEM_STYLE_KEYS = [
+  'bg', 'headerColor', 'headerTextColor', 'color',
+  'altColor', 'altRows',
+  'align', 'valign',
+  'hideVLines',
+];
+
+/**
+ * Copia estilos visuais da tabela `fromIndex` para as demais do grid.
+ * - Por item: cores, linhas alternadas, alinhamento da tabela
+ * - Shared (fonte, bordas, raio): já no bloco grid — reafirma ensureSharedTableStyle
+ * @returns {number} quantas tabelas destino receberam estilos (0 = nada a fazer)
+ */
+export function applyTableStylesToGrid(grid, fromIndex) {
+  ensureTableGrid(grid);
+  const srcIdx = fromIndex | 0;
+  const src = grid.items[srcIdx];
+  if (!src || grid.items.length < 2) return 0;
+  let n = 0;
+  for (let i = 0; i < grid.items.length; i++) {
+    if (i === srcIdx) continue;
+    const dest = grid.items[i];
+    for (const k of TABLE_ITEM_STYLE_KEYS) {
+      const v = src[k];
+      if (v === undefined || v === null) {
+        delete dest[k];
+        continue;
+      }
+      // false = default para flags (não polui o JSON)
+      if (v === false && (k === 'altRows' || k === 'hideVLines')) {
+        delete dest[k];
+        continue;
+      }
+      dest[k] = v;
+    }
+    ensureTable(dest);
+    n++;
+  }
+  ensureSharedTableStyle(grid);
+  return n;
+}
+
 /** Dados de uma tabela no grid (sem id/type — o pai é o bloco). */
 export function seedTableItem() {
   return {

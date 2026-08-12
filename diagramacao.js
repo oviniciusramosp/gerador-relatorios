@@ -51,7 +51,7 @@ import {
   IMAGE_GRID_MAX, IMAGE_GRID_GAP, IMAGE_GRID_GAP_MAX,
 } from './bloco-image-grid.js';import {
   buildTableGridEl, ensureTableGrid, tableGridEqualModeOf, tableGridGapOf,
-  clampTableGridGap, setTableGridCols,
+  clampTableGridGap, setTableGridCols, applyTableStylesToGrid,
   TABLE_GRID_MAX, TABLE_GRID_GAP, TABLE_GRID_GAP_MAX,
 } from './bloco-table-grid.js';
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
@@ -2265,12 +2265,17 @@ function openTableGridPanel() {
 
   const body = tableGridPanel.querySelector('[data-slot="body"]');
   if (onItem && it) {
+    const canApplyStyles = n > 1;
     body.innerHTML = `
       <div class="eyebrow" style="margin:0">Tabela ${itemIdx + 1}</div>
       <div class="row img-tc-row" style="display:flex;gap:.4rem">
         <button type="button" class="fieldbtn" data-a="addrow" style="flex:1;justify-content:center">+ Linha</button>
         <button type="button" class="fieldbtn" data-a="addcol" style="flex:1;justify-content:center">+ Coluna</button>
       </div>
+      <button type="button" class="fieldbtn" data-a="apply-styles" ${canApplyStyles ? '' : 'disabled'}
+        title="${canApplyStyles
+          ? 'Copia cores, linhas alternadas e alinhamento desta tabela para as outras. Fonte, bordas e raio já são comuns (aba Grid).'
+          : 'Adicione outra tabela no grid para aplicar estilos'}">Aplicar estilos no grid</button>
       ${tableStyleFieldsHtml(it, 'item')}`;
   } else {
     body.innerHTML = `
@@ -2343,6 +2348,13 @@ function openTableGridPanel() {
       e.preventDefault();
       e.stopPropagation();
       addTableCol(b.items[itemIdx], null);
+      save(); scheduleCommit();
+      reopen();
+    });
+    body.querySelector('[data-a="apply-styles"]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (applyTableStylesToGrid(b, itemIdx) <= 0) return;
       save(); scheduleCommit();
       reopen();
     });

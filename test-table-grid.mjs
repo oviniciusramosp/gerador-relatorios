@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import {
   ensureTableGrid, tableGridEqualModeOf, tableGridGapOf, clampTableGridGap,
-  setTableGridCols, layoutTableGridCols, seedTableItem,
+  setTableGridCols, layoutTableGridCols, seedTableItem, applyTableStylesToGrid,
   TABLE_GRID_MAX, TABLE_GRID_GAP,
 } from './bloco-table-grid.js';
 import {
@@ -390,6 +390,35 @@ import {
   setCellAlign(t, 0, 1, 'center');
   mergeCells(t, 0, 0, 0, 1);
   assert.equal(t.cellAlign && t.cellAlign['0,1'], undefined);
+}
+
+// ── applyTableStylesToGrid: cores da Tabela N → demais itens ────────────────
+{
+  const b = {
+    type: 'table-grid',
+    fontSize: 14,
+    borderOuter: '#111111',
+    items: [
+      { rows: [['A', 'B'], ['1', '2']], bg: '#EEF2FF', headerColor: '#DDDDDD', color: '#112233', altRows: true, altColor: '#F0F0F0' },
+      { rows: [['X', 'Y'], ['3', '4']], bg: '#FFFFFF' },
+    ],
+  };
+  ensureTableGrid(b);
+  assert.equal(applyTableStylesToGrid(b, 0), 1);
+  assert.equal(b.items[1].bg, '#EEF2FF');
+  assert.equal(b.items[1].headerColor, '#DDDDDD');
+  assert.equal(b.items[1].color, '#112233');
+  assert.equal(b.items[1].altRows, true);
+  assert.equal(b.items[1].altColor, '#F0F0F0');
+  // fonte/borda shared no bloco — inalteradas e já comuns
+  assert.equal(b.fontSize, 14);
+  assert.equal(b.borderOuter, '#111111');
+  // estrutura da destino não é sobrescrita
+  assert.deepEqual(b.items[1].rows[0], ['X', 'Y']);
+  // 1 coluna no grid: nada a copiar
+  const one = { type: 'table-grid', items: [{ rows: [['A'], ['1']], bg: '#abc' }] };
+  ensureTableGrid(one);
+  assert.equal(applyTableStylesToGrid(one, 0), 0);
 }
 
 // ── ensureTableGrid preserva a MESMA ref do item (merge no canvas não some) ─
