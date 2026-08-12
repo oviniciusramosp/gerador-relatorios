@@ -1568,6 +1568,14 @@
   /* segment Grid/Tabela N no painel — muitas opções cabem com scroll horizontal */
   #tableGridPanel [data-slot="focus"] { max-width: 100%; }
   #tableGridPanel [data-slot="focus"] .segment { min-width: max-content; }
+  /* body do segment Tabela N: filhos diretos (cores, switches, +linha) precisam de gap —
+     o painel só espaça os slots raiz; sem isto as linhas de config colam umas nas outras */
+  #tableGridPanel [data-slot="body"],
+  #tablePanel [data-slot="body"] {
+    display: grid;
+    gap: .55rem;
+    min-width: 0;
+  }
 
   /* ===================== toasts (abrir projeto, etc.) ===================== */
   #toastHost {
@@ -1823,12 +1831,18 @@
   /* cores da tabela: pares inline (fundo + texto) — CSS do chip vive em bloco-tabela.js */
   #tablePanel .tbl-color-fields,
   #tableGridPanel .tbl-color-fields {
-    display: grid; gap: .4rem;
+    display: grid; gap: .55rem;
   }
   #tablePanel .tbl-color-fields .field-row,
   #tableGridPanel .tbl-color-fields .field-row {
     align-items: center;
     font-size: .82rem;
+    min-height: 1.65rem; /* alinha com chip 1.65rem — evita linhas “achatadas” */
+  }
+  /* switches e rows soltos no body do painel de tabela (mesmo ritmo visual) */
+  #tablePanel .swrow,
+  #tableGridPanel .swrow {
+    min-height: 1.65rem;
   }
   #tablePanel .tbl-color-pair .tbl-cbtn,
   #tableGridPanel .tbl-color-pair .tbl-cbtn {
