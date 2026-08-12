@@ -16,7 +16,7 @@
  */
 
 import {
-  openSwatchPop as openSwatchPopBase, parseColor, withAlpha, harvestColorsFromHtml,
+  openSwatchPop as openSwatchPopBase, setDocColorsProvider, parseColor, withAlpha, harvestColorsFromHtml,
 } from './swatch.js';   // swatch de cor compartilhado (idêntico ao dos gráficos)
 import {
   rotateOf, setBlockRotate, snapRotate, clampRotate, ROTATE_SNAPS,
@@ -508,11 +508,14 @@ function collectDiagramacaoDocColors(doc) {
   return { text: [...text].sort(sortHex), bg: [...bg].sort(sortHex) };
 }
 
-/** Wrapper: todo swatch do diagramador recebe as cores do doc atual. */
+/** Provider global: menu da alça da tabela (bloco-tabela → swatch.js) também vê o doc. */
+setDocColorsProvider(() => collectDiagramacaoDocColors(state.doc));
+
+/** Wrapper local: garante docColors mesmo se o provider ainda não rodou. */
 function openSwatchPop(anchor, pick, current, opts) {
   return openSwatchPopBase(anchor, pick, current, {
     ...opts,
-    docColors: collectDiagramacaoDocColors(state.doc),
+    docColors: (opts && opts.docColors) || collectDiagramacaoDocColors(state.doc),
   });
 }
 
@@ -1420,14 +1423,9 @@ function tableStyleFieldsHtml(b, mode = 'full') {
       <input type="range" data-a="radius" min="0" max="${TABLE_RADIUS_MAX}" step="1" value="${radius}" data-snaps="0,4,8,12,16,24" data-edit="off">
     </label>`;
   }
-  // flags estruturais: no painel full + item (e também no menu da alça)
+  // Mesclar no painel do bloco; Linha/Coluna de cabeçalho só no menu da alça (⋯)
   if (showStruct || isItem) {
-    const data = b;
     html += `
-    <div class="swrow"><span>Linha de cabeçalho</span>
-      <button type="button" class="sw" data-a="headerRow" role="switch" aria-checked="${data.headerRow !== false}"></button></div>
-    <div class="swrow"><span>Coluna de cabeçalho</span>
-      <button type="button" class="sw" data-a="headerCol" role="switch" aria-checked="${!!data.headerCol}"></button></div>
     <div class="row img-tc-row" style="display:flex;gap:.4rem">
       <button type="button" class="fieldbtn" data-a="merge" style="flex:1;justify-content:center" title="Mescla a seleção; com 1 célula, junta à da direita (ou abaixo)">Mesclar</button>
       <button type="button" class="fieldbtn" data-a="unmerge" style="flex:1;justify-content:center" title="Desfaz o merge da célula ativa">Desagrupar</button>

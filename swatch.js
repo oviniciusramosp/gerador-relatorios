@@ -14,8 +14,10 @@
  *               { allowNone:true } botão "Nenhum" no topo — pick(false) e fecha. Use em
  *               highlight (hiliteColor) pra remover o fundo da seleção. noneLabel opcional.
  *               { docColors:{ text?:string[], bg?:string[] } } cores usadas no documento
- *               (seção "Nesse documento", expandable aberto por padrão). Hosts sem doc
- *               (gráficos, catálogo) simplesmente omitem.
+ *               (seção "Nesse documento", expandable aberto por padrão). Se omitido,
+ *               usa o provider global (setDocColorsProvider) — assim hosts como
+ *               bloco-tabela (menu da alça) recebem as mesmas cores do diagramador.
+ *               Hosts sem doc (gráficos, catálogo) não registram provider.
  *
  * Fluxo: clicar nomeada/complementar/documento SELECIONA a cor (atualiza HEX + .on + preview)
  * e aplica via pick com a opacidade atual do slider — NÃO fecha o popover, pra o slider
@@ -169,6 +171,18 @@ function makeExpandable(label, { open = false } = {}) {
   return { det, body };
 }
 
+/** Provider global de cores do documento (registrado pelo host, ex. diagramacao.js). */
+let docColorsProvider = null;
+
+/**
+ * Define de onde vêm as cores “Nesse documento” quando openSwatchPop não recebe
+ * opts.docColors. Passar null limpa o provider.
+ * @param {null|(() => {text?:string[], bg?:string[]})} fn
+ */
+export function setDocColorsProvider(fn) {
+  docColorsProvider = typeof fn === 'function' ? fn : null;
+}
+
 let swatchPop = null;
 export function openSwatchPop(anchor, pick, current, opts) {
   closeSwatchPop();
@@ -176,7 +190,12 @@ export function openSwatchPop(anchor, pick, current, opts) {
   const paperBase = !!(opts && opts.paper); // base branca sob alpha (papel do PDF)
   const allowNone = !!(opts && opts.allowNone);
   const noneLabel = (opts && opts.noneLabel) || 'Nenhum';
-  const docColors = normalizeDocColors(opts && opts.docColors);
+  // opts.docColors explícito (inclusive {}) prevalece; senão provider global
+  let rawDoc = opts && 'docColors' in opts ? opts.docColors : undefined;
+  if (rawDoc === undefined && docColorsProvider) {
+    try { rawDoc = docColorsProvider(); } catch { rawDoc = null; }
+  }
+  const docColors = normalizeDocColors(rawDoc);
   const hasDoc = docColors.text.length > 0 || docColors.bg.length > 0;
   // current === false | 'false' | 'transparent' | 'none' → sem cor (ex.: highlight desligado)
   const isNoneCurrent = current === false || current === 'false' || current === 'transparent'
