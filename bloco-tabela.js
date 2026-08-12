@@ -971,56 +971,24 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
   }
 
   if (editing) {
-    // barra de mesclar / desagrupar (visível com seleção) — fora do frame (não clipa)
-    const mergeBar = document.createElement('div');
-    mergeBar.className = 'tbl-merge-bar';
-    mergeBar.hidden = true;
-    const mergeBtn = document.createElement('button');
-    mergeBtn.type = 'button';
-    mergeBtn.className = 'tbl-merge-btn';
-    mergeBtn.textContent = 'Mesclar células';
-    mergeBtn.title = 'Mescla a seleção; com 1 célula, junta à da direita (ou abaixo)';
-    const unmergeBtn = document.createElement('button');
-    unmergeBtn.type = 'button';
-    unmergeBtn.className = 'tbl-merge-btn';
-    unmergeBtn.textContent = 'Desagrupar';
-    unmergeBtn.title = 'Remove o agrupamento da célula ativa';
-    mergeBar.append(mergeBtn, unmergeBtn);
-
+    // seleção de range (highlight .tbl-sel). Mesclar/Desagrupar só no painel flutuante.
     paintCellSel = () => {
       table.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
-      // barra sempre visível em edição — merge funciona com 1 célula (direita/baixo)
-      mergeBar.hidden = false;
-      mergeBtn.disabled = false;
-      if (!cellSel) {
-        unmergeBtn.disabled = true;
-        return;
-      }
+      if (!cellSel) return;
       const rMin = Math.min(cellSel.r0, cellSel.r1);
       const rMax = Math.max(cellSel.r0, cellSel.r1);
       const cMin = Math.min(cellSel.c0, cellSel.c1);
       const cMax = Math.max(cellSel.c0, cellSel.c1);
-      let hasMerge = false;
       table.querySelectorAll('th, td').forEach((el) => {
         const rr = +el.dataset.row;
         const cc = +el.dataset.col;
         const m = mergeOriginAt(b, rr, cc) || findMergeCovering(b, rr, cc);
         const cs = m && m.r === rr && m.c === cc ? m.cs : 1;
         const rs = m && m.r === rr && m.c === cc ? m.rs : 1;
-        // célula na seleção se intersecta o retângulo
         const hit = !(rr + rs - 1 < rMin || rr > rMax || cc + cs - 1 < cMin || cc > cMax);
         if (hit) el.classList.add('tbl-sel');
-        if (hit && m && (m.cs > 1 || m.rs > 1)) hasMerge = true;
       });
-      // desagrupar se a seleção toca algum merge
-      if (!hasMerge) {
-        const m = findMergeCovering(b, rMin, cMin);
-        hasMerge = !!(m && (m.cs > 1 || m.rs > 1));
-      }
-      unmergeBtn.disabled = !hasMerge;
     };
-    // mostra a barra já no mount (sem esperar seleção)
-    paintCellSel();
 
     // seleção de range (estilo planilha):
     // - clique = âncora
@@ -1135,23 +1103,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       ctx.rerender?.();
       return true;
     };
-    const doMerge = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation?.();
-      runMerge();
-    };
-    const doUnmerge = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation?.();
-      runUnmerge();
-    };
-    // só pointerdown (não click): rerender destrói o botão antes do click
-    mergeBtn.addEventListener('pointerdown', doMerge);
-    unmergeBtn.addEventListener('pointerdown', doUnmerge);
-
-    // painel flutuante chama merge/unmerge da tabela ativa via WeakMap
+    // painel flutuante (direita) chama merge/unmerge via WeakMap — sem botões sob a tabela
     liveByWrap.set(wrap, {
       wrap,
       getSelection: () => cellSel,
@@ -1336,9 +1288,6 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     dropLine.className = 'tbl-drop-line';
     dropLine.hidden = true;
     wrap.appendChild(dropLine);
-
-    // merge bar abaixo do frame (fluxo normal)
-    wrap.appendChild(mergeBar);
 
     requestAnimationFrame(() => {
       resizers.querySelectorAll('.tbl-resizer').forEach((h) => placeResizer(h, table, +h.dataset.after));
@@ -1804,23 +1753,6 @@ function focusCell(tableId, r, c) {
   .tbl-editing th.tbl-sel.tbl-head-cell {
     background: color-mix(in srgb, #4E39FF 14%, var(--tbl-header-bg, #F1F1F4)) !important;
   }
-  .tbl-merge-bar {
-    display: flex; gap: .35rem; flex-wrap: wrap;
-    margin-top: 6px; padding: 0; position: relative; z-index: 2;
-  }
-  .tbl-merge-bar[hidden] { display: none !important; }
-  .tbl-merge-btn {
-    border: 1px solid color-mix(in srgb, #4E39FF 35%, transparent);
-    border-radius: 6px; padding: .28rem .55rem;
-    background: #fff; color: #4E39FF;
-    font-size: 11px; font-weight: 600; font-stretch: 90%;
-    cursor: pointer;
-  }
-  .tbl-merge-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, #4E39FF 10%, #fff);
-  }
-  .tbl-merge-btn:disabled { opacity: .4; cursor: default; }
-
   /* chrome no wrap (não no frame) — top/left ajustados em JS pra alinhar à table */
   .tbl-row-handles, .tbl-col-handles, .tbl-resizers {
     position: absolute; pointer-events: none; z-index: 4; }
