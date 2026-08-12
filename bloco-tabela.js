@@ -16,6 +16,9 @@
 
 import { splitRow } from './tabela.js';
 import { openSwatchPop } from './swatch.js';
+import {
+  sanitizeCellPasteHtml, cellPasteFromPlainText,
+} from './paste-style.js';
 
 export function parseMatrix(text) {
   const lines = String(text).split(/\r?\n/).filter((l) => l.trim());
@@ -1334,16 +1337,41 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
           ctx.commit?.();
         });
         td.addEventListener('paste', (e) => {
-          const txt = e.clipboardData.getData('text/plain');
-          if (!/\t|\r?\n/.test(txt)) return;
-          const m = parseMatrix(txt);
-          if (!m) return;
+          const txt = e.clipboardData.getData('text/plain') || '';
+          // colar planilha (TSV com tab) → substitui a tabela inteira
+          // (sem tab: quebras de linha ficam na célula, não reconstroem a grade)
+          if (/\t/.test(txt)) {
+            const m = parseMatrix(txt);
+            if (m && m.length >= 1 && m.some((row) => row.length > 1)) {
+              e.preventDefault();
+              e.stopPropagation();
+              b.rows = m;
+              delete b.colWidths;
+              delete b.merges;
+              ctx.rerender?.();
+              return;
+            }
+          }
+          // paste “normal” na célula: strip font-size / family / cor;
+          // mantém bold, italic, underline, strike, link e listas.
+          const html = e.clipboardData.getData('text/html') || '';
           e.preventDefault();
           e.stopPropagation();
-          b.rows = m;
-          delete b.colWidths;
-          delete b.merges;
-          ctx.rerender?.();
+          let clean = '';
+          if (html && /<[a-z][\s\S]*>/i.test(html)) {
+            clean = sanitizeCellPasteHtml(html);
+          }
+          if (!clean) clean = cellPasteFromPlainText(txt);
+          if (!clean) return;
+          // insertHTML no caret; dispara 'input' → sincroniza b.rows
+          try {
+            document.execCommand('insertHTML', false, clean);
+          } catch {
+            // fallback: append no fim da célula
+            td.insertAdjacentHTML('beforeend', clean);
+            b.rows[r][c] = td.innerHTML;
+            ctx.commit?.();
+          }
         });
         td.addEventListener('keydown', (e) => onCellKey(e, b, r, c, ctx, table));
       }
