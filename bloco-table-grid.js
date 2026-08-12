@@ -28,7 +28,14 @@ export function seedTableItem() {
   };
 }
 
-/** Garante 1..MAX items e flags válidas. Mutável; idempotente. */
+/**
+ * Garante 1..MAX items e flags válidas. Mutável; idempotente.
+ *
+ * Importante: reutiliza a MESMA referência de cada item (não `{...raw}`).
+ * Cópia rasa quebrava merge no grid: handlers do canvas fechavam sobre o item
+ * antigo; rows (array) era compartilhado → conteúdo sumia; merges (próprio)
+ * ficava no órfão → rebuild sem colspan, duas células ainda editáveis.
+ */
 export function ensureTableGrid(b) {
   if (!b || typeof b !== 'object') return b;
   if (!Array.isArray(b.items) || !b.items.length) {
@@ -39,14 +46,19 @@ export function ensureTableGrid(b) {
       b[k] = b.items[0][k];
     }
   }
-  b.items = b.items.slice(0, TABLE_GRID_MAX).map((raw) => {
-    const it = raw && typeof raw === 'object' ? { ...raw } : seedTableItem();
+  // trim sem trocar refs dos que ficam
+  if (b.items.length > TABLE_GRID_MAX) b.items.length = TABLE_GRID_MAX;
+  for (let i = 0; i < b.items.length; i++) {
+    let it = b.items[i];
+    if (!it || typeof it !== 'object') {
+      it = seedTableItem();
+      b.items[i] = it;
+    }
     delete it.id;
     delete it.type;
     for (const k of TABLE_GRID_SHARED_KEYS) delete it[k];
     ensureTable(it);
-    return it;
-  });
+  }
   if (!b.items.length) b.items = [seedTableItem()];
   if (b.equal !== 'height') delete b.equal;
   if (b.gap != null) {

@@ -333,6 +333,20 @@ import {
   assert.equal(b.items[0].headerCol, undefined);
 }
 
+// ── ensureTableGrid preserva a MESMA ref do item (merge no canvas não some) ─
+{
+  const b = { type: 'table-grid', items: [{ rows: [['A', 'B'], ['1', '2']] }] };
+  ensureTableGrid(b);
+  const ref = b.items[0];
+  ref.merges = [{ r: 0, c: 0, cs: 2, rs: 1 }];
+  ref.rows[0][1] = '';
+  // openTableGridPanel / build chama ensure de novo — ref deve ser a mesma
+  ensureTableGrid(b);
+  assert.equal(b.items[0], ref, 'ensureTableGrid não troca a ref do item');
+  assert.deepEqual(b.items[0].merges[0], { r: 0, c: 0, cs: 2, rs: 1 }, 'merges sobrevivem');
+  assert.equal(b.items[0].rows[0][1], '', 'rows (shared) intactos');
+}
+
 // ── merge “inteligente”: 1 célula → direita; range multi → como está ────────
 {
   const t = { rows: [['A', 'B', 'C'], ['1', '2', '3']] };
