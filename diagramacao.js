@@ -608,10 +608,12 @@ function seedDoc() {
       espacarSessoes: false,
       resumo: '<p>Escreva aqui o resumo do relatório.</p>',
     },
-    // ids de H1/H2 marcados como “revisado” no índice flutuante do preview.
-    // Vive no doc (não em chrome de UI) pra ir no .pdgm.zip via serializeDocZip
-    // (dump genérico do objeto). applyDoc = Object.assign(seedDoc(), doc) cobre
-    // arquivos antigos sem o campo. Não entra no hist/undo (só blocks/foot/page).
+    // ids marcados como “revisado” no índice flutuante do preview:
+    // H1/H2 do miolo + ids estáveis de páginas especiais (__pdgm_cover__ /
+    // __pdgm_index__ / __pdgm_back__). Vive no doc (não em chrome de UI) pra ir
+    // no .pdgm.zip via serializeDocZip (dump genérico do objeto).
+    // applyDoc = Object.assign(seedDoc(), doc) cobre arquivos antigos sem o campo.
+    // Não entra no hist/undo (só blocks/foot/page).
     reviewed: [],
     // teaser "PDF Gratuito": mode page|section + seleção + mensagem/CTA
     freePdf: {
@@ -3135,11 +3137,18 @@ function buildToc(content) {
 }
 
 // ── índice flutuante do preview (canto sup. dir. do palco) ───────────────────
-// Só H1/H2 do miolo, na ordem do documento. Abre no hover / 1º clique; fecha no
-// 2º clique do botão ou depois de um tempo com o mouse fora do botão+lista.
+// Páginas especiais (capa / índice+resumo / contracapa, se ligadas) + H1/H2 do
+// miolo, na ordem do documento. Abre no hover / 1º clique; fecha no 2º clique
+// do botão ou depois de um tempo com o mouse fora do botão+lista.
 // Clique no título rola o #stage; check à direita marca “revisado”.
 // Status em state.doc.reviewed (array de ids) → entra no .pdgm.zip (serializeDocZip
 // dumpa o doc inteiro) e no IDB via save(); docs antigos sem o campo → seed [].
+// IDs estáveis das páginas especiais (não colidem com ids de blocos do miolo).
+const PREVIEW_TOC_ID = {
+  cover: '__pdgm_cover__',
+  index: '__pdgm_index__',
+  back:  '__pdgm_back__',
+};
 const PREVIEW_TOC_CLOSE_MS = 1400;   // “muito tempo” fora → fecha sozinho
 let previewTocCloseT = null;
 let previewTocForceClosed = false;  // 2º clique fechou com mouse ainda em cima → não reabre no hover
@@ -3151,6 +3160,7 @@ function reviewedList() {
 }
 function isReviewed(id) { return reviewedList().includes(id); }
 
+/** Só H1/H2 do miolo — reusado pelo free PDF “Por Capítulo” (sem páginas especiais). */
 function collectPreviewToc() {
   const rows = [];
   for (const b of state.doc.blocks) {
@@ -3161,12 +3171,51 @@ function collectPreviewToc() {
   }
   return rows;
 }
-function scrollStageToBlock(id) {
-  const el = pagesEl.querySelector(`[data-id="${CSS.escape(id)}"]`);
+/** Lista do índice flutuante: capa → índice/resumo → H1/H2 → contracapa (só se existirem). */
+function collectPreviewTocNav() {
+  const rows = [];
+  const cov = state.doc.cover, bk = state.doc.back, idx = state.doc.index;
+  if (cov && cov.on) {
+    rows.push({ id: PREVIEW_TOC_ID.cover, level: 1, text: 'Capa' });
+  }
+  // mesma regra de assemblePages: a página física existe com Índice OU Resumo
+  if (idx && (idx.on || idx.resumoOn)) {
+    const text = idx.on && idx.resumoOn ? 'Índice + resumo'
+      : idx.on ? 'Índice'
+      : 'Resumo';
+    rows.push({ id: PREVIEW_TOC_ID.index, level: 1, text });
+  }
+  for (const r of collectPreviewToc()) rows.push(r);
+  if (bk && bk.on) {
+    rows.push({ id: PREVIEW_TOC_ID.back, level: 1, text: 'Contracapa' });
+  }
+  return rows;
+}
+function scrollStageToEl(el) {
   if (!el) return;
   const er = el.getBoundingClientRect();
   const sr = stage.getBoundingClientRect();
   stage.scrollBy({ top: er.top - sr.top - 28, behavior: 'smooth' });
+}
+function scrollStageToBlock(id) {
+  scrollStageToEl(pagesEl.querySelector(`[data-id="${CSS.escape(id)}"]`));
+}
+/** Rola pro bloco H1/H2 ou pra página especial (capa / índice / contracapa). */
+function scrollStageToPreviewToc(id) {
+  if (!id) return;
+  if (id === PREVIEW_TOC_ID.cover) {
+    scrollStageToEl(pagesEl.querySelector('.page[data-cover="cover"]'));
+    return;
+  }
+  if (id === PREVIEW_TOC_ID.back) {
+    scrollStageToEl(pagesEl.querySelector('.page[data-cover="back"]'));
+    return;
+  }
+  if (id === PREVIEW_TOC_ID.index) {
+    scrollStageToEl(pagesEl.querySelector('.page[data-special="index"]'));
+    return;
+  }
+  scrollStageToBlock(id);
 }
 function setPreviewTocOpen(open) {
   const nav = document.getElementById('previewToc');
@@ -3206,7 +3255,7 @@ function updatePreviewToc() {
   const nav = document.getElementById('previewToc');
   const panel = document.getElementById('previewTocPanel');
   if (!nav || !panel) return;
-  const rows = collectPreviewToc();
+  const rows = collectPreviewTocNav();
   if (!rows.length) {
     nav.hidden = true;
     panel.replaceChildren();
@@ -3214,7 +3263,7 @@ function updatePreviewToc() {
     previewTocForceClosed = false;
     return;
   }
-  // limpa ids de blocos que sumiram (doc continua, mas o array não vaza)
+  // limpa ids de blocos/páginas especiais que sumiram (doc continua, mas o array não vaza)
   const live = new Set(rows.map(r => r.id));
   const list = reviewedList();
   for (let i = list.length - 1; i >= 0; i--) if (!live.has(list[i])) list.splice(i, 1);
@@ -3308,7 +3357,7 @@ function initPreviewToc() {
     const item = e.target.closest && e.target.closest('.preview-toc-item');
     if (!item || !item.dataset.id) return;
     e.preventDefault();
-    scrollStageToBlock(item.dataset.id);
+    scrollStageToPreviewToc(item.dataset.id);
   });
 }
 
@@ -3317,6 +3366,7 @@ let idxFocus = null;
 
 function renderIndexPage(toc, contentStart, number) {
   const page = pageShell(number);
+  page.dataset.special = 'index';   // âncora do índice flutuante (scroll + reviewed)
   const wrap = document.createElement('div'); wrap.className = 'idx-content';
   // t2.11 (bug): a página existe se Índice OU Resumo estiver ligado (ver assemblePages) — os
   // dois blocos agora precisam de gate PRÓPRIO aqui dentro, senão desligar só o Índice também
@@ -6607,10 +6657,26 @@ let lastUiChangeAt = 0;       // última mudança de conteúdo no Diagramador
 let lastSaveFailToastAt = 0;  // throttle do toast de falha
 // Handle do zip recém-aberto, à espera do opt-in de sincronia (modal / “Não Salvo”)
 let pendingLinkHandle = null;
+/**
+ * true quando o handle existe mas o browser ainda não deu readwrite nesta sessão
+ * (típico após F5: o handle volta do IDB, a permissão volta a “prompt”).
+ * Autosave NÃO pode chamar requestPermission — o Chrome exige clique do usuário
+ * e, sem gesture, devolve “prompt”/NotAllowedError sem mostrar diálogo nenhum.
+ */
+let projectWriteNeedsGesture = false;
 const PROJECT_AUTOSAVE_MS = 900;
 const PROJECT_POLL_MS = 1000;
 /** createWritable/write que trava não pode deixar “Salvando…” pra sempre. */
 const PROJECT_SAVE_TIMEOUT_MS = 15000;
+
+/** Clique recente do usuário? File System Access requestPermission exige isso. */
+function hasUserActivation() {
+  try {
+    return !!(navigator.userActivation && navigator.userActivation.isActive);
+  } catch {
+    return false;
+  }
+}
 
 function isProjectSource(s = state.doc?.source) {
   return s && (s.format === 'pdgm' || s.format === 'pdgm-json');
@@ -6640,6 +6706,7 @@ function clearFileLink() {
   projectSaveError = null;
   projectSaveErrorDetail = null;
   projectWritePromise = null;
+  projectWriteNeedsGesture = false;
   lastProjectWriteAt = 0;
   lastProjectPollAt = 0;
   lastProjectReadAt = 0;
@@ -6737,8 +6804,16 @@ function formatProjectSaveFailure(err, ctx = {}) {
     } else if (step === 'serialize') {
       cause += ' Documento muito grande ou serialização lenta (muitas imagens em base64).';
     }
+  } else if (err?.code === 'NEEDS_USER_GESTURE' || code === 'NEEDS_USER_GESTURE') {
+    cause = 'O browser pediu reautorização de escrita, mas só mostra o diálogo com um clique em Salvar. '
+      + 'Isso é normal após recarregar a página (a permissão anterior não fica “sempre ligada”).';
   } else if (name === 'NotAllowedError' || /permiss/i.test(raw)) {
-    cause = 'O browser negou permissão de escrita neste arquivo. Use “Baixar backup” ou reabra o .zip e aceite a permissão.';
+    if (perm === 'prompt') {
+      cause = 'Permissão de escrita ainda em “prompt”: o diálogo do browser não chegou a abrir '
+        + '(comum no autosave, que roda sem clique). Clique em Salvar para reautorizar, ou baixe um backup.';
+    } else {
+      cause = 'O browser negou permissão de escrita neste arquivo. Use “Baixar backup” ou reabra o .zip e aceite a permissão.';
+    }
   } else if (name === 'NotFoundError') {
     cause = 'O arquivo não existe mais no caminho original (foi movido, renomeado ou apagado). Reabra o projeto do disco.';
   } else if (name === 'NoModificationAllowedError' || name === 'InvalidStateError') {
@@ -6778,14 +6853,23 @@ function formatProjectSaveFailure(err, ctx = {}) {
 /**
  * Avisa falha de gravação e oferece download de backup (não depende do auto-save).
  * Throttle pra não spammar se o poll/timer re-tenta.
+ * NEEDS_USER_GESTURE (permissão caiu no reload): estado “Reautorizar”, toast mais raro
+ * e sem implicar que um diálogo já apareceu.
  */
 function notifyProjectSaveFailed(err, ctx = {}) {
+  const needsGesture = err?.code === 'NEEDS_USER_GESTURE' || ctx?.code === 'NEEDS_USER_GESTURE';
+  if (needsGesture) projectWriteNeedsGesture = true;
+
   const detail = formatProjectSaveFailure(err, ctx);
   projectSaveErrorDetail = detail;
-  // botão: causa + etapa (uma linha)
-  const lines = detail.split('\n').map((l) => l.trim()).filter(Boolean);
-  const short = [lines[0], lines.find((l) => l.startsWith('Etapa:'))].filter(Boolean).join(' · ');
-  projectSaveError = short.length > 200 ? short.slice(0, 197) + '…' : short;
+  // botão: causa + etapa (uma linha) — ou mensagem curta de reautorizar
+  if (needsGesture) {
+    projectSaveError = 'Clique em Salvar para reautorizar o arquivo no browser';
+  } else {
+    const lines = detail.split('\n').map((l) => l.trim()).filter(Boolean);
+    const short = [lines[0], lines.find((l) => l.startsWith('Etapa:'))].filter(Boolean).join(' · ');
+    projectSaveError = short.length > 200 ? short.slice(0, 197) + '…' : short;
+  }
   projectDirty = true;
   console.error('[projeto] save falhou', {
     err,
@@ -6793,32 +6877,52 @@ function notifyProjectSaveFailed(err, ctx = {}) {
     detail,
     file: state.doc?.source?.label,
     handle: fileHandle?.name,
+    needsGesture,
   });
 
   const now = Date.now();
-  if (now - lastSaveFailToastAt < 6000) {
+  // reautorizar: toast no máx. 1×/min (autosave re-tenta a cada edição)
+  const throttleMs = needsGesture ? 60000 : 6000;
+  if (now - lastSaveFailToastAt < throttleMs) {
     updateSaveSourceBtn();
     return;
   }
   lastSaveFailToastAt = now;
-  showToast(
-    'err',
-    'Não foi possível gravar no disco',
-    detail,
-    {
-      code: 'project-save-fail',
-      fileName: state.doc?.source?.label || fileHandle?.name || undefined,
-      action: {
-        label: 'Baixar backup',
-        onClick: () => { downloadProjectBackup(); },
+  if (needsGesture) {
+    showToast(
+      'warn',
+      'Reautorizar arquivo no browser',
+      'A permissão de escrita costuma cair ao recarregar a página — mesmo se você já tinha aceitado antes. '
+      + 'Clique em Salvar: aí o browser mostra o diálogo. O autosave sozinho não consegue pedir.',
+      {
+        code: 'project-save-needs-gesture',
+        fileName: state.doc?.source?.label || fileHandle?.name || undefined,
+        action: {
+          label: 'Baixar backup',
+          onClick: () => { downloadProjectBackup(); },
+        },
       },
-      steps: [
-        '1. Diagramação com projeto vinculado (.pdgm.zip)',
-        '2. Editei o conteúdo (autosave ou botão Salvar)',
-        `3. Falha: ${ctx.step || err?.step || err?.name || 'ver detalhe do toast'}`,
-      ].join('\n'),
-    },
-  );
+    );
+  } else {
+    showToast(
+      'err',
+      'Não foi possível gravar no disco',
+      detail,
+      {
+        code: 'project-save-fail',
+        fileName: state.doc?.source?.label || fileHandle?.name || undefined,
+        action: {
+          label: 'Baixar backup',
+          onClick: () => { downloadProjectBackup(); },
+        },
+        steps: [
+          '1. Diagramação com projeto vinculado (.pdgm.zip)',
+          '2. Editei o conteúdo (autosave ou botão Salvar)',
+          `3. Falha: ${ctx.step || err?.step || err?.name || 'ver detalhe do toast'}`,
+        ].join('\n'),
+      },
+    );
+  }
   updateSaveSourceBtn();
 }
 function stopProjectWatch() {
@@ -6840,6 +6944,9 @@ function scheduleProjectAutosave() {
   projectDirty = true;
   lastUiChangeAt = Date.now();   // última mudança no Diagramador
   updateSaveSourceBtn();
+  // sem readwrite nesta sessão: não enfileira autosave (evita requestPermission
+  // sem gesture → “prompt” calado / NotAllowedError enganoso). Clique em Salvar reautoriza.
+  if (projectWriteNeedsGesture) return;
   clearTimeout(projectSaveT);
   projectSaveT = setTimeout(() => {
     // notifyProjectSaveFailed já cuida do toast/UI; não engolir o erro calado
@@ -6892,6 +6999,10 @@ function applyDocFile(doc, opts = {}) {
       state.doc.source = { kind: 'file', label: label || keep.name, format };
       if (opts.mtime != null) linkedMtime = opts.mtime;
       projectDirty = false;
+      // quem passou handle já pediu readwrite no fluxo de abrir/salvar
+      projectWriteNeedsGesture = false;
+      projectSaveError = null;
+      projectSaveErrorDetail = null;
       lastProjectReadAt = Date.now();
       lastProjectPollAt = lastProjectReadAt;
       // conteúdo = disco → mesmo timestamp exibido
@@ -7267,6 +7378,9 @@ async function enableProjectSync(h = pendingLinkHandle) {
     lastProjectPollAt = lastProjectReadAt;
     lastUiChangeAt = linkedMtime;
     projectDirty = false;
+    projectWriteNeedsGesture = false;
+    projectSaveError = null;
+    projectSaveErrorDetail = null;
     startProjectWatch();
     closeSyncOfferModal();
     renderSourceChip();
@@ -7396,6 +7510,22 @@ async function saveProjectToHandle({ quiet = false } = {}) {
       }
       if (permission !== 'granted') {
         mark('permission.request');
+        // Chrome/Edge: requestPermission SEM user activation NÃO mostra diálogo —
+        // devolve “prompt” ou NotAllowedError. Autosave (setTimeout) nunca tem gesture.
+        // Só pede o diálogo no clique de Salvar (ou outro gesto ativo).
+        if (!hasUserActivation()) {
+          projectWriteNeedsGesture = true;
+          const e = new Error(
+            'Permissão de escrita: “' + permission + '”. '
+            + 'Clique em Salvar para o browser mostrar o diálogo de reautorização '
+            + '(após recarregar a página a permissão anterior não vale sozinha).',
+          );
+          e.name = 'NotAllowedError';
+          e.code = 'NEEDS_USER_GESTURE';
+          e.step = step;
+          e.permission = permission;
+          throw e;
+        }
         try {
           permission = await fileHandle.requestPermission({ mode: 'readwrite' });
         } catch (e) {
@@ -7403,9 +7533,10 @@ async function saveProjectToHandle({ quiet = false } = {}) {
           throw e;
         }
         if (permission !== 'granted') {
+          projectWriteNeedsGesture = true;
           const e = new Error(
             `Permissão de escrita: “${permission}” (precisa ser “granted”). `
-            + 'Clique de novo em Salvar e aceite o diálogo do browser, ou baixe um backup.',
+            + 'Aceite o diálogo do browser ao clicar em Salvar, ou baixe um backup.',
           );
           e.name = 'NotAllowedError';
           e.step = step;
@@ -7413,6 +7544,7 @@ async function saveProjectToHandle({ quiet = false } = {}) {
           throw e;
         }
       }
+      projectWriteNeedsGesture = false;
 
       // ── 2) serializar + gravar (com timeout; etapa atual no erro) ──
       await withTimeout((async () => {
@@ -7629,6 +7761,9 @@ async function downloadAndLinkProject() {
         lastProjectPollAt = lastProjectWriteAt;
         lastUiChangeAt = linkedMtime;
         projectDirty = false;
+        projectWriteNeedsGesture = false;
+        projectSaveError = null;
+        projectSaveErrorDetail = null;
         startProjectWatch();
         renderSourceChip();
         showToast('ok', 'Projeto vinculado', (h.name || suggested) + ' · autosave ativo');
@@ -7739,12 +7874,18 @@ function updateSaveSourceBtn() {
 
   btn.classList.remove('save-outline');
   const hasErr = !!projectSaveError;
-  const synced = !projectDirty && !projectWriting && !hasErr;
+  const needsGesture = projectWriteNeedsGesture || (hasErr && /reautorizar/i.test(projectSaveError || ''));
+  const synced = !projectDirty && !projectWriting && !hasErr && !needsGesture;
   if (projectWriting) {
     setSaveSourceIcon('spin');
     lab.textContent = 'Salvando…';
     btn.classList.add('primary');
     btn.setAttribute('aria-label', 'Gravando no disco');
+  } else if (needsGesture) {
+    setSaveSourceIcon('warn');
+    lab.textContent = 'Reautorizar';
+    btn.classList.add('primary');
+    btn.setAttribute('aria-label', 'Clique para reautorizar escrita no arquivo (diálogo do browser)');
   } else if (hasErr) {
     setSaveSourceIcon('warn');
     lab.textContent = 'Erro ao salvar';
@@ -7764,23 +7905,31 @@ function updateSaveSourceBtn() {
 
   const statusLine = projectWriting
     ? 'Gravando no disco…'
-    : (hasErr
-      ? (projectSaveErrorDetail || projectSaveError || 'Falha ao gravar')
-      : (synced ? 'UI e arquivo no disco estão iguais.' : 'Há alterações locais ainda não gravadas.'));
+    : (needsGesture
+      ? (projectSaveError || 'Clique em Salvar para o browser pedir permissão de escrita de novo.')
+      : (hasErr
+        ? (projectSaveErrorDetail || projectSaveError || 'Falha ao gravar')
+        : (synced ? 'UI e arquivo no disco estão iguais.' : 'Há alterações locais ainda não gravadas.')));
   const statusOk = synced && !projectWriting;
   const refreshIco = uiIco('refresh', 14, 'outline');
   const unlinkIco = uiIco('unlink', 14, 'outline');
   const dlIco = uiIco('download', 14, 'outline');
   // detalhe multi-linha da falha: pre-wrap no st-txt
-  const statusHtml = hasErr
+  const statusHtml = (hasErr || needsGesture)
     ? `<span class="st-txt st-txt-err">${escapeHtml(statusLine)}</span>`
     : `<span class="st-txt">${escapeHtml(statusLine)}</span>`;
 
+  const lead = needsGesture
+    ? 'O browser <strong>não manteve</strong> a permissão de escrita (comum após F5). '
+      + 'Clique no botão <strong>Reautorizar / Salvar</strong> — só com esse clique o diálogo aparece. '
+      + 'O autosave sozinho não consegue pedir.'
+    : (hasErr
+      ? 'A gravação automática <strong>falhou</strong>. Abaixo está a causa e a etapa exata — baixe um backup se precisar.'
+      : 'A interface está vinculada à versão do arquivo zip no seu disco. Mudanças serão salvas automaticamente.');
+
   tip.innerHTML = `
     <div class="save-tip-card">
-      <p class="save-tip-lead">${hasErr
-        ? 'A gravação automática <strong>falhou</strong>. Abaixo está a causa e a etapa exata — baixe um backup se precisar.'
-        : 'A interface está vinculada à versão do arquivo zip no seu disco. Mudanças serão salvas automaticamente.'}</p>
+      <p class="save-tip-lead">${lead}</p>
       <hr class="save-tip-sep">
       <ul class="save-tip-status">
         <li class="${statusOk ? 'ok' : 'warn'}">${saveTipStatusIco(statusOk)}${statusHtml}</li>
@@ -7788,7 +7937,7 @@ function updateSaveSourceBtn() {
         <li class="ok">${saveTipStatusIco(true)}<span class="st-txt">No Diagramador: ${escapeHtml(formatProjectTs(diagramadorSyncTs()))}</span></li>
       </ul>
       <div class="save-tip-actions">
-        ${hasErr || projectDirty ? `<button type="button" data-save-act="backup">${dlIco}<span>Baixar backup</span></button>` : ''}
+        ${hasErr || projectDirty || needsGesture ? `<button type="button" data-save-act="backup">${dlIco}<span>Baixar backup</span></button>` : ''}
         <button type="button" data-save-act="reload">${refreshIco}<span>Recarregar</span></button>
         <button type="button" data-save-act="unlink">${unlinkIco}<span>Desvincular</span></button>
       </div>
@@ -11680,12 +11829,36 @@ idb.get('fh').then(async (h) => {
   }
   if (!isProjectSource(s)) return;
   try {
-    if (await h.queryPermission({ mode: 'readwrite' }) !== 'granted'
-      && await h.queryPermission() !== 'granted') {
-      // permissão caiu no reload — chip mostra vinculado mas poll só após gesture
+    let writePerm = 'prompt';
+    try {
+      writePerm = h.queryPermission
+        ? await h.queryPermission({ mode: 'readwrite' })
+        : 'granted';
+    } catch { writePerm = 'prompt'; }
+    if (writePerm !== 'granted') {
+      // handle no IDB ≠ permissão de escrita: Chrome volta a “prompt” no F5.
+      // Sem clique o autosave não consegue pedir — marca UI e não liga poll de escrita.
+      projectWriteNeedsGesture = true;
+      projectSaveError = 'Clique em Salvar para reautorizar o arquivo no browser';
+      projectSaveErrorDetail = [
+        'O arquivo continua vinculado, mas a permissão de escrita do browser caiu ao recarregar.',
+        'Clique em Salvar / Reautorizar para o diálogo aparecer (o autosave não abre esse diálogo sozinho).',
+        '',
+        `Arquivo: ${h.name || s.label || '?'}`,
+        `Permissão (readwrite): ${writePerm}`,
+      ].join('\n');
+      // leitura ainda pode estar ok → mtime pro painel, se o browser deixar
+      try {
+        if (!h.queryPermission || await h.queryPermission() === 'granted') {
+          const f = await h.getFile();
+          linkedMtime = f.lastModified;
+        }
+      } catch { /* sem leitura também — ok */ }
       renderSourceChip();
+      updateSaveSourceBtn();
       return;
     }
+    projectWriteNeedsGesture = false;
     const f = await h.getFile();
     linkedMtime = f.lastModified;
     startProjectWatch();
@@ -11717,6 +11890,9 @@ idb.get('doc').then(doc => {
   if (state.doc.source && !state.doc.source.format) {
     state.doc.source.format = projectFormatFromName(state.doc.source.label) || 'md';
   }
-  if (fileHandle && isProjectSource(state.doc.source)) startProjectWatch();
+  // só poll/autosave se já temos readwrite; senão o boot do handle já marcou needsGesture
+  if (fileHandle && isProjectSource(state.doc.source) && !projectWriteNeedsGesture) {
+    startProjectWatch();
+  }
   renderSourceChip();
 });
