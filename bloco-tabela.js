@@ -52,6 +52,11 @@ export const TABLE_LINE_HEIGHT_MIN = 1;
 export const TABLE_LINE_HEIGHT_MAX = 2.5;
 export const DEFAULT_TABLE_ALIGN = 'left';     // left | center | right
 export const DEFAULT_TABLE_VALIGN = 'top';     // top | middle | bottom
+/** Padding vertical default das células (CSS histórico: 4px 6px). */
+export const DEFAULT_ROW_PAD_Y = 4;            // px
+export const ROW_PAD_Y_MIN = 2;
+export const ROW_PAD_Y_MAX = 40;
+export const DEFAULT_ROW_PAD_X = 6;            // px — horizontal fixo (não no slider)
 
 /**
  * Estilos compartilhados no Grid de Tabelas (iguais em todas as colunas).
@@ -251,6 +256,13 @@ export function setTableHeaderCol(b, on) {
 /** API de edição ao vivo por .tbl-wrap (seleção/merge acessível do painel flutuante). */
 const liveByWrap = new WeakMap();
 
+/** Hook global: diagramacao escuta seleção de célula p/ barra flutuante (sem acoplar DOM). */
+let tableSelectionHook = null;
+/** @param {null|((sel:object|null, live:object)=>void)} fn */
+export function setTableSelectionHook(fn) {
+  tableSelectionHook = typeof fn === 'function' ? fn : null;
+}
+
 /** Live edit da tabela sob o elemento (ou da tabela ativa na página). */
 export function tableLiveFromEl(el) {
   const wrap = el?.closest?.('.tbl-wrap') || (el?.classList?.contains('tbl-wrap') ? el : null);
@@ -267,6 +279,28 @@ export function tableLiveActive() {
     || document.querySelector('.tbl-wrap.tbl-editing.active-block')
     || document.querySelector('.page.editing .tbl-wrap.tbl-editing');
   return host ? liveByWrap.get(host) : null;
+}
+
+/**
+ * Limpa seleção visual (.tbl-sel) e estado de range das tabelas em edição.
+ * keepBlockId: se passado, preserva a(s) tabela(s) desse bloco (table ou table-grid).
+ * Sem keep → limpa todas (clique em outro bloco / fora).
+ */
+export function clearTableCellSelections(keepBlockId = null) {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll('.tbl-wrap.tbl-editing').forEach((wrap) => {
+    if (keepBlockId) {
+      const ownId = wrap.dataset.id;
+      const hostId = wrap.closest?.('[data-id]')?.dataset?.id;
+      // table avulsa: data-id no wrap; grid: wrap sem id, host .tblgrid-wrap
+      if (ownId === keepBlockId || hostId === keepBlockId) return;
+    }
+    const live = liveByWrap.get(wrap);
+    if (live?.clearSelection) live.clearSelection();
+    else {
+      wrap.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
+    }
+  });
 }
 
 // ── merges (agrupar células) ────────────────────────────────────────────────
@@ -620,6 +654,58 @@ export function setCellValign(b, r, c, v) {
   b.cellValign[key] = a;
 }
 
+// ── padding vertical por linha (altura “folga” da row) ───────────────────────
+// b.rowPadY = { "1": 12 } — só linhas ≠ DEFAULT_ROW_PAD_Y (4px)
+
+export function clampRowPadY(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return DEFAULT_ROW_PAD_Y;
+  return Math.max(ROW_PAD_Y_MIN, Math.min(ROW_PAD_Y_MAX, v));
+}
+
+/** Padding vertical efetivo da linha (px). */
+export function rowPadYOf(b, r) {
+  const map = b && b.rowPadY;
+  if (map && map[String(r | 0)] != null) return clampRowPadY(map[String(r | 0)]);
+  return DEFAULT_ROW_PAD_Y;
+}
+
+/**
+ * Define padding vertical da linha. Se igual ao default, remove a entrada
+ * (JSON limpo — cell volta ao padding CSS).
+ */
+export function setRowPadY(b, r, v) {
+  if (!b || typeof b !== 'object') return;
+  const key = String(r | 0);
+  const py = clampRowPadY(v);
+  if (py === DEFAULT_ROW_PAD_Y) {
+    if (b.rowPadY) {
+      delete b.rowPadY[key];
+      if (!Object.keys(b.rowPadY).length) delete b.rowPadY;
+    }
+    return;
+  }
+  if (!b.rowPadY) b.rowPadY = {};
+  b.rowPadY[key] = py;
+}
+
+/** Aplica padding da linha no DOM (live, sem rebuild). */
+export function applyRowPadYDom(table, r, py) {
+  if (!table) return;
+  const pad = clampRowPadY(py);
+  table.querySelectorAll(`[data-row="${r | 0}"]`).forEach((td) => {
+    if (td.tagName !== 'TD' && td.tagName !== 'TH') return;
+    if (pad === DEFAULT_ROW_PAD_Y) {
+      // volta ao CSS (padding: 4px 6px) — limpa override
+      td.style.paddingTop = '';
+      td.style.paddingBottom = '';
+      return;
+    }
+    td.style.paddingTop = pad + 'px';
+    td.style.paddingBottom = pad + 'px';
+  });
+}
+
 /** Remapeia cellAlign/cellValign: mapFn(r,c) → {r,c}|null (null = apaga). */
 function remapCellStyleMaps(b, mapFn) {
   for (const field of ['cellAlign', 'cellValign']) {
@@ -636,6 +722,22 @@ function remapCellStyleMaps(b, mapFn) {
     if (Object.keys(next).length) b[field] = next;
     else delete b[field];
   }
+}
+
+/** Remapeia rowPadY: mapFn(r) → number|null (null = apaga). */
+function remapRowPadY(b, mapFn) {
+  const src = b && b.rowPadY;
+  if (!src || typeof src !== 'object') return;
+  const next = {};
+  for (const [k, v] of Object.entries(src)) {
+    const r = +k;
+    if (!Number.isFinite(r)) continue;
+    const dest = mapFn(r);
+    if (dest == null || !Number.isFinite(dest)) continue;
+    next[String(dest | 0)] = clampRowPadY(v);
+  }
+  if (Object.keys(next).length) b.rowPadY = next;
+  else delete b.rowPadY;
 }
 
 /** Remove overrides fora da matriz ou em células cobertas por merge. */
@@ -656,6 +758,19 @@ function pruneCellStyleMaps(b) {
     }
     if (Object.keys(next).length) b[field] = next;
     else delete b[field];
+  }
+  // rowPadY: descarta linhas inexistentes
+  if (b.rowPadY && typeof b.rowPadY === 'object') {
+    const next = {};
+    for (const [k, v] of Object.entries(b.rowPadY)) {
+      const r = +k;
+      if (!Number.isFinite(r) || r < 0 || r >= nR) continue;
+      const py = clampRowPadY(v);
+      if (py === DEFAULT_ROW_PAD_Y) continue;
+      next[String(r)] = py;
+    }
+    if (Object.keys(next).length) b.rowPadY = next;
+    else delete b.rowPadY;
   }
 }
 export function tableFontSizeOf(b) {
@@ -803,6 +918,7 @@ function addRow(b, at /* null = fim */) {
     ensureMerges(b);
   }
   remapCellStyleMaps(b, (r, c) => (r >= i ? { r: r + 1, c } : { r, c }));
+  remapRowPadY(b, (r) => (r >= i ? r + 1 : r));
 }
 function addCol(b, at /* null = fim */) {
   ensureMatrix(b);
@@ -843,6 +959,11 @@ function delRow(b, r) {
     if (rr === r) return null;
     if (rr > r) return { r: rr - 1, c };
     return { r: rr, c };
+  });
+  remapRowPadY(b, (rr) => {
+    if (rr === r) return null;
+    if (rr > r) return rr - 1;
+    return rr;
   });
   return true;
 }
@@ -897,6 +1018,13 @@ function moveRow(b, from, to) {
     } else if (r >= to && r < from) return { r: r + 1, c };
     return { r, c };
   });
+  remapRowPadY(b, (r) => {
+    if (r === from) return to;
+    if (from < to) {
+      if (r > from && r <= to) return r - 1;
+    } else if (r >= to && r < from) return r + 1;
+    return r;
+  });
   return true;
 }
 function moveCol(b, from, to) {
@@ -936,6 +1064,34 @@ function moveCol(b, from, to) {
 
 function closeAnyTblMenu() {
   document.querySelectorAll('.tbl-menu').forEach((el) => el.remove());
+}
+
+/**
+ * Item de menu: slider de padding vertical da linha.
+ * Live no DOM; commit no input (sem rebuild — alças reposicionam).
+ */
+function rowPadYMenuItem(b, rowIndex, table, wrap, ctx) {
+  const data = unwrapTableData(b) || b;
+  return {
+    slider: true,
+    label: 'Padding vertical',
+    min: ROW_PAD_Y_MIN,
+    max: ROW_PAD_Y_MAX,
+    step: 1,
+    get: () => rowPadYOf(data, rowIndex),
+    set: (v) => {
+      setRowPadY(data, rowIndex, v);
+      applyRowPadYDom(table, rowIndex, rowPadYOf(data, rowIndex));
+      // alças de linha/coluna e “+” de borda seguem a nova altura
+      const rh = wrap.querySelector('.tbl-row-handles');
+      const ch = wrap.querySelector('.tbl-col-handles');
+      if (rh) layoutRowHandles(rh, table);
+      if (ch) layoutColHandles(ch, table);
+      placeEdgeAdds(wrap, table);
+      wrap.querySelectorAll('.tbl-resizer').forEach((h) => placeResizer(h, table, +h.dataset.after));
+      ctx.commit?.();
+    },
+  };
 }
 
 function openTblMenu(anchor, items, onClose) {
@@ -1003,6 +1159,45 @@ function openTblMenu(anchor, items, onClose) {
         pair.appendChild(btn);
       });
       row.appendChild(pair);
+      menu.appendChild(row);
+      return;
+    }
+    // slider (ex.: padding vertical da linha)
+    if (it.slider) {
+      const row = document.createElement('div');
+      row.className = 'tbl-menu-slider';
+      const head = document.createElement('div');
+      head.className = 'tbl-menu-slider-head';
+      const lab = document.createElement('span');
+      lab.textContent = it.label || 'Padding';
+      const valEl = document.createElement('span');
+      valEl.className = 'tbl-menu-slider-val';
+      const min = it.min ?? ROW_PAD_Y_MIN;
+      const max = it.max ?? ROW_PAD_Y_MAX;
+      const step = it.step ?? 1;
+      const cur = clampRowPadY(typeof it.get === 'function' ? it.get() : DEFAULT_ROW_PAD_Y);
+      valEl.textContent = String(cur);
+      head.append(lab, valEl);
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = String(min);
+      input.max = String(max);
+      input.step = String(step);
+      input.value = String(cur);
+      input.setAttribute('aria-label', it.label || 'Padding vertical');
+      // mousedown no range NÃO fecha o menu (dismiss escuta mousedown no doc)
+      input.addEventListener('mousedown', (e) => e.stopPropagation());
+      input.addEventListener('pointerdown', (e) => e.stopPropagation());
+      input.addEventListener('click', (e) => e.stopPropagation());
+      const apply = () => {
+        const v = clampRowPadY(input.value);
+        input.value = String(v);
+        valEl.textContent = String(v);
+        it.set?.(v);
+      };
+      input.addEventListener('input', apply);
+      input.addEventListener('change', apply);
+      row.append(head, input);
       menu.appendChild(row);
       return;
     }
@@ -1116,6 +1311,14 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       // alinhamento efetivo (global ou override da célula)
       td.style.textAlign = cellAlignOf(b, r, c);
       td.style.verticalAlign = cellValignOf(b, r, c);
+      // padding vertical por linha (default 4px — só override se ≠)
+      {
+        const py = rowPadYOf(b, r);
+        if (py !== DEFAULT_ROW_PAD_Y) {
+          td.style.paddingTop = py + 'px';
+          td.style.paddingBottom = py + 'px';
+        }
+      }
       if (head) {
         td.classList.add('tbl-head-cell');
         td.style.background = tableHeaderBg(b);
@@ -1163,10 +1366,12 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
   if (editing) {
     // seleção de range (highlight .tbl-sel). Mesclar/Desagrupar só no painel flutuante.
     let onSelectionChange = null;
+    let liveApi = null; // preenchido abaixo; paint/hook usam a ref
     paintCellSel = () => {
       table.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
       if (!cellSel) {
         onSelectionChange?.(null);
+        tableSelectionHook?.(null, liveApi);
         return;
       }
       const rMin = Math.min(cellSel.r0, cellSel.r1);
@@ -1183,6 +1388,8 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
         if (hit) el.classList.add('tbl-sel');
       });
       onSelectionChange?.(cellSel);
+      // liveApi já existe quando paint roda (eventos); hook global = barra de célula
+      tableSelectionHook?.(cellSel, liveApi);
     };
 
     // seleção de range (estilo planilha):
@@ -1299,10 +1506,41 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
       return true;
     };
     // painel flutuante (direita) chama merge/unmerge e alinhamento da célula via WeakMap
-    const liveApi = {
+    /** Células da seleção (ou só a ativa). Usado p/ alinhar o range de uma vez. */
+    const cellsInSel = () => {
+      if (cellSel) {
+        const r0 = Math.min(cellSel.r0, cellSel.r1);
+        const r1 = Math.max(cellSel.r0, cellSel.r1);
+        const c0 = Math.min(cellSel.c0, cellSel.c1);
+        const c1 = Math.max(cellSel.c0, cellSel.c1);
+        const out = [];
+        for (let r = r0; r <= r1; r++) {
+          for (let c = c0; c <= c1; c++) {
+            if (isCellCovered(b, r, c)) continue;
+            out.push({ r, c });
+          }
+        }
+        if (out.length) return out;
+      }
+      const one = liveApi?.activeCell?.();
+      return one ? [one] : [];
+    };
+    liveApi = {
       wrap,
       getSelection: () => cellSel,
       setSelection: (s) => { cellSel = s; paintCellSel(); },
+      /** zera range + classes .tbl-sel (sair do bloco / trocar de tabela) */
+      clearSelection: () => {
+        const ae = typeof document !== 'undefined' ? document.activeElement : null;
+        if (ae && table.contains(ae) && typeof ae.blur === 'function') ae.blur();
+        if (cellSel == null) {
+          table.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
+          tableSelectionHook?.(null, liveApi);
+          return;
+        }
+        cellSel = null;
+        paintCellSel();
+      },
       merge: runMerge,
       unmerge: runUnmerge,
       data: () => unwrapTableData(b) || b,
@@ -1323,23 +1561,29 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
         }
         return null;
       },
+      /** DOM da célula (r,c) — âncora da barra flutuante */
+      cellEl: (r, c) => table.querySelector(`[data-row="${r}"][data-col="${c}"]`),
       setAlign: (align) => {
-        const cell = liveApi.activeCell();
-        if (!cell) return false;
+        const cells = cellsInSel();
+        if (!cells.length) return false;
         const data = unwrapTableData(b) || b;
-        setCellAlign(data, cell.r, cell.c, align);
-        const el = table.querySelector(`[data-row="${cell.r}"][data-col="${cell.c}"]`);
-        if (el) el.style.textAlign = cellAlignOf(data, cell.r, cell.c);
+        for (const cell of cells) {
+          setCellAlign(data, cell.r, cell.c, align);
+          const el = table.querySelector(`[data-row="${cell.r}"][data-col="${cell.c}"]`);
+          if (el) el.style.textAlign = cellAlignOf(data, cell.r, cell.c);
+        }
         ctx.commit?.();
         return true;
       },
       setValign: (valign) => {
-        const cell = liveApi.activeCell();
-        if (!cell) return false;
+        const cells = cellsInSel();
+        if (!cells.length) return false;
         const data = unwrapTableData(b) || b;
-        setCellValign(data, cell.r, cell.c, valign);
-        const el = table.querySelector(`[data-row="${cell.r}"][data-col="${cell.c}"]`);
-        if (el) el.style.verticalAlign = cellValignOf(data, cell.r, cell.c);
+        for (const cell of cells) {
+          setCellValign(data, cell.r, cell.c, valign);
+          const el = table.querySelector(`[data-row="${cell.r}"][data-col="${cell.c}"]`);
+          if (el) el.style.verticalAlign = cellValignOf(data, cell.r, cell.c);
+        }
         ctx.commit?.();
         return true;
       },
@@ -1348,7 +1592,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
     };
     liveByWrap.set(wrap, liveApi);
 
-    // foco em célula também atualiza o painel (alinhamento fino)
+    // foco em célula também atualiza painel / barra flutuante
     table.addEventListener('focusin', (e) => {
       const td = e.target.closest && e.target.closest('th, td');
       if (!td || !table.contains(td)) return;
@@ -1359,6 +1603,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
         paintCellSel();
       } else {
         onSelectionChange?.(cellSel);
+        tableSelectionHook?.(cellSel, liveApi);
       }
     });
 
@@ -1466,6 +1711,7 @@ export function buildTableEl(b, editing, ctx = {}, widthPx = COL_FULL) {
                 },
               ],
             },
+            rowPadYMenuItem(b, 0, table, wrap, ctx),
             { label: 'Inserir abaixo', fn: () => { addRow(unwrapTableData(b) || b, 1); ctx.rerender?.(); } },
           ], () => { delete wrap.dataset.menuRow; });
           return;
@@ -1743,6 +1989,7 @@ function startRowDrag(e, b, from, wrap, table, btn, ctx) {
       // click → menu estrutural da linha
       wrap.dataset.menuRow = String(from);
       openTblMenu(btn, [
+        rowPadYMenuItem(b, from, table, wrap, ctx),
         { label: 'Inserir acima', fn: () => { addRow(b, from); ctx.rerender(); } },
         { label: 'Inserir abaixo', fn: () => { addRow(b, from + 1); ctx.rerender(); } },
         { label: 'Apagar linha', danger: true, fn: () => { if (delRow(b, from)) ctx.rerender(); } },
@@ -2094,6 +2341,25 @@ function focusCell(tableId, r, c) {
   .tbl-menu-sw {
     display: flex; align-items: center; justify-content: space-between; gap: .5rem;
     padding: .35rem .55rem; font-size: .8rem; font-stretch: 85%; color: var(--ink, #eee);
+  }
+  /* slider de padding vertical da linha (menu ⋯ da alça) */
+  .tbl-menu-slider {
+    display: grid; gap: .28rem;
+    padding: .4rem .55rem .5rem;
+    font-size: .8rem; font-stretch: 85%; color: var(--ink, #eee);
+    min-width: 11.5rem;
+  }
+  .tbl-menu-slider-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: .5rem;
+  }
+  .tbl-menu-slider-val {
+    font-variant-numeric: tabular-nums;
+    opacity: .72; font-size: .72rem;
+  }
+  .tbl-menu-slider-val::after { content: "px"; margin-left: .1em; opacity: .75; }
+  .tbl-menu-slider input[type="range"] {
+    width: 100%; margin: 0; accent-color: var(--violet, #4E39FF);
+    height: 1.1rem; cursor: pointer;
   }
   /* par de chips fundo+texto (menu da alça e painel flutuante) */
   .tbl-menu-colors {

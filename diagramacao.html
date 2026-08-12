@@ -1670,7 +1670,7 @@
     /* padding permanente do editor some no PDF */
     .page .idx-section { padding: 0; }
     .page.editing .col-right::after { display: none; }
-    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #rightLayerMenu, #chartModal, #linkProjectModal, #syncOfferModal, #freePdfModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
+    .drag-badge, .lock-trail, #fmtbar, #calloutBar, #tblCellBar, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #addImgMenu, #imgPanel, #coverPanel, #logoPanel, #downloadMenu, #zoomPop, #blockStylePanel, #idxPanel, #resumoPanel, #rightLayerMenu, #chartModal, #linkProjectModal, #syncOfferModal, #freePdfModal, .snap-guide, #bhandle, #badd, #bmenu, #dropline, .col-add, .preview-toc-host { display: none !important; }
     #linkedit { display: none !important; }
   }
 
@@ -1926,6 +1926,34 @@
   #calloutBar .co-iconbtn:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); }
   #calloutBar .swatch { width: 24px; height: 24px; border-radius: 5px; }
   #calloutBar .sep { width: 1px; align-self: stretch; margin: 2px 1px; background: var(--hair-strong); }
+
+  /* #tblCellBar — barra FLUTUANTE da célula de tabela (marcas + cor + alinhamento).
+     Mesmo visual do #fmtbar; ancora na célula ativa (não só em seleção de texto). */
+  #tblCellBar {
+    position: fixed; z-index: 30; display: flex; gap: 2px; align-items: center;
+    padding: 3px; border: 1px solid var(--hair-strong); border-radius: 8px;
+    background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
+    box-shadow: 0 12px 40px -12px #000;
+  }
+  #tblCellBar[hidden] { display: none; }
+  #tblCellBar button {
+    padding: .28rem .55rem; font-size: .8rem; border: 0; background: transparent;
+    border-radius: 5px; color: var(--muted); cursor: pointer;
+  }
+  #tblCellBar button:hover { background: color-mix(in srgb, var(--lilac) 16%, transparent); color: var(--ink); }
+  #tblCellBar button.on { color: var(--ink); background: color-mix(in srgb, var(--violet) 34%, transparent); }
+  #tblCellBar .sep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--hair-strong); }
+  #tblCellBar .colorbtn { font-weight: 700; line-height: 1; }
+  #tblCellBar .cb-fore {
+    border-bottom: 3px solid #29E899; border-radius: 3px; padding-bottom: calc(.28rem - 3px);
+  }
+  #tblCellBar .cb-back { background: #FFF3A3; color: #23292F; }
+  #tblCellBar .cb-back:hover { filter: brightness(1.06); color: #23292F; }
+  #tblCellBar .alignbtn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 0;
+  }
+  #tblCellBar .alignbtn svg { width: 14px; height: 14px; display: block; }
 
   /* título com ícone à esquerda — centro vertical; tipografia fica no <hN class="b hN"> */
   .page .head-wrap {
@@ -2536,6 +2564,26 @@
   <button type="button" class="swatch co-iconswatch" title="Cor do ícone"></button>
   <span class="sep"></span>
   <button type="button" class="swatch co-bgswatch" title="Cor do fundo"></button>
+</div>
+
+<!-- barra flutuante da célula de tabela — marcas + cor + alinhamento da célula ativa
+     (painel direito = estilos da tabela inteira). ver updateTblCellBar() em diagramacao.js -->
+<div id="tblCellBar" hidden>
+  <button type="button" class="markbtn" data-cmd="bold" title="Negrito (⌘B)" style="font-weight:700">B</button>
+  <button type="button" class="markbtn" data-cmd="italic" title="Itálico (⌘I)" style="font-style:italic">I</button>
+  <button type="button" class="markbtn" data-cmd="underline" title="Sublinhado (⌘U)" style="text-decoration:underline">U</button>
+  <button type="button" class="markbtn" data-cmd="strikeThrough" title="Tachado" style="text-decoration:line-through">S</button>
+  <span class="sep"></span>
+  <button type="button" class="colorbtn cb-fore" data-cmd="foreColor" title="Cor do texto">A</button>
+  <button type="button" class="colorbtn cb-back" data-cmd="hiliteColor" title="Destaque (cor de fundo)">A</button>
+  <span class="sep"></span>
+  <button type="button" class="alignbtn" data-align="left" title="Alinhar à esquerda"></button>
+  <button type="button" class="alignbtn" data-align="center" title="Centralizar"></button>
+  <button type="button" class="alignbtn" data-align="right" title="Alinhar à direita"></button>
+  <span class="sep"></span>
+  <button type="button" class="alignbtn" data-valign="top" title="Alinhar ao topo"></button>
+  <button type="button" class="alignbtn" data-valign="middle" title="Alinhar ao meio"></button>
+  <button type="button" class="alignbtn" data-valign="bottom" title="Alinhar à base"></button>
 </div>
 
 <!-- trilha A (t2): mini-editor de URL inline (abre ancorado na seleção) -->

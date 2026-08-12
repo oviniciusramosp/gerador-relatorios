@@ -25,7 +25,8 @@ import {
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
   tableBorderWidthOuterOf, tableBorderWidthInnerOf, tableAltRowBgOf,
   cellAlignOf, cellValignOf, setCellAlign, setCellValign,
-  DEFAULT_ALT_ROW_BG,
+  rowPadYOf, setRowPadY, clampRowPadY,
+  DEFAULT_ALT_ROW_BG, DEFAULT_ROW_PAD_Y, ROW_PAD_Y_MIN, ROW_PAD_Y_MAX,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   tableHeaderTextOf, tableTextColorOf,
   clampTableFontSize, clampTableLineHeight, clampTableBorderWidth,
@@ -391,6 +392,31 @@ import {
   setCellAlign(t, 0, 1, 'center');
   mergeCells(t, 0, 0, 0, 1);
   assert.equal(t.cellAlign && t.cellAlign['0,1'], undefined);
+}
+
+// ── padding vertical por linha (menu ⋯ da alça) ─────────────────────────────
+// Sem este teste: slider salva default no JSON, insert/delete some o pad, clamp vaza.
+{
+  const t = { rows: [['A', 'B'], ['1', '2'], ['3', '4']] };
+  ensureTable(t);
+  assert.equal(rowPadYOf(t, 1), DEFAULT_ROW_PAD_Y);
+  setRowPadY(t, 1, 16);
+  assert.equal(rowPadYOf(t, 1), 16);
+  assert.equal(t.rowPadY['1'], 16);
+  assert.equal(rowPadYOf(t, 0), DEFAULT_ROW_PAD_Y, 'outras linhas no default');
+  // default remove a chave
+  setRowPadY(t, 1, DEFAULT_ROW_PAD_Y);
+  assert.equal(t.rowPadY, undefined);
+  // clamp
+  assert.equal(clampRowPadY(0), ROW_PAD_Y_MIN);
+  assert.equal(clampRowPadY(999), ROW_PAD_Y_MAX);
+  setRowPadY(t, 1, 12);
+  setRowPadY(t, 2, 20);
+  // inserir linha empurra índices
+  addTableRow(t, 1);
+  assert.equal(rowPadYOf(t, 2), 12, 'pad da antiga L1 vira L2');
+  assert.equal(rowPadYOf(t, 3), 20);
+  assert.equal(t.rowPadY['1'], undefined);
 }
 
 // ── equalRows: rows alinhadas; última da menor preenche ─────────────────────

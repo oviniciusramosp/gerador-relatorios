@@ -33,9 +33,10 @@ import {
   tableBorderWidthOuterOf, tableBorderWidthInnerOf, tableAltRowBgOf,
   clampTableRadius, clampTableBorderWidth,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
-  cellAlignOf, cellValignOf, setCellAlign, setCellValign,
+  cellAlignOf, cellValignOf,
   clampTableFontSize, clampTableLineHeight, normalizeTableAlign, normalizeTableValign,
   setTableHeaderRow, setTableHeaderCol, tableLiveActive, tableLiveFromEl,
+  setTableSelectionHook, clearTableCellSelections,
   mergeSelectionOrNeighbor, unmergeCells,
   DEFAULT_HEADER_BG, DEFAULT_HEADER_TEXT, DEFAULT_TEXT_COLOR,
   DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_BG, DEFAULT_ALT_ROW_BG,
@@ -1146,6 +1147,14 @@ function buildText(b, editing) {
 // altura do bloco inteiro, que é o que a alça ⠿ também ancora.
 function paintActiveBlock(id) {
   pagesEl.querySelectorAll('.active-block').forEach(el => el.classList.remove('active-block'));
+  // célula de tabela com .tbl-sel não some só porque o foco mudou — limpa se o
+  // bloco ativo não é mais aquela tabela (ou table-grid).
+  const keepTbl = id && (() => {
+    const b = blockOf(id);
+    return b && (b.type === 'table' || b.type === 'table-grid') ? id : null;
+  })();
+  clearTableCellSelections(keepTbl);
+  if (typeof updateTblCellBar === 'function') updateTblCellBar();
   if (!id) return;
   pagesEl.querySelectorAll(
     `.col-left > [data-id="${id}"], .col-right > [data-id="${id}"]`
@@ -1363,29 +1372,13 @@ function tableStyleFieldsHtml(b, mode = 'full') {
     <div class="swrow"><span>Linhas Verticais</span>
       <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>
     <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
-    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>
-    <div class="field" data-role="cell-align-block">
-      <span class="field-row">Alinhamento (célula)<span data-role="cell-coord" class="field-val" style="opacity:.7;font-size:.7rem"></span></span>
-      <div data-slot="cell-align"></div>
-    </div>
-    <div class="field" data-role="cell-valign-block">
-      Vertical (célula)
-      <div data-slot="cell-valign"></div>
-    </div>`;
+    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>`;
   }
-  // grid item: alinhamento global daquela tabela + fino por célula
+  // grid item: alinhamento default daquela tabela (por célula fica na #tblCellBar)
   if (isItem) {
     html += `
     <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
-    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>
-    <div class="field" data-role="cell-align-block">
-      <span class="field-row">Alinhamento (célula)<span data-role="cell-coord" class="field-val" style="opacity:.7;font-size:.7rem"></span></span>
-      <div data-slot="cell-align"></div>
-    </div>
-    <div class="field" data-role="cell-valign-block">
-      Vertical (célula)
-      <div data-slot="cell-valign"></div>
-    </div>`;
+    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>`;
   }
   if (showAlt) {
     html += `
@@ -1514,7 +1507,7 @@ function wireTableStyleControls(root, b, hooks = {}) {
         // células sem override seguem o global no paint
         paint();
         mountAlign();
-        refreshCellAlignUI();
+        updateTblCellBar();
       }));
     };
     mountAlign();
@@ -1532,82 +1525,10 @@ function wireTableStyleControls(root, b, hooks = {}) {
         else b.valign = vv;
         paint();
         mountValign();
-        refreshCellAlignUI();
+        updateTblCellBar();
       }));
     };
     mountValign();
-  }
-
-  // alinhamento fino da CÉLULA ativa (override; limpa se igual ao global)
-  const cellAlignSlot = root.querySelector('[data-slot="cell-align"]');
-  const cellValignSlot = root.querySelector('[data-slot="cell-valign"]');
-  const cellCoordEl = root.querySelector('[data-role="cell-coord"]');
-  const liveForAlign = () => {
-    if (hooks.tableHost) return tableLiveFromEl(hooks.tableHost()) || tableLiveActive();
-    return tableLiveActive();
-  };
-  const refreshCellAlignUI = () => {
-    if (!cellAlignSlot && !cellValignSlot) return;
-    const live = liveForAlign();
-    const cell = live?.activeCell?.() || null;
-    const data = live?.data?.() || b;
-    if (cellCoordEl) {
-      cellCoordEl.textContent = cell ? `L${cell.r + 1}·C${cell.c + 1}` : 'selecione';
-    }
-    const disabled = !cell;
-    if (cellAlignSlot) {
-      const cur = cell ? cellAlignOf(data, cell.r, cell.c) : tableAlignOf(data);
-      cellAlignSlot.replaceChildren(widthSeg(cur, [
-        { val: 'left', label: 'Esquerda', icon: ALIGN_ICON.left },
-        { val: 'center', label: 'Centro', icon: ALIGN_ICON.center },
-        { val: 'right', label: 'Direita', icon: ALIGN_ICON.right },
-      ], (v) => {
-        if (!cell) return;
-        if (live?.setAlign?.(v)) {
-          refreshCellAlignUI();
-          hooks.after?.();
-          return;
-        }
-        setCellAlign(data, cell.r, cell.c, v);
-        paint();
-        refreshCellAlignUI();
-      }));
-      cellAlignSlot.style.opacity = disabled ? '.45' : '';
-      cellAlignSlot.style.pointerEvents = disabled ? 'none' : '';
-    }
-    if (cellValignSlot) {
-      const cur = cell ? cellValignOf(data, cell.r, cell.c) : tableValignOf(data);
-      cellValignSlot.replaceChildren(widthSeg(cur, [
-        { val: 'top', label: 'Topo', icon: VALIGN_ICON.top },
-        { val: 'middle', label: 'Meio', icon: VALIGN_ICON.middle },
-        { val: 'bottom', label: 'Base', icon: VALIGN_ICON.bottom },
-      ], (v) => {
-        if (!cell) return;
-        if (live?.setValign?.(v)) {
-          refreshCellAlignUI();
-          hooks.after?.();
-          return;
-        }
-        setCellValign(data, cell.r, cell.c, v);
-        paint();
-        refreshCellAlignUI();
-      }));
-      cellValignSlot.style.opacity = disabled ? '.45' : '';
-      cellValignSlot.style.pointerEvents = disabled ? 'none' : '';
-    }
-  };
-  if (cellAlignSlot || cellValignSlot) {
-    refreshCellAlignUI();
-    const live = liveForAlign();
-    if (live) {
-      live.onSelectionChange = () => refreshCellAlignUI();
-    }
-    // re-sincroniza se o host ainda não existia no open (próximo tick)
-    requestAnimationFrame(() => {
-      const l2 = liveForAlign();
-      if (l2) l2.onSelectionChange = () => refreshCellAlignUI();
-      refreshCellAlignUI();
-    });
   }
 
   /** Atualiza visual do chip (fill = fundo; text = underline no “A”, estilo fmtbar). */
@@ -2182,8 +2103,10 @@ function paintTableGridFocus(blockId, focus) {
     const on = keep >= 0 && i === keep;
     cell.classList.toggle('is-active', on);
     if (!on) {
-      // limpa foco/seleção visual das outras tabelas
-      cell.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
+      // limpa foco/seleção (estado live + .tbl-sel) das outras tabelas do grid
+      const live = tableLiveFromEl(cell.querySelector('.tbl-wrap'));
+      if (live?.clearSelection) live.clearSelection();
+      else cell.querySelectorAll('th.tbl-sel, td.tbl-sel').forEach((el) => el.classList.remove('tbl-sel'));
       const ae = document.activeElement;
       if (ae && cell.contains(ae) && typeof ae.blur === 'function') ae.blur();
     }
@@ -5582,7 +5505,7 @@ document.addEventListener('mousedown', (e) => {
   const t = e.target;
   if (!(t && t.closest)) return;
   // âncoras e popovers que devem permanecer abertos
-  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #linkedit, #rightLayerMenu')) return;
+  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #tblCellBar, #linkedit, #rightLayerMenu')) return;
   if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu')) return;
   if (t.closest('#btnPrint, #zoomPct, #zoomFit, #bhandle, #badd')) return;
   // imagem: clicar fora limpa a seleção (fecha o painel)
@@ -10559,6 +10482,220 @@ downloadMenu.querySelector('[data-dl="pdf-free"]')?.addEventListener('click', ()
 downloadMenu.querySelector('[data-dl="zip"]').addEventListener('click', () => { closeDownloadMenu(); saveDocFile(); });
 addEventListener('resize', () => { if (state.zoom === 'fit') applyZoom(); });
 
+// ──────────────── barra flutuante da CÉLULA de tabela ───────────────────────
+// Espelha o #fmtbar de texto: painel direito = tabela inteira; esta barra = célula
+// ativa (marcas, cor, alinhamento H/V). Aparece ao focar/selecionar a célula,
+// mesmo sem seleção de texto.
+const tblCellBar = document.getElementById('tblCellBar');
+if (tblCellBar) {
+  // ícones de alinhamento (mesmo SVG do painel)
+  tblCellBar.querySelectorAll('.alignbtn[data-align]').forEach((btn) => {
+    btn.innerHTML = ALIGN_ICON[btn.dataset.align] || '';
+  });
+  tblCellBar.querySelectorAll('.alignbtn[data-valign]').forEach((btn) => {
+    btn.innerHTML = VALIGN_ICON[btn.dataset.valign] || '';
+  });
+  tblCellBar.addEventListener('mousedown', (e) => e.preventDefault());
+
+  /** Célula DOM ativa (contenteditable th/td). */
+  function activeTableCellEl() {
+    const live = tableLiveActive();
+    const cell = live?.activeCell?.();
+    if (!live || !cell) return null;
+    return live.cellEl?.(cell.r, cell.c)
+      || live.wrap?.querySelector?.(`[data-row="${cell.r}"][data-col="${cell.c}"]`)
+      || null;
+  }
+
+  /** Garante range na célula: seleção do usuário, senão conteúdo inteiro da célula. */
+  function ensureTblCellRange() {
+    const host = activeTableCellEl();
+    if (!host) return null;
+    const sel = getSelection();
+    if (sel?.rangeCount) {
+      const r = sel.getRangeAt(0);
+      const n = r.commonAncestorContainer;
+      const el = n.nodeType === 3 ? n.parentElement : n;
+      if (el && host.contains(el) && !sel.isCollapsed) return r.cloneRange();
+    }
+    host.focus();
+    const range = document.createRange();
+    range.selectNodeContents(host);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return range.cloneRange();
+  }
+
+  function paintTblCellColorButtons({ fore, back } = {}) {
+    const foreBtn = tblCellBar.querySelector('.cb-fore');
+    const backBtn = tblCellBar.querySelector('.cb-back');
+    if (foreBtn && fore) {
+      const p = parseColor(fore);
+      const hex = p?.hex || (typeof fore === 'string' ? fore : null);
+      if (hex) {
+        foreBtn.style.borderBottomColor = hex;
+        foreBtn.dataset.color = p ? withAlpha(p.hex, p.alpha) : hex;
+      }
+    }
+    if (backBtn && back !== undefined) {
+      if (back === false || back === 'false' || back === 'transparent' || back === 'none' || back == null) {
+        backBtn.style.background = '';
+        delete backBtn.dataset.color;
+      } else {
+        const p = parseColor(back);
+        if (p) {
+          const css = withAlpha(p.hex, p.alpha);
+          backBtn.style.background = css;
+          backBtn.dataset.color = css;
+        } else if (typeof back === 'string' && back) {
+          backBtn.style.background = back;
+          backBtn.dataset.color = back;
+        }
+      }
+    }
+  }
+
+  tblCellBar.querySelectorAll('.markbtn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!ensureTblCellRange()) return;
+      document.execCommand(btn.dataset.cmd);
+      updateTblCellBar();
+    });
+  });
+
+  tblCellBar.querySelectorAll('.colorbtn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const saved = ensureTblCellRange();
+      if (!saved) return;
+      const host = activeTableCellEl();
+      const isHilite = btn.dataset.cmd === 'hiliteColor';
+      const fromSel = colorsFromFmtSelection();
+      const current = btn.dataset.color
+        || (isHilite ? fromSel.back : fromSel.fore)
+        || undefined;
+      openSwatchPop(btn, (hex) => {
+        if (host) host.focus();
+        const s = getSelection();
+        s.removeAllRanges();
+        s.addRange(saved);
+        // se a seleção colapsou, reaplica no conteúdo da célula
+        if (s.isCollapsed) ensureTblCellRange();
+        if (isHilite && (hex === false || hex == null || hex === 'false' || hex === 'transparent' || hex === 'none')) {
+          clearHiliteInSelection();
+          paintTblCellColorButtons({ back: false });
+          updateTblCellBar();
+          return;
+        }
+        const p = parseColor(hex);
+        const applyHex = p?.hex || hex;
+        const ok = document.execCommand(btn.dataset.cmd, false, applyHex);
+        if (isHilite && !ok) document.execCommand('backColor', false, applyHex);
+        if (isHilite) paintTblCellColorButtons({ back: hex });
+        else paintTblCellColorButtons({ fore: hex });
+        updateTblCellBar();
+      }, current, isHilite ? { allowNone: true, noneLabel: 'Nenhum' } : undefined);
+    });
+  });
+
+  tblCellBar.querySelectorAll('.alignbtn[data-align]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const live = tableLiveActive();
+      if (!live?.setAlign?.(btn.dataset.align)) return;
+      updateTblCellBar();
+    });
+  });
+  tblCellBar.querySelectorAll('.alignbtn[data-valign]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const live = tableLiveActive();
+      if (!live?.setValign?.(btn.dataset.valign)) return;
+      updateTblCellBar();
+    });
+  });
+}
+
+function updateTblCellBar() {
+  if (!tblCellBar) return;
+  if (!editing) { tblCellBar.hidden = true; return; }
+  const live = tableLiveActive();
+  const cell = live?.activeCell?.();
+  if (!live || !cell) { tblCellBar.hidden = true; return; }
+  const el = live.cellEl?.(cell.r, cell.c)
+    || live.wrap?.querySelector?.(`[data-row="${cell.r}"][data-col="${cell.c}"]`);
+  if (!el) { tblCellBar.hidden = true; return; }
+  // fora da viewport? esconde
+  const rect = el.getBoundingClientRect();
+  if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) {
+    tblCellBar.hidden = true;
+    return;
+  }
+
+  const data = live.data?.() || {};
+  const h = cellAlignOf(data, cell.r, cell.c);
+  const v = cellValignOf(data, cell.r, cell.c);
+  tblCellBar.querySelectorAll('.alignbtn[data-align]').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.align === h);
+  });
+  tblCellBar.querySelectorAll('.alignbtn[data-valign]').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.valign === v);
+  });
+
+  // marcas: queryCommandState só vale se o caret está na célula
+  const ae = document.activeElement;
+  const inCell = !!(ae && (el.contains(ae) || ae === el));
+  tblCellBar.querySelectorAll('.markbtn').forEach((b) => {
+    let on = false;
+    if (inCell) {
+      try { on = document.queryCommandState(b.dataset.cmd); } catch { /* */ }
+    }
+    b.classList.toggle('on', !!on);
+  });
+  if (inCell) paintTblCellColorButtonsSafe(colorsFromFmtSelection());
+
+  tblCellBar.hidden = false;
+  const bw = tblCellBar.offsetWidth || 320;
+  const bh = tblCellBar.offsetHeight || 36;
+  const x = Math.max(8, Math.min(rect.left + rect.width / 2 - bw / 2, innerWidth - bw - 8));
+  const y = rect.top - bh - 8 >= 8 ? rect.top - bh - 8 : rect.bottom + 8;
+  tblCellBar.style.left = x + 'px';
+  tblCellBar.style.top = y + 'px';
+}
+
+function paintTblCellColorButtonsSafe(colors) {
+  if (!tblCellBar) return;
+  const foreBtn = tblCellBar.querySelector('.cb-fore');
+  const backBtn = tblCellBar.querySelector('.cb-back');
+  const { fore, back } = colors || {};
+  if (foreBtn && fore) {
+    const p = parseColor(fore);
+    const hex = p?.hex || (typeof fore === 'string' ? fore : null);
+    if (hex) {
+      foreBtn.style.borderBottomColor = hex;
+      foreBtn.dataset.color = p ? withAlpha(p.hex, p.alpha) : hex;
+    }
+  }
+  if (backBtn && back !== undefined) {
+    if (back === false || back === 'false' || back === 'transparent' || back === 'none' || back == null) {
+      backBtn.style.background = '';
+      delete backBtn.dataset.color;
+    } else {
+      const p = parseColor(back);
+      if (p) {
+        const css = withAlpha(p.hex, p.alpha);
+        backBtn.style.background = css;
+        backBtn.dataset.color = css;
+      } else if (typeof back === 'string' && back) {
+        backBtn.style.background = back;
+        backBtn.dataset.color = back;
+      }
+    }
+  }
+}
+
+setTableSelectionHook(() => {
+  clearTimeout(updateTblCellBar._t);
+  updateTblCellBar._t = setTimeout(updateTblCellBar, 40);
+});
+
 // ──────────────── barra flutuante de formatação (estilo Notion) ─────────────
 const fmtbar = document.getElementById('fmtbar');
 const typeSelect = fmtbar.querySelector('.typeselect');
@@ -10745,6 +10882,12 @@ function updateFmtbar() {
     host = n && n.closest && n.closest(EDITABLE_HOST_SEL);
   }
   if (!host) { fmtbar.hidden = true; return; }
+  // célula de tabela: formatação vai na #tblCellBar (não no fmtbar de texto)
+  if (host.closest && (host.closest('.tbl-wrap') || host.closest('th, td')?.closest?.('.tbl-wrap'))) {
+    fmtbar.hidden = true;
+    updateTblCellBar();
+    return;
+  }
   const role = host.dataset.role || 'block';
   // célula de table-grid: data-id sintético __tg_… — trata como “não miolo de tipo”
   const isGridCell = !!(host.closest && host.closest('.tblgrid-wrap'));
@@ -10836,10 +10979,13 @@ linkUrl.addEventListener('keydown', (e) => {
 document.addEventListener('selectionchange', () => {
   clearTimeout(updateFmtbar._t);
   updateFmtbar._t = setTimeout(updateFmtbar, 80);
+  clearTimeout(updateTblCellBar._t);
+  updateTblCellBar._t = setTimeout(updateTblCellBar, 80);
 });
 stage.addEventListener('scroll', () => {
   if (!fmtbar.hidden) updateFmtbar();
   if (!calloutBar.hidden) updateCalloutBar();   // reposiciona (não esconde) — mesmo tratamento do fmtbar
+  if (tblCellBar && !tblCellBar.hidden) updateTblCellBar();
   if (tablePanel && !tablePanel.hidden) positionTablePanel();
   if (imageGridPanel && !imageGridPanel.hidden) positionImageGridPanel();
   if (tableGridPanel && !tableGridPanel.hidden) positionTableGridPanel();
@@ -10855,6 +11001,7 @@ stage.addEventListener('scroll', () => {
   closeAddImgMenu();
 }, { passive: true });
 addEventListener('resize', () => {
+  if (tblCellBar && !tblCellBar.hidden) updateTblCellBar();
   if (tablePanel && !tablePanel.hidden) positionTablePanel();
   if (imageGridPanel && !imageGridPanel.hidden) positionImageGridPanel();
   if (tableGridPanel && !tableGridPanel.hidden) positionTableGridPanel();
