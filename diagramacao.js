@@ -30,13 +30,14 @@ import {
   addTableRow, addTableCol,
   tableHeaderBg, tableHeaderTextOf, tableTextColorOf,
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
+  tableBorderWidthOuterOf, tableBorderWidthInnerOf, tableAltRowBgOf,
   clampTableRadius, clampTableBorderWidth,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   clampTableFontSize, clampTableLineHeight, normalizeTableAlign, normalizeTableValign,
   setTableHeaderRow, setTableHeaderCol, tableLiveActive, tableLiveFromEl,
   mergeSelectionOrNeighbor, unmergeCells,
   DEFAULT_HEADER_BG, DEFAULT_HEADER_TEXT, DEFAULT_TEXT_COLOR,
-  DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_BG,
+  DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_BG, DEFAULT_ALT_ROW_BG,
   DEFAULT_TABLE_RADIUS, DEFAULT_BORDER_WIDTH,
   DEFAULT_TABLE_FONT_SIZE, DEFAULT_TABLE_LINE_HEIGHT, DEFAULT_TABLE_ALIGN, DEFAULT_TABLE_VALIGN,
   TABLE_RADIUS_MAX, TABLE_BORDER_WIDTH_MIN, TABLE_BORDER_WIDTH_MAX,
@@ -1335,26 +1336,41 @@ function tableStyleFieldsHtml(b, mode = 'full') {
   const outer = borderOuterOf(b);
   const inner = borderInnerOf(b);
   const bg = tableBgOf(b);
+  const altBg = tableAltRowBgOf(b);
   const radius = tableRadiusOf(b);
-  const borderW = tableBorderWidthOf(b);
+  const bwOuter = tableBorderWidthOuterOf(b);
+  const bwInner = tableBorderWidthInnerOf(b);
   const fontSize = tableFontSizeOf(b);
   const lineHeight = tableLineHeightOf(b);
   const vlinesOn = b.hideVLines !== true;
+  const altOn = !!b.altRows;
   const isItem = mode === 'item';
   const isShared = mode === 'shared';
   const showStruct = mode === 'full';
   const showShared = mode === 'full' || isShared;
   const showColors = mode === 'full' || isItem;
+  // linhas alternadas: tabela avulsa (full) e por tabela no grid (item)
+  const showAlt = showStruct || isItem;
 
   let html = '';
   if (showStruct) {
     html += `
     <div class="swrow"><span>Linhas Verticais</span>
       <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>
-    <div class="swrow"><span>Linhas alternadas</span>
-      <button type="button" class="sw" data-a="alt" role="switch" aria-checked="${!!b.altRows}"></button></div>
     <div class="field">Alinhamento horizontal<div data-slot="align"></div></div>
     <div class="field">Alinhamento vertical<div data-slot="valign"></div></div>`;
+  }
+  if (showAlt) {
+    html += `
+    <div class="swrow"><span>Linhas alternadas</span>
+      <button type="button" class="sw" data-a="alt" role="switch" aria-checked="${altOn}"></button></div>
+    <div class="field tbl-alt-color-field" data-role="alt-color" ${altOn ? '' : 'hidden'}>
+      <div class="field-row">Cor da 2ª linha
+        <span class="tbl-color-pair" role="group" aria-label="Cor da linha alternada">
+          ${tblColorBtnHtml('altColor', altBg, 'fill', 'Cor de fundo da linha alternada')}
+        </span>
+      </div>
+    </div>`;
   }
   if (showShared) {
     html += `
@@ -1393,8 +1409,11 @@ function tableStyleFieldsHtml(b, mode = 'full') {
         </span>
       </div>
     </div>
-    <label class="field"><span class="field-row">Espessura <span class="field-val"><span data-role="bwv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${borderW}</span>px<button type="button" class="resetbtn" data-a="bwreset" title="Redefinir para ${DEFAULT_BORDER_WIDTH}px">↺</button></span></span>
-      <input type="range" data-a="borderWidth" min="${TABLE_BORDER_WIDTH_MIN}" max="${TABLE_BORDER_WIDTH_MAX}" step="0.5" value="${borderW}" data-snaps="0,0.5,1,1.5,2,3,4" data-edit="off">
+    <label class="field"><span class="field-row">Espessura externa <span class="field-val"><span data-role="bwov" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${bwOuter}</span>px<button type="button" class="resetbtn" data-a="bworeset" title="Redefinir para ${DEFAULT_BORDER_WIDTH}px">↺</button></span></span>
+      <input type="range" data-a="borderWidthOuter" min="${TABLE_BORDER_WIDTH_MIN}" max="${TABLE_BORDER_WIDTH_MAX}" step="0.5" value="${bwOuter}" data-snaps="0,0.5,1,1.5,2,3,4" data-edit="off">
+    </label>
+    <label class="field"><span class="field-row">Espessura interna <span class="field-val"><span data-role="bwiv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${bwInner}</span>px<button type="button" class="resetbtn" data-a="bwireset" title="Redefinir para ${DEFAULT_BORDER_WIDTH}px">↺</button></span></span>
+      <input type="range" data-a="borderWidthInner" min="${TABLE_BORDER_WIDTH_MIN}" max="${TABLE_BORDER_WIDTH_MAX}" step="0.5" value="${bwInner}" data-snaps="0,0.5,1,1.5,2,3,4" data-edit="off">
     </label>
     <label class="field"><span class="field-row">Cantos <span class="field-val"><span data-role="radv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${radius}</span>px<button type="button" class="resetbtn" data-a="radiusreset" title="Redefinir para ${DEFAULT_TABLE_RADIUS}px">↺</button></span></span>
       <input type="range" data-a="radius" min="0" max="${TABLE_RADIUS_MAX}" step="1" value="${radius}" data-snaps="0,4,8,12,16,24" data-edit="off">
@@ -1435,7 +1454,13 @@ function wireTableStyleControls(root, b, hooks = {}) {
       const on = sw.getAttribute('aria-checked') !== 'true';
       sw.setAttribute('aria-checked', String(on));
       if (sw.dataset.a === 'vlines') b.hideVLines = !on;
-      else if (sw.dataset.a === 'alt') b.altRows = on;
+      else if (sw.dataset.a === 'alt') {
+        b.altRows = on;
+        if (!on) delete b.altRows;
+        // mostra/esconde cor da 2ª linha
+        const altField = root.querySelector('[data-role="alt-color"]');
+        if (altField) altField.hidden = !on;
+      }
       else if (sw.dataset.a === 'headerRow') {
         setTableHeaderRow(b, on);
         // th↔td precisa rebuild, não só paint de CSS vars
@@ -1536,14 +1561,28 @@ function wireTableStyleControls(root, b, hooks = {}) {
     if (c === DEFAULT_BORDER_INNER) delete b.borderInner;
     else b.borderInner = c;
   }, () => borderInnerOf(b));
+  wireSwatch('altColor', (c) => {
+    if (c === DEFAULT_ALT_ROW_BG) delete b.altColor;
+    else b.altColor = c;
+  }, () => tableAltRowBgOf(b));
 
   // ── helpers de slider + campo editável ──────────────────────────────────
   const wireNum = ({ role, attr, resetAttr, clamp, of, def, fmt, parse }) => {
     const edit = root.querySelector(`[data-role="${role}"]`);
     const apply = (raw, { syncText = true } = {}) => {
       const n = clamp(raw);
-      if (n === def || (typeof def === 'number' && Math.abs(n - def) < 1e-9)) delete b[attr];
-      else b[attr] = n;
+      // limpa campo se voltou ao default; se legados outer/inner usam borderWidth, grava no campo novo
+      if (n === def || (typeof def === 'number' && Math.abs(n - def) < 1e-9)) {
+        delete b[attr];
+        // se estava só no legado borderWidth e o usuário resetou outer/inner, ok
+      } else {
+        b[attr] = n;
+        // ao setar outer/inner explicitamente, não precisa do legado
+        if (attr === 'borderWidthOuter' || attr === 'borderWidthInner') {
+          // mantém borderWidth se o outro lado ainda depende dele — só remove se ambos existirem
+          if (b.borderWidthOuter != null && b.borderWidthInner != null) delete b.borderWidth;
+        }
+      }
       if (syncText && edit && document.activeElement !== edit) edit.textContent = fmt(n);
       const range = root.querySelector(`input[data-a="${attr}"]`);
       if (range && document.activeElement !== range) range.value = String(n);
@@ -1586,8 +1625,17 @@ function wireTableStyleControls(root, b, hooks = {}) {
     },
   });
   wireNum({
-    role: 'bwv', attr: 'borderWidth', resetAttr: 'bwreset',
-    clamp: clampTableBorderWidth, of: tableBorderWidthOf, def: DEFAULT_BORDER_WIDTH,
+    role: 'bwov', attr: 'borderWidthOuter', resetAttr: 'bworeset',
+    clamp: clampTableBorderWidth, of: tableBorderWidthOuterOf, def: DEFAULT_BORDER_WIDTH,
+    fmt: (n) => String(n),
+    parse: (raw) => {
+      const n = Number(String(raw ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    },
+  });
+  wireNum({
+    role: 'bwiv', attr: 'borderWidthInner', resetAttr: 'bwireset',
+    clamp: clampTableBorderWidth, of: tableBorderWidthInnerOf, def: DEFAULT_BORDER_WIDTH,
     fmt: (n) => String(n),
     parse: (raw) => {
       const n = Number(String(raw ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));

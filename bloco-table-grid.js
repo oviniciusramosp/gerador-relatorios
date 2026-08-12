@@ -3,8 +3,8 @@
  *   buildTableGridEl(b, editing, ctx, colW) → DOM
  *     b.items[]  — por tabela: { rows, colWidths?, merges?, bg?, headerColor?,
  *                  headerTextColor?, color? }
- *     Estilo COMPARTILHADO (igual em todas): fontSize, lineHeight, borderWidth,
- *       borderOuter, borderInner, radius  → no bloco grid, não no item.
+ *     Estilo COMPARTILHADO (igual em todas): fontSize, lineHeight,
+ *       borderWidth/Outer/Inner, borderOuter, borderInner, radius → no bloco grid.
  *     b.equal / b.gap
  *     ctx        — { commit, rerender, removeBlock, selectGridItem, activeItemIndex }
  *

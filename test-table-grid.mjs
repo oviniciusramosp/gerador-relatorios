@@ -22,6 +22,8 @@ import {
   setTableHeaderRow, setTableHeaderCol, unwrapTableData,
   resolveMergeRange, mergeSelectionOrNeighbor, getMerges,
   borderOuterOf, borderInnerOf, tableBgOf, tableRadiusOf, tableBorderWidthOf,
+  tableBorderWidthOuterOf, tableBorderWidthInnerOf, tableAltRowBgOf,
+  DEFAULT_ALT_ROW_BG,
   tableAlignOf, tableValignOf, tableFontSizeOf, tableLineHeightOf,
   tableHeaderTextOf, tableTextColorOf,
   clampTableFontSize, clampTableLineHeight, clampTableBorderWidth,
@@ -116,7 +118,10 @@ import {
   assert.equal(borderInnerOf(t), DEFAULT_BORDER_INNER);
   assert.equal(tableBgOf(t), DEFAULT_TABLE_BG);
   assert.equal(tableBorderWidthOf(t), DEFAULT_BORDER_WIDTH);
+  assert.equal(tableBorderWidthOuterOf(t), DEFAULT_BORDER_WIDTH);
+  assert.equal(tableBorderWidthInnerOf(t), DEFAULT_BORDER_WIDTH);
   assert.equal(tableRadiusOf(t), DEFAULT_TABLE_RADIUS);
+  assert.equal(tableAltRowBgOf(t), DEFAULT_ALT_ROW_BG);
 }
 
 {
@@ -134,10 +139,35 @@ import {
   assert.equal(t.bg, '#EEF2FF');
   assert.equal(t.borderWidth, 2);
   assert.equal(t.radius, 8);
+  // legado borderWidth alimenta outer/inner quando os novos ausentes
+  assert.equal(tableBorderWidthOuterOf(t), 2);
+  assert.equal(tableBorderWidthInnerOf(t), 2);
   assert.equal(clampTableRadius(100), 24);
   assert.equal(clampTableRadius(-1), 0);
   assert.equal(clampTableBorderWidth(0.25), 0.5);
   assert.equal(clampTableBorderWidth(9), 4);
+}
+
+// espessuras outer/inner separadas; altColor
+{
+  const t = {
+    rows: [['A'], ['1'], ['2']],
+    borderWidthOuter: 2,
+    borderWidthInner: 0.5,
+    altRows: true,
+    altColor: '#EEF2FF',
+  };
+  ensureTable(t);
+  assert.equal(tableBorderWidthOuterOf(t), 2);
+  assert.equal(tableBorderWidthInnerOf(t), 0.5);
+  // legado não sobrescreve
+  assert.equal(tableBorderWidthOf(t), DEFAULT_BORDER_WIDTH);
+  assert.equal(tableAltRowBgOf(t), '#EEF2FF');
+  // default alt limpa
+  t.altColor = DEFAULT_ALT_ROW_BG;
+  ensureTable(t);
+  assert.equal(t.altColor, undefined);
+  assert.equal(tableAltRowBgOf(t), DEFAULT_ALT_ROW_BG);
 }
 
 // item do grid preserva rows; estilo shared sobe pro bloco

@@ -39,9 +39,11 @@ export const DEFAULT_BORDER_INNER = '#C9C9C9';
 export const DEFAULT_TABLE_BG = '#FFFFFF';
 export const DEFAULT_TABLE_RADIUS = 0;
 export const TABLE_RADIUS_MAX = 24;
-export const DEFAULT_BORDER_WIDTH = 1;         // px — externa e internas
+export const DEFAULT_BORDER_WIDTH = 1;         // px — legado (fallback se outer/inner ausentes)
 export const TABLE_BORDER_WIDTH_MIN = 0;
 export const TABLE_BORDER_WIDTH_MAX = 4;
+/** Preview da linha alternada quando altColor não está no JSON (não persiste sozinho). */
+export const DEFAULT_ALT_ROW_BG = '#F7F7F9';
 export const DEFAULT_TABLE_FONT_SIZE = 10;   // px — bate com o CSS histórico do .tbl
 export const TABLE_FONT_SIZE_MIN = 6;
 export const TABLE_FONT_SIZE_MAX = 24;
@@ -56,7 +58,9 @@ export const DEFAULT_TABLE_VALIGN = 'top';     // top | middle | bottom
  * Por tabela no grid só mudam: bg, headerColor, headerTextColor, color.
  */
 export const TABLE_GRID_SHARED_KEYS = [
-  'fontSize', 'lineHeight', 'borderWidth', 'borderOuter', 'borderInner', 'radius',
+  'fontSize', 'lineHeight',
+  'borderWidth', 'borderWidthOuter', 'borderWidthInner',
+  'borderOuter', 'borderInner', 'radius',
 ];
 
 function nColsOf(b) {
@@ -114,6 +118,17 @@ export function ensureTable(b) {
     if (w === DEFAULT_BORDER_WIDTH) delete b.borderWidth;
     else b.borderWidth = w;
   }
+  if (b.borderWidthOuter != null) {
+    const w = clampTableBorderWidth(b.borderWidthOuter);
+    if (w === DEFAULT_BORDER_WIDTH && b.borderWidth == null) delete b.borderWidthOuter;
+    else b.borderWidthOuter = w;
+  }
+  if (b.borderWidthInner != null) {
+    const w = clampTableBorderWidth(b.borderWidthInner);
+    if (w === DEFAULT_BORDER_WIDTH && b.borderWidth == null) delete b.borderWidthInner;
+    else b.borderWidthInner = w;
+  }
+  if (b.altColor === DEFAULT_ALT_ROW_BG) delete b.altColor;
   // alinhamento: só persiste se ≠ default
   if (b.align != null) {
     const a = normalizeTableAlign(b.align);
@@ -152,6 +167,16 @@ export function ensureSharedTableStyle(b) {
     const w = clampTableBorderWidth(b.borderWidth);
     if (w === DEFAULT_BORDER_WIDTH) delete b.borderWidth;
     else b.borderWidth = w;
+  }
+  if (b.borderWidthOuter != null) {
+    const w = clampTableBorderWidth(b.borderWidthOuter);
+    if (w === DEFAULT_BORDER_WIDTH && b.borderWidth == null) delete b.borderWidthOuter;
+    else b.borderWidthOuter = w;
+  }
+  if (b.borderWidthInner != null) {
+    const w = clampTableBorderWidth(b.borderWidthInner);
+    if (w === DEFAULT_BORDER_WIDTH && b.borderWidth == null) delete b.borderWidthInner;
+    else b.borderWidthInner = w;
   }
   if (b.fontSize != null) {
     const fs = clampTableFontSize(b.fontSize);
@@ -506,6 +531,20 @@ export function tableRadiusOf(b) {
 export function tableBorderWidthOf(b) {
   return b && b.borderWidth != null ? clampTableBorderWidth(b.borderWidth) : DEFAULT_BORDER_WIDTH;
 }
+/** Espessura da borda externa (frame). Fallback: borderWidth legado → default. */
+export function tableBorderWidthOuterOf(b) {
+  if (b && b.borderWidthOuter != null) return clampTableBorderWidth(b.borderWidthOuter);
+  return tableBorderWidthOf(b);
+}
+/** Espessura das bordas internas (células). Fallback: borderWidth legado → default. */
+export function tableBorderWidthInnerOf(b) {
+  if (b && b.borderWidthInner != null) return clampTableBorderWidth(b.borderWidthInner);
+  return tableBorderWidthOf(b);
+}
+/** Cor da linha alternada (altRows). Sem altColor → preview default (CSS mix legado). */
+export function tableAltRowBgOf(b) {
+  return (b && b.altColor) || DEFAULT_ALT_ROW_BG;
+}
 export function tableAlignOf(b) {
   return b && b.align != null ? normalizeTableAlign(b.align) : DEFAULT_TABLE_ALIGN;
 }
@@ -528,7 +567,8 @@ export function applyTableChrome(host, b) {
   const inner = borderInnerOf(b);
   const bg = tableBgOf(b);
   const radius = tableRadiusOf(b);
-  const borderW = tableBorderWidthOf(b);
+  const bwOuter = tableBorderWidthOuterOf(b);
+  const bwInner = tableBorderWidthInnerOf(b);
   const headerBg = tableHeaderBg(b);
   const headerText = tableHeaderTextOf(b);
   const textColor = tableTextColorOf(b);
@@ -536,14 +576,17 @@ export function applyTableChrome(host, b) {
   const valign = tableValignOf(b);
   const fontSize = tableFontSizeOf(b);
   const lineHeight = tableLineHeightOf(b);
-  const bw = borderW + 'px';
+  const bwO = bwOuter + 'px';
+  const bwI = bwInner + 'px';
   const setVars = (el) => {
     if (!el?.style) return;
     el.style.setProperty('--tbl-border-outer', outer);
     el.style.setProperty('--tbl-border-inner', inner);
     el.style.setProperty('--tbl-bg', bg);
     el.style.setProperty('--tbl-radius', radius + 'px');
-    el.style.setProperty('--tbl-border-w', bw);
+    el.style.setProperty('--tbl-border-w', bwI); // legado: internas
+    el.style.setProperty('--tbl-border-w-outer', bwO);
+    el.style.setProperty('--tbl-border-w-inner', bwI);
     el.style.setProperty('--tbl-header-bg', headerBg);
     el.style.setProperty('--tbl-header-text', headerText);
     el.style.setProperty('--tbl-text', textColor);
@@ -551,13 +594,16 @@ export function applyTableChrome(host, b) {
     el.style.setProperty('--tbl-valign', valign);
     el.style.setProperty('--tbl-font-size', fontSize + 'px');
     el.style.setProperty('--tbl-line-height', String(lineHeight));
+    // altColor custom; sem ele o CSS usa color-mix (header 35% + bg)
+    if (b && b.altColor) el.style.setProperty('--tbl-alt-bg', b.altColor);
+    else el.style.removeProperty('--tbl-alt-bg');
   };
   const target = frame || table || host;
   setVars(target);
   if (frame && frame.style) {
     frame.style.borderRadius = radius + 'px';
     frame.style.borderColor = outer;
-    frame.style.borderWidth = bw;
+    frame.style.borderWidth = bwO;
     frame.style.background = bg;
   }
   if (table) {
@@ -586,10 +632,10 @@ export function applyTableChrome(host, b) {
         cell.style.verticalAlign = valign;
         cell.style.borderColor = inner;
         cell.style.borderStyle = 'solid';
-        cell.style.borderTopWidth = rr === 0 ? '0' : bw;
-        cell.style.borderLeftWidth = cc === 0 ? '0' : bw;
-        cell.style.borderRightWidth = (cc + cs - 1) >= lastC ? '0' : bw;
-        cell.style.borderBottomWidth = (rr + rs - 1) >= lastR ? '0' : bw;
+        cell.style.borderTopWidth = rr === 0 ? '0' : bwI;
+        cell.style.borderLeftWidth = cc === 0 ? '0' : bwI;
+        cell.style.borderRightWidth = (cc + cs - 1) >= lastC ? '0' : bwI;
+        cell.style.borderBottomWidth = (rr + rs - 1) >= lastR ? '0' : bwI;
         if (cell.classList.contains('tbl-head-cell') || cell.tagName === 'TH') {
           cell.style.background = headerBg;
           cell.style.color = headerText;
@@ -600,9 +646,17 @@ export function applyTableChrome(host, b) {
       });
     });
     if (b && b.altRows) {
+      const altBg = b.altColor || '';
       [...table.rows].forEach((tr, r) => {
         const isHead = b.headerRow !== false && r === 0;
-        tr.classList.toggle('alt', !isHead && r % 2 === 0);
+        const on = !isHead && r % 2 === 0;
+        tr.classList.toggle('alt', on);
+        // aplica fundo nas células do corpo da linha alt (override do CSS se custom)
+        if (on && altBg) {
+          tr.querySelectorAll('td:not(.tbl-head-cell)').forEach((cell) => {
+            cell.style.background = altBg;
+          });
+        }
       });
     } else {
       table.querySelectorAll('tr.alt').forEach((tr) => tr.classList.remove('alt'));
@@ -1707,8 +1761,8 @@ function focusCell(tableId, r, c) {
     border-color: var(--tbl-border-inner, #C9C9C9);
     border-style: solid;
     border-width: 0;
-    border-right-width: var(--tbl-border-w, 1px);
-    border-bottom-width: var(--tbl-border-w, 1px);
+    border-right-width: var(--tbl-border-w-inner, var(--tbl-border-w, 1px));
+    border-bottom-width: var(--tbl-border-w-inner, var(--tbl-border-w, 1px));
     padding: 4px 6px;
     text-align: var(--tbl-align, left);
     vertical-align: var(--tbl-valign, top);
@@ -1740,7 +1794,7 @@ function focusCell(tableId, r, c) {
   .tbl.no-vlines th, .tbl.no-vlines td {
     border-left-color: transparent; border-right-color: transparent; }
   .tbl.alt-rows tr.alt > td:not(.tbl-head-cell) {
-    background: color-mix(in srgb, var(--tbl-header-bg, #F1F1F4) 35%, var(--tbl-bg, #fff)); }
+    background: var(--tbl-alt-bg, color-mix(in srgb, var(--tbl-header-bg, #F1F1F4) 35%, var(--tbl-bg, #fff))); }
   .page.editing .tbl th:focus, .page.editing .tbl td:focus,
   .tm-table-host .tbl th:focus, .tm-table-host .tbl td:focus {
     outline: 2px solid var(--violet, #4E39FF); outline-offset: -2px; }
