@@ -6578,6 +6578,10 @@ let fileHandle = null;   // FileSystemFileHandle da origem (md OU .pdgm — um d
 let linkedMtime = 0;
 let projectDirty = false;
 let projectWriting = false;
+/** Última falha de gravação (string) — UI “Erro ao salvar” + beforeunload. */
+let projectSaveError = null;
+/** Promise da gravação em curso (coalesce; evita 2 createWritable). */
+let projectWritePromise = null;
 let suppressProjectAutosave = false;
 let projectSaveT = null;
 let projectWatchT = null;
@@ -6586,10 +6590,13 @@ let lastProjectWriteAt = 0;   // último autosave / Salvar no handle
 let lastProjectPollAt = 0;    // último ciclo de poll (viu o disco)
 let lastProjectReadAt = 0;    // última vez que o conteúdo veio do disco (abrir/reload)
 let lastUiChangeAt = 0;       // última mudança de conteúdo no Diagramador
+let lastSaveFailToastAt = 0;  // throttle do toast de falha
 // Handle do zip recém-aberto, à espera do opt-in de sincronia (modal / “Não Salvo”)
 let pendingLinkHandle = null;
 const PROJECT_AUTOSAVE_MS = 900;
 const PROJECT_POLL_MS = 1000;
+/** createWritable/write que trava não pode deixar “Salvando…” pra sempre. */
+const PROJECT_SAVE_TIMEOUT_MS = 15000;
 
 function isProjectSource(s = state.doc?.source) {
   return s && (s.format === 'pdgm' || s.format === 'pdgm-json');
@@ -6616,6 +6623,8 @@ function clearFileLink() {
   linkedMtime = 0;
   projectDirty = false;
   projectWriting = false;
+  projectSaveError = null;
+  projectWritePromise = null;
   lastProjectWriteAt = 0;
   lastProjectPollAt = 0;
   lastProjectReadAt = 0;
@@ -6624,6 +6633,73 @@ function clearFileLink() {
   stopProjectWatch();
   updateSaveSourceBtn();
   setTimeout(() => { suppressProjectAutosave = false; }, 400);
+}
+
+/** true se sair da página pode perder trabalho (autosave falhou / sujo / gravando). */
+function hasUnsavedProjectWork() {
+  if (projectWriting) return true;
+  if (projectSaveError) return true;
+  if (isProjectLinked() && projectDirty) return true;
+  // projeto aberto só na UI, sem auto-sync
+  if (isUnsyncedOpenProject()) return true;
+  return false;
+}
+
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      reject(new Error(message || `tempo esgotado (${Math.round(ms / 1000)}s)`));
+    }, ms);
+    Promise.resolve(promise).then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
+/** Baixa .pdgm.zip sem depender do handle (backup de emergência). */
+async function downloadProjectBackup() {
+  try {
+    await saveDocFile();
+  } catch (e) {
+    console.error('[backup]', e);
+    alert('Não foi possível baixar o backup: ' + ((e && e.message) || e));
+  }
+}
+
+/**
+ * Avisa falha de gravação e oferece download de backup (não depende do auto-save).
+ * Throttle pra não spammar se o poll/timer re-tenta.
+ */
+function notifyProjectSaveFailed(err) {
+  const msg = (err && err.message) || String(err || 'erro desconhecido');
+  projectSaveError = msg;
+  projectDirty = true;
+  const now = Date.now();
+  if (now - lastSaveFailToastAt < 6000) {
+    updateSaveSourceBtn();
+    return;
+  }
+  lastSaveFailToastAt = now;
+  showToast(
+    'err',
+    'Não foi possível gravar no disco',
+    msg + '\n\nBaixe o projeto como backup (.pdgm.zip). O auto-save pode estar bloqueado (permissão, arquivo aberto em outro app, ou gravação travada).',
+    {
+      code: 'project-save-fail',
+      fileName: state.doc?.source?.label || undefined,
+      action: {
+        label: 'Baixar backup',
+        onClick: () => { downloadProjectBackup(); },
+      },
+      steps: [
+        '1. Diagramação com projeto vinculado (.pdgm.zip)',
+        '2. Editei o conteúdo (autosave ou botão Salvar)',
+        '3. Ficou em “Salvando…” / falhou a gravação no disco',
+      ].join('\n'),
+    },
+  );
+  updateSaveSourceBtn();
 }
 function stopProjectWatch() {
   if (projectWatchT) { clearInterval(projectWatchT); projectWatchT = null; }
@@ -6646,9 +6722,9 @@ function scheduleProjectAutosave() {
   updateSaveSourceBtn();
   clearTimeout(projectSaveT);
   projectSaveT = setTimeout(() => {
+    // notifyProjectSaveFailed já cuida do toast/UI; não engolir o erro calado
     saveProjectToHandle({ quiet: true }).catch((e) => {
       console.warn('[projeto] autosave', e);
-      updateSaveSourceBtn();
     });
   }, PROJECT_AUTOSAVE_MS);
 }
@@ -6782,6 +6858,19 @@ function showToast(kind, title, detail, opts = {}) {
 
   const actions = document.createElement('div');
   actions.className = 'toast-actions';
+
+  // ação custom (ex.: “Baixar backup” na falha de autosave) — antes do Reportar
+  if (opts.action && opts.action.label) {
+    const act = document.createElement('button');
+    act.type = 'button';
+    act.className = 'toast-report';
+    act.textContent = opts.action.label;
+    act.addEventListener('click', () => {
+      try { opts.action.onClick?.(); } catch (e) { console.error(e); }
+      dismissToast(t);
+    });
+    actions.appendChild(act);
+  }
 
   if (kind === 'err') {
     const report = document.createElement('button');
@@ -7139,42 +7228,60 @@ async function saveToSource() {
 }
 
 // Serializa state.doc no handle do .pdgm.zip/.json (autosave ou botão Salvar).
+// Timeout: se createWritable/write trava, UI saía de “Salvando…” e avisava o usuário.
 async function saveProjectToHandle({ quiet = false } = {}) {
   if (!isProjectSource()) return;
   if (!fileHandle) {
     if (!quiet) await saveDocFile();
     return;
   }
-  if (projectWriting) return;
+  // coalesce: 2ª chamada enquanto grava espera a mesma promise
+  if (projectWritePromise) return projectWritePromise;
+
   projectWriting = true;
   updateSaveSourceBtn();
-  try {
-    if (await fileHandle.queryPermission({ mode: 'readwrite' }) !== 'granted'
-      && await fileHandle.requestPermission({ mode: 'readwrite' }) !== 'granted') {
-      throw new Error('permissão de escrita negada');
+
+  projectWritePromise = (async () => {
+    try {
+      await withTimeout((async () => {
+        if (await fileHandle.queryPermission({ mode: 'readwrite' }) !== 'granted'
+          && await fileHandle.requestPermission({ mode: 'readwrite' }) !== 'granted') {
+          throw new Error('permissão de escrita negada');
+        }
+        const fmt = state.doc.source.format;
+        let blob;
+        if (fmt === 'pdgm-json') {
+          blob = new Blob([JSON.stringify(serializeDoc(state.doc), null, 2)], { type: 'application/json' });
+        } else {
+          blob = await serializeDocZip(state.doc);
+        }
+        const w = await fileHandle.createWritable();
+        await w.write(blob);
+        await w.close();
+        const f = await fileHandle.getFile();
+        linkedMtime = f.lastModified;
+        lastProjectWriteAt = Date.now();
+        // UI e disco iguais → “No Diagramador” = mtime do arquivo
+        lastUiChangeAt = linkedMtime;
+      })(), PROJECT_SAVE_TIMEOUT_MS,
+      'A gravação demorou demais — o arquivo pode estar travado, sem permissão ou aberto em outro app');
+
+      projectDirty = false;
+      projectSaveError = null;
+      if (!quiet) flashSaved();
+      else updateSaveSourceBtn();
+    } catch (e) {
+      console.warn('[projeto] save', e);
+      notifyProjectSaveFailed(e);
+      throw e;
+    } finally {
+      projectWriting = false;
+      projectWritePromise = null;
+      updateSaveSourceBtn();
     }
-    const fmt = state.doc.source.format;
-    let blob;
-    if (fmt === 'pdgm-json') {
-      blob = new Blob([JSON.stringify(serializeDoc(state.doc), null, 2)], { type: 'application/json' });
-    } else {
-      blob = await serializeDocZip(state.doc);
-    }
-    const w = await fileHandle.createWritable();
-    await w.write(blob);
-    await w.close();
-    const f = await fileHandle.getFile();
-    linkedMtime = f.lastModified;
-    lastProjectWriteAt = Date.now();
-    // UI e disco iguais → “No Diagramador” = mtime do arquivo
-    lastUiChangeAt = linkedMtime;
-    projectDirty = false;
-    if (!quiet) flashSaved();
-    else updateSaveSourceBtn();
-  } finally {
-    projectWriting = false;
-    updateSaveSourceBtn();
-  }
+  })();
+
+  return projectWritePromise;
 }
 
 // Poll: se o ficheiro no disco mudou por fora (MCP, outro editor) e não há
@@ -7367,7 +7474,10 @@ function isUnsyncedOpenProject() {
 async function onSaveSourceClick() {
   if (isProjectLinked()) {
     try { await saveProjectToHandle({ quiet: false }); }
-    catch (e) { alert('Não foi possível salvar no arquivo: ' + (e.message || e)); }
+    catch (e) {
+      // toast + “Baixar backup” já vêm de notifyProjectSaveFailed
+      if (!projectSaveError) alert('Não foi possível salvar no arquivo: ' + (e.message || e));
+    }
     return;
   }
   if (fileHandle && isMdSource()) {
@@ -7437,12 +7547,18 @@ function updateSaveSourceBtn() {
   }
 
   btn.classList.remove('save-outline');
-  const synced = !projectDirty && !projectWriting;
+  const hasErr = !!projectSaveError;
+  const synced = !projectDirty && !projectWriting && !hasErr;
   if (projectWriting) {
     setSaveSourceIcon('spin');
     lab.textContent = 'Salvando…';
     btn.classList.add('primary');
     btn.setAttribute('aria-label', 'Gravando no disco');
+  } else if (hasErr) {
+    setSaveSourceIcon('warn');
+    lab.textContent = 'Erro ao salvar';
+    btn.classList.add('primary');
+    btn.setAttribute('aria-label', 'Falha ao gravar — baixe um backup');
   } else if (synced) {
     setSaveSourceIcon('ok');
     lab.textContent = 'Salvo';
@@ -7457,14 +7573,19 @@ function updateSaveSourceBtn() {
 
   const statusLine = projectWriting
     ? 'Gravando no disco…'
-    : (synced ? 'UI e arquivo no disco estão iguais.' : 'Há alterações locais ainda não gravadas.');
+    : (hasErr
+      ? ('Falha: ' + projectSaveError)
+      : (synced ? 'UI e arquivo no disco estão iguais.' : 'Há alterações locais ainda não gravadas.'));
   const statusOk = synced && !projectWriting;
   const refreshIco = uiIco('refresh', 14, 'outline');
   const unlinkIco = uiIco('unlink', 14, 'outline');
+  const dlIco = uiIco('download', 14, 'outline');
 
   tip.innerHTML = `
     <div class="save-tip-card">
-      <p class="save-tip-lead">A interface está vinculada à versão do arquivo zip no seu disco. Mudanças serão salvas automaticamente.</p>
+      <p class="save-tip-lead">${hasErr
+        ? 'A gravação automática <strong>falhou</strong>. Baixe um backup do projeto — não dependa só do auto-save.'
+        : 'A interface está vinculada à versão do arquivo zip no seu disco. Mudanças serão salvas automaticamente.'}</p>
       <hr class="save-tip-sep">
       <ul class="save-tip-status">
         <li class="${statusOk ? 'ok' : 'warn'}">${saveTipStatusIco(statusOk)}<span class="st-txt">${escapeHtml(statusLine)}</span></li>
@@ -7472,11 +7593,17 @@ function updateSaveSourceBtn() {
         <li class="ok">${saveTipStatusIco(true)}<span class="st-txt">No Diagramador: ${escapeHtml(formatProjectTs(diagramadorSyncTs()))}</span></li>
       </ul>
       <div class="save-tip-actions">
+        ${hasErr || projectDirty ? `<button type="button" data-save-act="backup">${dlIco}<span>Baixar backup</span></button>` : ''}
         <button type="button" data-save-act="reload">${refreshIco}<span>Recarregar</span></button>
         <button type="button" data-save-act="unlink">${unlinkIco}<span>Desvincular</span></button>
       </div>
     </div>`;
 
+  tip.querySelector('[data-save-act="backup"]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    downloadProjectBackup();
+  });
   tip.querySelector('[data-save-act="reload"]')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -10439,6 +10566,15 @@ document.getElementById('btnSaveSource')?.addEventListener('click', () => { onSa
 // ao abrir o painel, atualiza checks/timestamps (poll grava lastProjectPollAt em background)
 document.getElementById('saveSourceWrap')?.addEventListener('mouseenter', () => {
   if (isProjectLinked() || isUnsyncedOpenProject()) updateSaveSourceBtn();
+});
+
+// Sair / recarregar / outro link: avisa se há trabalho não gravado no disco
+// (dirty, falha de autosave, ou gravação ainda em curso).
+addEventListener('beforeunload', (e) => {
+  if (!hasUnsavedProjectWork()) return;
+  // Chrome/Firefox exigem preventDefault + returnValue para mostrar o diálogo nativo
+  e.preventDefault();
+  e.returnValue = '';
 });
 // modal vincular projeto
 document.getElementById('linkProjectModal')?.addEventListener('click', (e) => {
