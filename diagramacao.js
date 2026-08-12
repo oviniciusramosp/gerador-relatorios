@@ -599,11 +599,13 @@ function seedDoc() {
     // sendo o gate de existência da página, ver assemblePages/renderIndexPage).
     // levels: quais níveis de título entram no índice · color: 'padrao' | 'cinza' | 'custom' ·
     // colors: { num, text, page, line } quando color==='custom' · width: 'curto'|'full' ·
-    // resumoWidth: 'full' | 'left' · leaders: linha-guia até o nº da página
+    // resumoWidth: 'full' | 'left' · leaders: linha-guia até o nº da página ·
+    // espacarSessoes: space-between Índice↔Resumo (só aplica com os dois ligados; default off)
     index: {
       on: true, resumoOn: true, levels: { h1: true, h2: true, h3: false, h4: false },
       color: 'padrao', colors: { ...INDEX_COLOR_DEFAULTS },
       width: 'curto', resumoWidth: 'full',
+      espacarSessoes: false,
       resumo: '<p>Escreva aqui o resumo do relatório.</p>',
     },
     // ids de H1/H2 marcados como “revisado” no índice flutuante do preview.
@@ -727,6 +729,9 @@ function load() {
     const idx = state.doc.index;
     if (!idx.levels) idx.levels = { h1: true, h2: true, h3: false, h4: false };
     idx.color ||= 'padrao'; idx.width ||= 'curto'; idx.resumoWidth ||= 'full';
+    // aditivo: docs/LS sem o campo mantêm layout empilhado (comportamento antigo)
+    if (idx.espacarSessoes === undefined) idx.espacarSessoes = false;
+    else idx.espacarSessoes = !!idx.espacarSessoes;
     ensureIndexColors(idx);
     // migração: capas salvas antes do Y livre / logo / type / bgFit — ver migrateSpecialPages
     migrateSpecialPages(state.doc);
@@ -3317,6 +3322,8 @@ function renderIndexPage(toc, contentStart, number) {
   // dois blocos agora precisam de gate PRÓPRIO aqui dentro, senão desligar só o Índice também
   // apaga o título+lista mas o Resumo continuava vindo "de graça" sem checar seu próprio .on.
   const idx = state.doc.index;
+  // space-between só quando as duas seções existem na página (opção da sidebar)
+  if (idx.espacarSessoes && idx.on && idx.resumoOn) wrap.classList.add('idx-space');
   if (idx.on) {
     // seção clicável: título + lista — borda roxa quando idxFocus==='index' + painel de opções.
     // A largura vai na SEÇÃO (não só na .toc): o retângulo de foco acompanha Curto/Largura Total.
@@ -9168,6 +9175,12 @@ function syncSubCtrl() {
     const k = el.dataset.sub;
     setSidebarReveal(el, k === 'resumo' ? state.doc.index.resumoOn : specialObj(k).on);
   });
+  // Espaçar sessões: só com Índice E Resumo ligados (senão não há "entre" o que espaçar)
+  const espRow = document.querySelector('[data-espacar-row]');
+  if (espRow) {
+    const idx = state.doc.index;
+    setSidebarReveal(espRow, !!(idx && idx.on && idx.resumoOn));
+  }
 }
 function syncSpecialUI() {
   // t2.11: 'resumo' não é mais um specialObj com .on próprio — é state.doc.index.resumoOn.
@@ -9179,6 +9192,9 @@ function syncSpecialUI() {
   // opções do índice (níveis / cores / larguras): abrir um .pdgm tem que trazer a UI junto
   document.querySelectorAll('.sw[data-idxlvl]').forEach(sw => {
     sw.setAttribute('aria-checked', String(!!(state.doc.index.levels || {})[sw.dataset.idxlvl]));
+  });
+  document.querySelectorAll('.sw[data-idxespacar]').forEach(sw => {
+    sw.setAttribute('aria-checked', String(!!state.doc.index.espacarSessoes));
   });
   // Regras do Miolo (paginação)
   {
@@ -9368,6 +9384,12 @@ document.querySelectorAll('.sw[data-sw]').forEach(sw => sw.addEventListener('cli
 document.querySelectorAll('.sw[data-idxlvl]').forEach(sw => sw.addEventListener('click', () => {
   const lv = (state.doc.index.levels ||= { h1: true, h2: true }), k = sw.dataset.idxlvl;
   lv[k] = !lv[k]; sw.setAttribute('aria-checked', String(lv[k]));
+  render();
+}));
+// Espaçar sessões: space-between Índice ↔ Resumo (só aplica com os dois ligados no render)
+document.querySelectorAll('.sw[data-idxespacar]').forEach(sw => sw.addEventListener('click', () => {
+  state.doc.index.espacarSessoes = !state.doc.index.espacarSessoes;
+  sw.setAttribute('aria-checked', String(!!state.doc.index.espacarSessoes));
   render();
 }));
 // Regras do Miolo — paginação (H1 em página nova / títulos com conteúdo)

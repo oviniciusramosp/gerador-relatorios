@@ -90,6 +90,7 @@ assert.equal(opened.index.resumoOn, true, 'resumoOn default em doc antigo');
 assert.deepEqual(opened.index.levels, { h1: true, h2: true, h3: false, h4: false });
 assert.equal(opened.index.color, 'padrao');
 assert.equal(opened.index.width, 'curto');
+assert.equal(opened.index.espacarSessoes, false, 'espacarSessoes default off em doc antigo (sem reflow)');
 assert.deepEqual(opened.index.colors, INDEX_COLOR_DEFAULTS, 'colors default em doc antigo (Custom)');
 assert.match(opened.index.resumo, /Resumo antigo/, 'texto do resumo legado permanece');
 assert.deepEqual(opened.reviewed, []);

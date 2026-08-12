@@ -137,6 +137,9 @@ export function normalizeOpenedDoc(doc, raw = null) {
     doc.index.color ||= 'padrao';
     doc.index.width ||= 'curto';
     doc.index.resumoWidth ||= 'full';
+    // aditivo: docs antigos sem espacarSessoes mantêm layout empilhado (não reflowam)
+    if (doc.index.espacarSessoes === undefined) doc.index.espacarSessoes = false;
+    else doc.index.espacarSessoes = !!doc.index.espacarSessoes;
     // cores Custom do índice: aditivo — docs antigos sem colors usam o default do esquema Padrão
     ensureIndexColors(doc.index);
   }

@@ -970,6 +970,15 @@
   .page.editing .idx-section { cursor: pointer; }
   /* gap entre seções Índice e Resumo = 1 linha de parágrafo (mesmo gapBefore do miolo) */
   .page .idx-section + .idx-section { margin-top: 14px; }
+  /* Espaçar sessões: space-between Índice ↔ Resumo (empuxa o resumo pro fundo).
+     Quanto maior o resumo (ou o índice), menor o whitespace residual. gap = mínimo. */
+  .page .idx-content.idx-space {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .page .idx-content.idx-space .idx-section + .idx-section { margin-top: 0; }
   .page.editing .idx-section:hover { background: color-mix(in srgb, #4E39FF 5%, transparent); }
   .page.editing .idx-section .idx-resumo { cursor: text; }
 
@@ -2317,6 +2326,11 @@
             <div class="field">Largura do resumo
               <div data-slot="resumowidth"></div>
             </div>
+          </div>
+          <!-- só visível com Índice E Resumo ligados (syncSubCtrl) -->
+          <div class="swrow" data-espacar-row hidden title="Empurra o resumo para o fundo da página — o espaço sobra entre Índice e Resumo">
+            <span>Espaçar sessões</span>
+            <button class="sw" data-idxespacar role="switch" aria-checked="false"></button>
           </div>
         </div>
       </details>
