@@ -14,7 +14,7 @@
 
 import {
   ensureTable, ensureSharedTableStyle, buildTableEl, resolveGridTableItem,
-  TABLE_GRID_SHARED_KEYS,
+  stripSharedFromTableItem, TABLE_GRID_SHARED_KEYS,
 } from './bloco-tabela.js';
 
 export const TABLE_GRID_MAX = 4;
@@ -131,21 +131,25 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     cell.style.minWidth = '0';
     if (equal === 'height') cell.style.display = 'flex';
 
-    // Proxy sobre o item real (+ estilos shared do grid). Mutar resolved = mutar it.
+    // item REAL com estilos shared copiados (temporário). merges/rows gravam no item.
     const resolved = resolveGridTableItem(b, it);
 
     const itemCtx = {
       commit: () => {
+        stripSharedFromTableItem(it);
         ensureTable(it);
         ctx.commit?.();
       },
       rerender: () => {
+        stripSharedFromTableItem(it);
         ensureTable(it);
         ctx.rerender?.();
       },
     };
 
     const tbl = buildTableEl(resolved, editing, itemCtx, colWidths[i]);
+    // tira shared do item em memória (já aplicados no DOM via build); merges ficam
+    stripSharedFromTableItem(it);
     // id sintético p/ focusCell / Tab na tabela do grid
     tbl.dataset.id = `__tg_${b.id}_${i}`;
     tbl.dataset.gridId = b.id;

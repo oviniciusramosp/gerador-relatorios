@@ -167,12 +167,59 @@ export function ensureSharedTableStyle(b) {
 }
 
 /**
- * Desembrulha o Proxy de resolveGridTableItem → item/bloco real.
- * Use em mutações estruturais (headerRow, merges) pra gravar sempre no alvo certo.
+ * Sempre o objeto real (item/bloco). Mantido por compat — não há mais Proxy.
+ * (Proxy + clone raso faziam merges gravarem num fantasma e rows no item real:
+ * conteúdo da 2ª célula sumia, mas as duas células continuavam editáveis.)
  */
 export function unwrapTableData(b) {
   if (!b || typeof b !== 'object') return b;
   return b.__gridItem || b;
+}
+
+/** Tira estilos shared do item (não devem ir pro JSON do item). */
+export function stripSharedFromTableItem(item) {
+  if (!item || typeof item !== 'object') return item;
+  for (const k of TABLE_GRID_SHARED_KEYS) delete item[k];
+  return item;
+}
+
+/**
+ * Prepara o **item real** do grid para build/edição:
+ * copia estilos shared do bloco grid para o item (temporário) e devolve o MESMO
+ * objeto `item`. Toda mutação (merges, rows, headerRow) grava no lugar certo.
+ * O caller deve stripSharedFromTableItem após o build se não quiser poluir o save.
+ */
+export function resolveGridTableItem(grid, item) {
+  if (!item || typeof item !== 'object') {
+    const t = { rows: seed() };
+    for (const k of TABLE_GRID_SHARED_KEYS) {
+      if (grid && grid[k] != null) t[k] = grid[k];
+    }
+    ensureTable(t);
+    return t;
+  }
+  if (!Array.isArray(item.rows)) item.rows = seed();
+  ensureTable(item);
+  for (const k of TABLE_GRID_SHARED_KEYS) {
+    if (grid && grid[k] != null) item[k] = grid[k];
+    else delete item[k];
+  }
+  return item;
+}
+
+/** Liga/desliga linha de cabeçalho no objeto da tabela. */
+export function setTableHeaderRow(b, on) {
+  const t = unwrapTableData(b);
+  if (!t) return;
+  if (on) delete t.headerRow;
+  else t.headerRow = false;
+}
+
+export function setTableHeaderCol(b, on) {
+  const t = unwrapTableData(b);
+  if (!t) return;
+  if (on) t.headerCol = true;
+  else delete t.headerCol;
 }
 
 /** API de edição ao vivo por .tbl-wrap (seleção/merge acessível do painel flutuante). */
@@ -194,81 +241,6 @@ export function tableLiveActive() {
     || document.querySelector('.tbl-wrap.tbl-editing.active-block')
     || document.querySelector('.page.editing .tbl-wrap.tbl-editing');
   return host ? liveByWrap.get(host) : null;
-}
-
-/**
- * Vista de edição de um item do Grid de Tabelas.
- *
- * Retorna um Proxy sobre o **item real**:
- * - rows / merges / colWidths / headerRow / cores → leem e gravam no item
- * - estilos shared (fontSize, bordas, radius…) → leem/escrevem no bloco grid
- *
- * Assim “Linha de cabeçalho”, mesclar, + linha, reordenar etc. não se perdem
- * no rerender (antes um clone raso desconectava headerRow e reatribuições).
- */
-export function resolveGridTableItem(grid, item) {
-  if (!item || typeof item !== 'object') {
-    const t = { rows: seed() };
-    for (const k of TABLE_GRID_SHARED_KEYS) {
-      if (grid && grid[k] != null) t[k] = grid[k];
-    }
-    ensureTable(t);
-    return t;
-  }
-  // normaliza o item real (não o proxy) — shared keys já foram tirados do item
-  // em ensureTableGrid; ensureTable aqui limpa defaults do item.
-  if (!Array.isArray(item.rows)) item.rows = seed();
-  ensureTable(item);
-
-  const shared = new Set(TABLE_GRID_SHARED_KEYS);
-  return new Proxy(item, {
-    get(target, prop, receiver) {
-      if (prop === '__gridItem') return target;
-      if (typeof prop === 'string' && shared.has(prop)) {
-        if (grid && grid[prop] != null) return grid[prop];
-        return undefined;
-      }
-      return Reflect.get(target, prop, receiver);
-    },
-    set(target, prop, value) {
-      if (typeof prop === 'string' && shared.has(prop)) {
-        if (!grid || typeof grid !== 'object') return true;
-        if (value == null) delete grid[prop];
-        else grid[prop] = value;
-        return true;
-      }
-      target[prop] = value;
-      return true;
-    },
-    deleteProperty(target, prop) {
-      if (typeof prop === 'string' && shared.has(prop)) {
-        if (grid && typeof grid === 'object') delete grid[prop];
-        return true;
-      }
-      return Reflect.deleteProperty(target, prop);
-    },
-    has(target, prop) {
-      if (typeof prop === 'string' && shared.has(prop)) {
-        return !!(grid && grid[prop] != null);
-      }
-      return prop in target;
-    },
-  });
-}
-
-/** Liga/desliga linha de cabeçalho no objeto real (não no Proxy “fantasma”). */
-export function setTableHeaderRow(b, on) {
-  const t = unwrapTableData(b);
-  if (!t) return;
-  if (on) delete t.headerRow;
-  else t.headerRow = false;
-}
-
-export function setTableHeaderCol(b, on) {
-  const t = unwrapTableData(b);
-  if (!t) return;
-  if (on) t.headerCol = true;
-  else delete t.headerCol;
 }
 
 // ── merges (agrupar células) ────────────────────────────────────────────────

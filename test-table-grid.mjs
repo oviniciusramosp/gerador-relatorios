@@ -263,8 +263,8 @@ import {
   assert.equal(t.merges, undefined);
 }
 
-// ── resolveGridTableItem = Proxy no item real (mutações sobrevivem ao rerender) ─
-// Sem isto: headerRow/merges no “clone” sumiam; + linha/reordenar também.
+// ── resolveGridTableItem = MESMO objeto item (não clone/Proxy) ───────────────
+// Clone: rows compartilhados + merges no fantasma → 2ª célula vazia mas editável.
 {
   const b = {
     type: 'table-grid',
@@ -274,28 +274,26 @@ import {
   ensureTableGrid(b);
   const it = b.items[0];
   const resolved = resolveGridTableItem(b, it);
-  assert.equal(resolved.rows, it.rows, 'rows do item via proxy');
-  assert.equal(resolved.fontSize, 12, 'estilo shared lido do grid');
+  assert.equal(resolved, it, 'resolve devolve o item real');
+  assert.equal(resolved.fontSize, 12, 'estilo shared copiado p/ build');
   assert.equal(resolved.bg, '#FAFAFA', 'cor por item');
-  assert.equal(resolved.__gridItem, it, 'proxy aponta pro item');
 
   const n0 = it.rows.length;
   addTableRow(resolved, null);
-  assert.equal(it.rows.length, n0 + 1, 'addRow no proxy grava no item');
+  assert.equal(it.rows.length, n0 + 1, 'addRow grava no item');
 
   const cols0 = it.rows[0].length;
   addTableCol(resolved, null);
-  assert.equal(it.rows[0].length, cols0 + 1, 'addCol no proxy grava no item');
+  assert.equal(it.rows[0].length, cols0 + 1, 'addCol grava no item');
   assert.ok(it.colWidths && it.colWidths.length === cols0 + 1, 'colWidths no item');
 
-  // reordenar via proxy
   const [row] = resolved.rows.splice(2, 1);
   resolved.rows.splice(1, 0, row);
   assert.equal(it.rows[1][0], 'c');
   assert.equal(it.rows[2][0], 'a');
 }
 
-// ── headerRow=false e merge no proxy → persistem após ensureTableGrid ─────────
+// ── headerRow=false e merge no item → persistem após ensureTableGrid ──────────
 {
   const b = {
     type: 'table-grid',
@@ -304,6 +302,7 @@ import {
   ensureTableGrid(b);
   const it = b.items[0];
   const resolved = resolveGridTableItem(b, it);
+  assert.equal(resolved, it);
   assert.equal(unwrapTableData(resolved), it);
 
   // API usada pelo painel / menu da alça
