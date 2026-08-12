@@ -50,8 +50,8 @@ import {
   setTitlesOn, setCaptionsOn, titlesOn, captionsOn, captionStyleOf, gapOf, clampGap,
   IMAGE_GRID_MAX, IMAGE_GRID_GAP, IMAGE_GRID_GAP_MAX,
 } from './bloco-image-grid.js';import {
-  buildTableGridEl, ensureTableGrid, tableGridEqualModeOf, tableGridGapOf,
-  clampTableGridGap, setTableGridCols, applyTableStylesToGrid,
+  buildTableGridEl, ensureTableGrid, tableGridEqualModeOf, tableGridEqualRowsOf,
+  tableGridGapOf, clampTableGridGap, setTableGridCols, applyTableStylesToGrid,
   TABLE_GRID_MAX, TABLE_GRID_GAP, TABLE_GRID_GAP_MAX,
 } from './bloco-table-grid.js';
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
@@ -2247,6 +2247,7 @@ function openTableGridPanel() {
   const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
   const n = b.items.length;
   const equal = tableGridEqualModeOf(b);
+  const equalRows = tableGridEqualRowsOf(b);
   const gap = tableGridGapOf(b);
   const mioloGrid = !!(state.activeId && blockOf(state.activeId)?.id === b.id);
   const focusVal = tableGridFocus === 'grid' ? 'grid' : String(tableGridFocus);
@@ -2291,6 +2292,13 @@ function openTableGridPanel() {
       <label class="field"><span class="field-row">Espaço entre colunas <span class="field-val"><span data-role="gapv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${gap}</span>px<button type="button" class="resetbtn" data-a="gapreset" title="Redefinir para ${TABLE_GRID_GAP}px">↺</button></span></span>
         <input type="range" data-a="gap" min="0" max="${TABLE_GRID_GAP_MAX}" step="1" value="${gap}" data-snaps="0,4,8,12,16,24,32,48" data-edit="off">
       </label>
+      <div class="row img-tc-row" style="display:flex;gap:.4rem">
+        <button type="button" class="fieldbtn${equalRows ? ' on' : ''}" data-a="equal-rows" style="flex:1;justify-content:center"
+          ${n < 2 ? 'disabled' : ''}
+          title="Mesma altura por linha entre as tabelas; a última linha da menor preenche o restante">Igualar alturas</button>
+        <button type="button" class="fieldbtn${!equalRows ? ' on' : ''}" data-a="auto-rows" style="flex:1;justify-content:center"
+          title="Cada linha com altura automática (conteúdo)">Alturas Auto</button>
+      </div>
       <div class="eyebrow" style="margin:.2rem 0 0">Estilo comum</div>
       ${tableStyleFieldsHtml(b, 'shared')}`;
   }
@@ -2401,6 +2409,23 @@ function openTableGridPanel() {
         reopen();
       }));
     }
+
+    // Igualar alturas das rows entre tabelas (≠ equal=height, que estica o bloco inteiro)
+    body.querySelector('[data-a="equal-rows"]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (b.items.length < 2) return;
+      b.equalRows = true;
+      save(); scheduleCommit();
+      reopen();
+    });
+    body.querySelector('[data-a="auto-rows"]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      delete b.equalRows;
+      save(); scheduleCommit();
+      reopen();
+    });
 
     const gapv = body.querySelector('[data-role="gapv"]');
     const paintGap = (raw, { reflow = false, syncText = true } = {}) => {

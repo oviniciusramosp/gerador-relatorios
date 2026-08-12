@@ -12,8 +12,9 @@
  */
 import assert from 'node:assert/strict';
 import {
-  ensureTableGrid, tableGridEqualModeOf, tableGridGapOf, clampTableGridGap,
-  setTableGridCols, layoutTableGridCols, seedTableItem, applyTableStylesToGrid,
+  ensureTableGrid, tableGridEqualModeOf, tableGridEqualRowsOf, tableGridGapOf,
+  clampTableGridGap, setTableGridCols, layoutTableGridCols, seedTableItem,
+  applyTableStylesToGrid, computeEqualRowHeights,
   TABLE_GRID_MAX, TABLE_GRID_GAP,
 } from './bloco-table-grid.js';
 import {
@@ -390,6 +391,22 @@ import {
   setCellAlign(t, 0, 1, 'center');
   mergeCells(t, 0, 0, 0, 1);
   assert.equal(t.cellAlign && t.cellAlign['0,1'], undefined);
+}
+
+// ── equalRows: rows alinhadas; última da menor preenche ─────────────────────
+{
+  // A: 10+20+30=60; B: 15+10 → target [15,20,30]=65; B last = 65-15 = 50
+  const out = computeEqualRowHeights([[10, 20, 30], [15, 10]]);
+  assert.deepEqual(out[0], [15, 20, 30]);
+  assert.deepEqual(out[1], [15, 50]);
+  // mesmas rows: max por índice
+  assert.deepEqual(computeEqualRowHeights([[12, 8], [10, 14]]), [[12, 14], [12, 14]]);
+  const b = { type: 'table-grid', equalRows: true, items: [seedTableItem(), seedTableItem()] };
+  ensureTableGrid(b);
+  assert.equal(tableGridEqualRowsOf(b), true);
+  delete b.equalRows;
+  ensureTableGrid(b);
+  assert.equal(tableGridEqualRowsOf(b), false);
 }
 
 // ── applyTableStylesToGrid: cores da Tabela N → demais itens ────────────────

@@ -108,6 +108,7 @@ export function ensureTableGrid(b) {
   }
   if (!b.items.length) b.items = [seedTableItem()];
   if (b.equal !== 'height') delete b.equal;
+  if (b.equalRows !== true) delete b.equalRows;
   if (b.gap != null) {
     const g = clampTableGridGap(b.gap);
     if (g === TABLE_GRID_GAP) delete b.gap;
@@ -119,6 +120,82 @@ export function ensureTableGrid(b) {
 
 export function tableGridEqualModeOf(b) {
   return b && b.equal === 'height' ? 'height' : 'width';
+}
+
+/** Rows com altura igualada entre tabelas do grid (última row da menor preenche). */
+export function tableGridEqualRowsOf(b) {
+  return !!(b && b.equalRows === true);
+}
+
+/**
+ * Calcula alturas finais por tabela a partir das alturas naturais.
+ * @param {number[][]} natural — natural[t][r] = px da row r na tabela t
+ * @returns {number[][]} mesma forma, com rows alinhadas e última row da menor preenchendo
+ */
+export function computeEqualRowHeights(natural) {
+  if (!Array.isArray(natural) || !natural.length) return [];
+  const lists = natural.map((rows) =>
+    (Array.isArray(rows) ? rows : []).map((h) => Math.max(0, +h || 0)));
+  const maxRows = Math.max(0, ...lists.map((r) => r.length));
+  if (maxRows < 1) return lists.map(() => []);
+
+  const target = Array(maxRows).fill(0);
+  for (let i = 0; i < maxRows; i++) {
+    for (const rows of lists) {
+      if (i < rows.length) target[i] = Math.max(target[i], rows[i]);
+    }
+  }
+  const total = target.reduce((a, h) => a + h, 0);
+
+  return lists.map((rows) => {
+    const n = rows.length;
+    if (!n) return [];
+    const out = [];
+    let used = 0;
+    for (let i = 0; i < n - 1; i++) {
+      out.push(target[i]);
+      used += target[i];
+    }
+    // última row: pelo menos o target natural; se a tabela é mais curta, preenche o resto
+    out.push(Math.max(target[n - 1] || 0, total - used));
+    return out;
+  });
+}
+
+/**
+ * Aplica equalRows no DOM: mede rows, equaliza, última da menor preenche.
+ * @param {HTMLElement} gridEl — .tblgrid
+ */
+export function layoutEqualRowHeights(gridEl) {
+  if (!gridEl) return;
+  const tables = [...gridEl.querySelectorAll('.tblgrid-cell table.tbl')];
+  if (tables.length < 2) return;
+
+  // reset para medir natural
+  tables.forEach((t) => {
+    [...t.rows].forEach((tr) => {
+      tr.style.height = '';
+      tr.style.minHeight = '';
+    });
+    t.style.height = '';
+  });
+
+  const natural = tables.map((t) =>
+    [...t.rows].map((tr) => tr.getBoundingClientRect().height));
+  const assigned = computeEqualRowHeights(natural);
+
+  tables.forEach((t, ti) => {
+    const heights = assigned[ti] || [];
+    [...t.rows].forEach((tr, ri) => {
+      const h = heights[ri];
+      if (h != null && h > 0) {
+        tr.style.height = h + 'px';
+        tr.style.minHeight = h + 'px';
+      }
+    });
+    const sum = heights.reduce((a, h) => a + h, 0);
+    if (sum > 0) t.style.height = sum + 'px';
+  });
 }
 
 export function clampTableGridGap(n) {
@@ -163,6 +240,7 @@ export function layoutTableGridCols(n, totalW, gap = TABLE_GRID_GAP) {
 export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
   ensureTableGrid(b);
   const equal = tableGridEqualModeOf(b);
+  const equalRows = tableGridEqualRowsOf(b);
   const gap = tableGridGapOf(b);
   const n = b.items.length;
   const colWidths = layoutTableGridCols(n, colW, gap);
@@ -172,15 +250,18 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
   wrap.className = 'tblgrid-wrap b';
   wrap.dataset.id = b.id;
   wrap.dataset.equal = equal;
+  wrap.dataset.equalRows = equalRows ? '1' : '0';
   wrap.style.width = colW + 'px';
 
   const grid = document.createElement('div');
   grid.className = 'tblgrid';
   grid.dataset.equal = equal;
+  grid.dataset.equalRows = equalRows ? '1' : '0';
   grid.style.display = 'grid';
   grid.style.columnGap = gap + 'px';
   grid.style.rowGap = '0';
-  grid.style.alignItems = equal === 'height' ? 'stretch' : 'start';
+  // equalRows força stretch para as tabelas alinharem no topo com mesma altura total
+  grid.style.alignItems = (equal === 'height' || equalRows) ? 'stretch' : 'start';
   grid.style.gridTemplateColumns = colWidths.map((w) => Math.max(1, w) + 'px').join(' ');
 
   b.items.forEach((it, i) => {
@@ -188,7 +269,7 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     cell.className = 'tblgrid-cell' + (activeItem === i ? ' is-active' : '');
     cell.dataset.item = String(i);
     cell.style.minWidth = '0';
-    if (equal === 'height') cell.style.display = 'flex';
+    if (equal === 'height' || equalRows) cell.style.display = 'flex';
 
     // item REAL com estilos shared copiados (temporário). merges/rows gravam no item.
     const resolved = resolveGridTableItem(b, it);
@@ -215,7 +296,7 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
     tbl.dataset.item = String(i);
     tbl.classList.add('tblgrid-table');
     tbl.style.width = '100%';
-    if (equal === 'height') {
+    if (equal === 'height' || equalRows) {
       // height 100% sem display:flex no frame — flex no pai de <table>
       // quebra colSpan/rowSpan em alguns engines (células “não mesclam” visualmente).
       tbl.style.flex = '1 1 auto';
@@ -228,7 +309,9 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
       }
       const table = tbl.querySelector('table.tbl');
       if (table) {
-        table.style.height = '100%';
+        if (equal === 'height' && !equalRows) {
+          table.style.height = '100%';
+        }
         table.style.boxSizing = 'border-box';
       }
     }
@@ -257,6 +340,17 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
   });
 
   wrap.appendChild(grid);
+
+  // equaliza altura das rows entre tabelas (após layout)
+  if (equalRows && n > 1) {
+    const run = () => layoutEqualRowHeights(grid);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => requestAnimationFrame(run));
+    } else {
+      run();
+    }
+  }
+
   return wrap;
 }
 

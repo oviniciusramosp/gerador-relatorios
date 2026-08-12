@@ -1374,6 +1374,12 @@
   #imageGridPanel .img-tc-row { flex-wrap: nowrap; gap: .4rem; }
   #imageGridPanel .img-tc-row .fieldbtn { flex: 1; min-width: 0; justify-content: center; }
   #imageGridPanel button:disabled, #tableGridPanel button:disabled { opacity: .4; cursor: default; }
+  /* estado ativo dos botões Igualar alturas / Alturas Auto */
+  #tableGridPanel .fieldbtn.on {
+    border-color: color-mix(in srgb, var(--violet) 55%, var(--hair-strong));
+    background: color-mix(in srgb, var(--violet) 18%, transparent);
+    color: var(--ink);
+  }
   /* stepper de colunas: [−] n [+] — image-grid e table-grid */
   #imageGridPanel .numstep, #tableGridPanel .numstep {
     display: flex; align-items: stretch; gap: 0;
