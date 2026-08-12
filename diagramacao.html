@@ -204,6 +204,11 @@
   .save-tip-status li.ok svg { color: var(--mint, #29E899); }
   .save-tip-status li.warn svg { color: #E8B84A; }
   .save-tip-status li .st-txt { min-width: 0; flex: 1; }
+  /* detalhe de falha de gravação (etapa, tempo, NotAllowedError…) */
+  .save-tip-status li .st-txt-err {
+    white-space: pre-wrap; word-break: break-word;
+    font-size: .68rem; line-height: 1.4; opacity: .95;
+  }
   .save-tip-actions {
     display: flex; gap: .35rem; flex-wrap: wrap;
   }
@@ -1927,10 +1932,11 @@
   #calloutBar .swatch { width: 24px; height: 24px; border-radius: 5px; }
   #calloutBar .sep { width: 1px; align-self: stretch; margin: 2px 1px; background: var(--hair-strong); }
 
-  /* #tblCellBar — barra FLUTUANTE da célula de tabela (marcas + cor + alinhamento).
-     Mesmo visual do #fmtbar; ancora na célula ativa (não só em seleção de texto). */
+  /* #tblCellBar — barra FLUTUANTE da célula (marcas + cor + alinhamento).
+     Posição: JS garante retângulo sem interseção com #tablePanel / #tableGridPanel
+     (não é jogo de z-index — os dois coexistem no espaço). */
   #tblCellBar {
-    position: fixed; z-index: 30; display: flex; gap: 2px; align-items: center;
+    position: fixed; z-index: 42; display: flex; gap: 2px; align-items: center;
     padding: 3px; border: 1px solid var(--hair-strong); border-radius: 8px;
     background: color-mix(in srgb, var(--lilac) 10%, var(--ground));
     box-shadow: 0 12px 40px -12px #000;

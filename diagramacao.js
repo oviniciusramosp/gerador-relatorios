@@ -1796,12 +1796,15 @@ function positionTablePanel() {
   const el = b && pagesEl.querySelector(`.tbl-wrap[data-id="${b.id}"]`);
   if (!el) return;
   const r = el.getBoundingClientRect();
-  const pw = tablePanel.offsetWidth || 220, ph = tablePanel.offsetHeight || 200;
-  // preferencialmente ao lado (direita); se não cabe, esquerda
-  let x = r.right + 10;
-  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  tablePanel.style.left = x + 'px'; tablePanel.style.top = y + 'px';
+  const pw = tablePanel.offsetWidth || 220;
+  const ph = tablePanel.offsetHeight || 200;
+  // zona proibida = barra da célula (se aberta) — painel não pode cobrir a barra
+  const avoid = tblCellBarRectIfVisible();
+  const pos = placeSidePanelBesideHost(r, pw, ph, avoid);
+  tablePanel.style.left = pos.x + 'px';
+  tablePanel.style.top = pos.y + 'px';
+  // re-ancora a barra com o painel já no lugar final
+  if (tblCellBar && !tblCellBar.hidden) updateTblCellBar();
 }
 function updateTableBar() {
   // nome legado: abre/fecha o popover lateral da tabela ativa
@@ -2431,11 +2434,13 @@ function positionTableGridPanel() {
   const el = b && pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"]`);
   if (!el) return;
   const r = el.getBoundingClientRect();
-  const pw = tableGridPanel.offsetWidth || 220, ph = tableGridPanel.offsetHeight || 200;
-  let x = r.right + 10;
-  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  tableGridPanel.style.left = x + 'px'; tableGridPanel.style.top = y + 'px';
+  const pw = tableGridPanel.offsetWidth || 220;
+  const ph = tableGridPanel.offsetHeight || 200;
+  const avoid = tblCellBarRectIfVisible();
+  const pos = placeSidePanelBesideHost(r, pw, ph, avoid);
+  tableGridPanel.style.left = pos.x + 'px';
+  tableGridPanel.style.top = pos.y + 'px';
+  if (tblCellBar && !tblCellBar.hidden) updateTblCellBar();
 }
 function updateTableGridBar() {
   const b = activeTableGridBlock();
@@ -6578,8 +6583,10 @@ let fileHandle = null;   // FileSystemFileHandle da origem (md OU .pdgm — um d
 let linkedMtime = 0;
 let projectDirty = false;
 let projectWriting = false;
-/** Última falha de gravação (string) — UI “Erro ao salvar” + beforeunload. */
+/** Última falha de gravação (string curta) — botão + beforeunload. */
 let projectSaveError = null;
+/** Detalhe multi-linha da falha — painel do Salvar / toast. */
+let projectSaveErrorDetail = null;
 /** Promise da gravação em curso (coalesce; evita 2 createWritable). */
 let projectWritePromise = null;
 let suppressProjectAutosave = false;
@@ -6624,6 +6631,7 @@ function clearFileLink() {
   projectDirty = false;
   projectWriting = false;
   projectSaveError = null;
+  projectSaveErrorDetail = null;
   projectWritePromise = null;
   lastProjectWriteAt = 0;
   lastProjectPollAt = 0;
@@ -6645,10 +6653,21 @@ function hasUnsavedProjectWork() {
   return false;
 }
 
+/**
+ * @param {Promise<any>} promise
+ * @param {number} ms
+ * @param {string|(()=>string)} message — string ou factory (vê a etapa atual no timeout)
+ */
 function withTimeout(promise, ms, message) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => {
-      reject(new Error(message || `tempo esgotado (${Math.round(ms / 1000)}s)`));
+      const msg = typeof message === 'function'
+        ? message()
+        : (message || `tempo esgotado (${Math.round(ms / 1000)}s)`);
+      const err = new Error(msg);
+      err.name = 'TimeoutError';
+      err.code = 'TIMEOUT';
+      reject(err);
     }, ms);
     Promise.resolve(promise).then(
       (v) => { clearTimeout(t); resolve(v); },
@@ -6667,14 +6686,108 @@ async function downloadProjectBackup() {
   }
 }
 
+/** Rótulos curtos das etapas de gravação (debug + UI). */
+const PROJECT_SAVE_STEP_LABEL = {
+  'permission.query': 'consultar permissão de escrita',
+  'permission.request': 'pedir permissão de escrita (diálogo do browser)',
+  serialize: 'montar o arquivo (.zip/.json) na memória',
+  createWritable: 'abrir o arquivo no disco para escrita (createWritable)',
+  write: 'escrever bytes no arquivo',
+  close: 'fechar/confirmar a gravação (close)',
+  getFile: 'releitura do arquivo após gravar',
+};
+
+/**
+ * Monta mensagem acionável a partir do erro + contexto da gravação.
+ * Inclui etapa, tempo, nome do arquivo, código do browser — o que faltava no toast genérico.
+ */
+function formatProjectSaveFailure(err, ctx = {}) {
+  const step = ctx.step || err?.step || null;
+  const stepLabel = step
+    ? (PROJECT_SAVE_STEP_LABEL[step] || step)
+    : null;
+  const stepMs = ctx.stepMs != null ? ctx.stepMs : err?.stepMs;
+  const totalMs = ctx.totalMs != null ? ctx.totalMs : err?.totalMs;
+  const fileName = ctx.fileName || state.doc?.source?.label || fileHandle?.name || '(sem nome)';
+  const fmt = ctx.format || state.doc?.source?.format || '?';
+  const blobBytes = ctx.blobBytes != null ? ctx.blobBytes : err?.blobBytes;
+  const perm = ctx.permission || err?.permission;
+
+  const name = err?.name || '';
+  const raw = (err && err.message) || String(err || 'erro desconhecido');
+  const code = err?.code || err?.errno || '';
+
+  // interpretação do erro do browser (File System Access / DOMException)
+  let cause = '';
+  if (err?.code === 'TIMEOUT' || name === 'TimeoutError') {
+    cause = stepLabel
+      ? `Travou em: ${stepLabel}.`
+      : 'A operação passou do tempo limite.';
+    if (step === 'permission.request') {
+      cause += ' O browser pode estar esperando você aceitar o diálogo de permissão — ou o diálogo ficou bloqueado.';
+    } else if (step === 'createWritable' || step === 'write' || step === 'close') {
+      cause += ' Costuma ser arquivo aberto em outro app, pasta sincronizada (iCloud/Drive) travada, ou handle inválido.';
+    } else if (step === 'serialize') {
+      cause += ' Documento muito grande ou serialização lenta (muitas imagens em base64).';
+    }
+  } else if (name === 'NotAllowedError' || /permiss/i.test(raw)) {
+    cause = 'O browser negou permissão de escrita neste arquivo. Use “Baixar backup” ou reabra o .zip e aceite a permissão.';
+  } else if (name === 'NotFoundError') {
+    cause = 'O arquivo não existe mais no caminho original (foi movido, renomeado ou apagado). Reabra o projeto do disco.';
+  } else if (name === 'NoModificationAllowedError' || name === 'InvalidStateError') {
+    cause = 'O sistema bloqueou a modificação (arquivo só-leitura, em uso, ou gravação anterior ainda aberta).';
+  } else if (name === 'AbortError') {
+    cause = 'A operação foi cancelada (diálogo fechado ou abort).';
+  } else if (name === 'QuotaExceededError') {
+    cause = 'Sem espaço em disco (ou cota do browser esgotada).';
+  } else if (name === 'NotSupportedError') {
+    cause = 'Este browser/contexto não suporta gravar neste handle (File System Access).';
+  } else if (raw) {
+    cause = raw;
+  } else {
+    cause = 'Erro desconhecido na gravação.';
+  }
+
+  const lines = [
+    cause,
+    '',
+    `Arquivo: ${fileName}`,
+    `Formato: ${fmt}`,
+  ];
+  if (stepLabel) lines.push(`Etapa: ${stepLabel}${step ? ` [${step}]` : ''}`);
+  if (stepMs != null) lines.push(`Tempo nesta etapa: ${Math.round(stepMs)} ms`);
+  if (totalMs != null) lines.push(`Tempo total: ${Math.round(totalMs)} ms`);
+  if (perm) lines.push(`Permissão (readwrite): ${perm}`);
+  if (blobBytes != null) {
+    const kb = (blobBytes / 1024).toFixed(blobBytes >= 1024 * 100 ? 0 : 1);
+    lines.push(`Tamanho a gravar: ${kb} KB`);
+  }
+  if (name && name !== 'Error') lines.push(`Erro do browser: ${name}${code ? ` (${code})` : ''}`);
+  if (raw && raw !== cause && !cause.includes(raw)) lines.push(`Detalhe: ${raw}`);
+  lines.push('', 'Sugestão: baixe um backup (.pdgm.zip) — não depende do auto-save.');
+  return lines.join('\n');
+}
+
 /**
  * Avisa falha de gravação e oferece download de backup (não depende do auto-save).
  * Throttle pra não spammar se o poll/timer re-tenta.
  */
-function notifyProjectSaveFailed(err) {
-  const msg = (err && err.message) || String(err || 'erro desconhecido');
-  projectSaveError = msg;
+function notifyProjectSaveFailed(err, ctx = {}) {
+  const detail = formatProjectSaveFailure(err, ctx);
+  projectSaveErrorDetail = detail;
+  // botão: causa + etapa (uma linha)
+  const lines = detail.split('\n').map((l) => l.trim()).filter(Boolean);
+  const short = [lines[0], lines.find((l) => l.startsWith('Etapa:'))].filter(Boolean).join(' · ');
+  projectSaveError = short.length > 200 ? short.slice(0, 197) + '…' : short;
   projectDirty = true;
+  console.error('[projeto] save falhou', {
+    err,
+    ctx,
+    detail,
+    file: state.doc?.source?.label,
+    handle: fileHandle?.name,
+  });
+
   const now = Date.now();
   if (now - lastSaveFailToastAt < 6000) {
     updateSaveSourceBtn();
@@ -6684,10 +6797,10 @@ function notifyProjectSaveFailed(err) {
   showToast(
     'err',
     'Não foi possível gravar no disco',
-    msg + '\n\nBaixe o projeto como backup (.pdgm.zip). O auto-save pode estar bloqueado (permissão, arquivo aberto em outro app, ou gravação travada).',
+    detail,
     {
       code: 'project-save-fail',
-      fileName: state.doc?.source?.label || undefined,
+      fileName: state.doc?.source?.label || fileHandle?.name || undefined,
       action: {
         label: 'Baixar backup',
         onClick: () => { downloadProjectBackup(); },
@@ -6695,7 +6808,7 @@ function notifyProjectSaveFailed(err) {
       steps: [
         '1. Diagramação com projeto vinculado (.pdgm.zip)',
         '2. Editei o conteúdo (autosave ou botão Salvar)',
-        '3. Ficou em “Salvando…” / falhou a gravação no disco',
+        `3. Falha: ${ctx.step || err?.step || err?.name || 'ver detalhe do toast'}`,
       ].join('\n'),
     },
   );
@@ -7228,7 +7341,8 @@ async function saveToSource() {
 }
 
 // Serializa state.doc no handle do .pdgm.zip/.json (autosave ou botão Salvar).
-// Timeout: se createWritable/write trava, UI saía de “Salvando…” e avisava o usuário.
+// Etapas instrumentadas: o toast diz ONDE travou (permissão, zip, createWritable…).
+// Permissão fica FORA do timeout de escrita — o diálogo do browser pode levar >15s.
 async function saveProjectToHandle({ quiet = false } = {}) {
   if (!isProjectSource()) return;
   if (!fileHandle) {
@@ -7242,37 +7356,107 @@ async function saveProjectToHandle({ quiet = false } = {}) {
   updateSaveSourceBtn();
 
   projectWritePromise = (async () => {
+    const t0 = performance.now();
+    let step = 'permission.query';
+    let stepAt = t0;
+    let permission = '?';
+    let blobBytes = null;
+    const fileName = state.doc?.source?.label || fileHandle.name || '';
+    const format = state.doc?.source?.format || 'pdgm';
+
+    const mark = (s) => {
+      step = s;
+      stepAt = performance.now();
+    };
+    const failCtx = () => ({
+      step,
+      stepMs: performance.now() - stepAt,
+      totalMs: performance.now() - t0,
+      fileName,
+      format,
+      permission,
+      blobBytes,
+    });
+
     try {
-      await withTimeout((async () => {
-        if (await fileHandle.queryPermission({ mode: 'readwrite' }) !== 'granted'
-          && await fileHandle.requestPermission({ mode: 'readwrite' }) !== 'granted') {
-          throw new Error('permissão de escrita negada');
+      // ── 1) permissão (sem timeout global: usuário pode demorar no diálogo) ──
+      mark('permission.query');
+      try {
+        permission = await fileHandle.queryPermission({ mode: 'readwrite' });
+      } catch (e) {
+        e.step = step;
+        throw e;
+      }
+      if (permission !== 'granted') {
+        mark('permission.request');
+        try {
+          permission = await fileHandle.requestPermission({ mode: 'readwrite' });
+        } catch (e) {
+          e.step = step;
+          throw e;
         }
-        const fmt = state.doc.source.format;
+        if (permission !== 'granted') {
+          const e = new Error(
+            `Permissão de escrita: “${permission}” (precisa ser “granted”). `
+            + 'Clique de novo em Salvar e aceite o diálogo do browser, ou baixe um backup.',
+          );
+          e.name = 'NotAllowedError';
+          e.step = step;
+          e.permission = permission;
+          throw e;
+        }
+      }
+
+      // ── 2) serializar + gravar (com timeout; etapa atual no erro) ──
+      await withTimeout((async () => {
+        mark('serialize');
         let blob;
-        if (fmt === 'pdgm-json') {
-          blob = new Blob([JSON.stringify(serializeDoc(state.doc), null, 2)], { type: 'application/json' });
+        if (format === 'pdgm-json') {
+          const text = JSON.stringify(serializeDoc(state.doc), null, 2);
+          blob = new Blob([text], { type: 'application/json' });
         } else {
           blob = await serializeDocZip(state.doc);
         }
+        blobBytes = blob.size;
+
+        mark('createWritable');
         const w = await fileHandle.createWritable();
+
+        mark('write');
         await w.write(blob);
+
+        mark('close');
         await w.close();
+
+        mark('getFile');
         const f = await fileHandle.getFile();
         linkedMtime = f.lastModified;
         lastProjectWriteAt = Date.now();
         // UI e disco iguais → “No Diagramador” = mtime do arquivo
         lastUiChangeAt = linkedMtime;
-      })(), PROJECT_SAVE_TIMEOUT_MS,
-      'A gravação demorou demais — o arquivo pode estar travado, sem permissão ou aberto em outro app');
+      })(), PROJECT_SAVE_TIMEOUT_MS, () => {
+        const stepLabel = PROJECT_SAVE_STEP_LABEL[step] || step;
+        const stepMs = Math.round(performance.now() - stepAt);
+        const totalMs = Math.round(performance.now() - t0);
+        return (
+          `Timeout (${Math.round(PROJECT_SAVE_TIMEOUT_MS / 1000)}s) na etapa “${stepLabel}” `
+          + `[${step}] — ${stepMs} ms nesta etapa, ${totalMs} ms no total.`
+        );
+      });
 
       projectDirty = false;
       projectSaveError = null;
+      projectSaveErrorDetail = null;
       if (!quiet) flashSaved();
       else updateSaveSourceBtn();
     } catch (e) {
-      console.warn('[projeto] save', e);
-      notifyProjectSaveFailed(e);
+      // anexa contexto se o erro ainda não tiver
+      if (!e.step) e.step = step;
+      if (e.stepMs == null) e.stepMs = performance.now() - stepAt;
+      if (e.totalMs == null) e.totalMs = performance.now() - t0;
+      if (e.permission == null) e.permission = permission;
+      if (e.blobBytes == null && blobBytes != null) e.blobBytes = blobBytes;
+      notifyProjectSaveFailed(e, failCtx());
       throw e;
     } finally {
       projectWriting = false;
@@ -7574,21 +7758,25 @@ function updateSaveSourceBtn() {
   const statusLine = projectWriting
     ? 'Gravando no disco…'
     : (hasErr
-      ? ('Falha: ' + projectSaveError)
+      ? (projectSaveErrorDetail || projectSaveError || 'Falha ao gravar')
       : (synced ? 'UI e arquivo no disco estão iguais.' : 'Há alterações locais ainda não gravadas.'));
   const statusOk = synced && !projectWriting;
   const refreshIco = uiIco('refresh', 14, 'outline');
   const unlinkIco = uiIco('unlink', 14, 'outline');
   const dlIco = uiIco('download', 14, 'outline');
+  // detalhe multi-linha da falha: pre-wrap no st-txt
+  const statusHtml = hasErr
+    ? `<span class="st-txt st-txt-err">${escapeHtml(statusLine)}</span>`
+    : `<span class="st-txt">${escapeHtml(statusLine)}</span>`;
 
   tip.innerHTML = `
     <div class="save-tip-card">
       <p class="save-tip-lead">${hasErr
-        ? 'A gravação automática <strong>falhou</strong>. Baixe um backup do projeto — não dependa só do auto-save.'
+        ? 'A gravação automática <strong>falhou</strong>. Abaixo está a causa e a etapa exata — baixe um backup se precisar.'
         : 'A interface está vinculada à versão do arquivo zip no seu disco. Mudanças serão salvas automaticamente.'}</p>
       <hr class="save-tip-sep">
       <ul class="save-tip-status">
-        <li class="${statusOk ? 'ok' : 'warn'}">${saveTipStatusIco(statusOk)}<span class="st-txt">${escapeHtml(statusLine)}</span></li>
+        <li class="${statusOk ? 'ok' : 'warn'}">${saveTipStatusIco(statusOk)}${statusHtml}</li>
         <li class="ok">${saveTipStatusIco(true)}<span class="st-txt">No disco: ${escapeHtml(formatProjectTs(linkedMtime))}</span></li>
         <li class="ok">${saveTipStatusIco(true)}<span class="st-txt">No Diagramador: ${escapeHtml(formatProjectTs(diagramadorSyncTs()))}</span></li>
       </ul>
@@ -10790,10 +10978,259 @@ function updateTblCellBar() {
   tblCellBar.hidden = false;
   const bw = tblCellBar.offsetWidth || 320;
   const bh = tblCellBar.offsetHeight || 36;
-  const x = Math.max(8, Math.min(rect.left + rect.width / 2 - bw / 2, innerWidth - bw - 8));
-  const y = rect.top - bh - 8 >= 8 ? rect.top - bh - 8 : rect.bottom + 8;
-  tblCellBar.style.left = x + 'px';
-  tblCellBar.style.top = y + 'px';
+  // 1) barra perto da célula, fora do retângulo do painel
+  const pos = placeTblCellBarNearCell(rect, bw, bh, tblSidePanelRects());
+  tblCellBar.style.left = pos.x + 'px';
+  tblCellBar.style.top = pos.y + 'px';
+  // 2) se ainda houver interseção (painel alto / faixa estreita), empurra o painel
+  nudgeSidePanelsAwayFromCellBar();
+  // 3) re-ancora a barra com o painel já deslocado (sem re-chamar nudge)
+  const pos2 = placeTblCellBarNearCell(rect, bw, bh, tblSidePanelRects());
+  tblCellBar.style.left = pos2.x + 'px';
+  tblCellBar.style.top = pos2.y + 'px';
+}
+
+const TBL_UI_GAP = 10;
+
+/** Retângulo atual da #tblCellBar se visível (p/ o painel lateral evitar). */
+function tblCellBarRectIfVisible() {
+  if (!tblCellBar || tblCellBar.hidden) return null;
+  const r = tblCellBar.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return null;
+  return r;
+}
+
+/** Painéis laterais da tabela (globais) — a barra da célula não entra neles. */
+function tblSidePanelRects() {
+  const out = [];
+  for (const id of ['tablePanel', 'tableGridPanel']) {
+    const el = document.getElementById(id);
+    if (el && !el.hidden) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 2 && r.height > 2) out.push(r);
+    }
+  }
+  return out;
+}
+
+function rectsOverlapPad(a, b, pad = TBL_UI_GAP) {
+  return !(
+    a.right + pad <= b.left
+    || a.left - pad >= b.right
+    || a.bottom + pad <= b.top
+    || a.top - pad >= b.bottom
+  );
+}
+
+function boxOf(x, y, w, h) {
+  return { left: x, top: y, right: x + w, bottom: y + h, width: w, height: h };
+}
+
+function freeOfForbidden(box, forbidden) {
+  for (const f of forbidden) {
+    if (f && rectsOverlapPad(box, f)) return false;
+  }
+  return true;
+}
+
+/**
+ * Se painel e barra da célula ainda se cruzam, move o painel (não a barra).
+ * A barra fica ancorada na célula; o painel cede o espaço.
+ */
+function nudgeSidePanelsAwayFromCellBar() {
+  const bar = tblCellBarRectIfVisible();
+  if (!bar) return;
+  for (const id of ['tablePanel', 'tableGridPanel']) {
+    const el = document.getElementById(id);
+    if (!el || el.hidden) continue;
+    const pr = el.getBoundingClientRect();
+    if (!rectsOverlapPad(bar, pr, TBL_UI_GAP)) continue;
+    const pw = pr.width;
+    const ph = pr.height;
+    let x = pr.left;
+    let y = pr.top;
+    // prefere à direita da barra; senão à esquerda; senão abaixo
+    if (bar.right + TBL_UI_GAP + pw <= innerWidth - 8) {
+      x = bar.right + TBL_UI_GAP;
+    } else if (bar.left - pw - TBL_UI_GAP >= 8) {
+      x = bar.left - pw - TBL_UI_GAP;
+    } else {
+      y = Math.min(Math.max(8, bar.bottom + TBL_UI_GAP), Math.max(8, innerHeight - ph - 8));
+    }
+    y = Math.min(Math.max(8, y), Math.max(8, innerHeight - ph - 8));
+    x = Math.min(Math.max(8, x), Math.max(8, innerWidth - pw - 8));
+    // confirma; se ainda colide, força abaixo da barra
+    let box = boxOf(x, y, pw, ph);
+    if (rectsOverlapPad(bar, box, TBL_UI_GAP)) {
+      x = Math.min(Math.max(8, bar.left), Math.max(8, innerWidth - pw - 8));
+      y = Math.min(Math.max(8, bar.bottom + TBL_UI_GAP), Math.max(8, innerHeight - ph - 8));
+    }
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+  }
+}
+
+/**
+ * Painel contextual ao lado do host (tabela / grid).
+ * Preferência: direita do host; se não cabe, esquerda — mas NUNCA em cima do
+ * host se houver espaço na borda da viewport. Se `avoid` (barra da célula)
+ * colidir, desce ou empurra para o lado livre.
+ */
+function placeSidePanelBesideHost(hostR, pw, ph, avoid) {
+  const clampY = (y) => Math.min(Math.max(8, y), Math.max(8, innerHeight - ph - 8));
+  const forbidden = avoid ? [avoid] : [];
+
+  const rightX = hostR.right + TBL_UI_GAP;
+  const leftX = hostR.left - pw - TBL_UI_GAP;
+  const pinRight = Math.max(8, innerWidth - pw - 8);
+
+  const xOpts = [];
+  if (rightX + pw <= innerWidth - 8) xOpts.push(rightX);
+  if (leftX >= 8) xOpts.push(leftX);
+  // última opção: colado na borda da janela (não flipar em cima da tabela)
+  if (!xOpts.includes(pinRight)) xOpts.push(pinRight);
+  if (leftX < 8 && rightX + pw > innerWidth - 8) xOpts.push(Math.max(8, leftX));
+
+  const y0 = clampY(hostR.top);
+  for (const x of xOpts) {
+    // tenta y alinhado ao topo do host, depois desce em passos se colidir com avoid
+    for (let dy = 0; dy <= Math.max(0, innerHeight - ph - 16); dy += 48) {
+      const y = clampY(y0 + dy);
+      const box = boxOf(x, y, pw, ph);
+      if (freeOfForbidden(box, forbidden)) return { x, y };
+    }
+    // tenta acima do avoid
+    if (avoid) {
+      const yAbove = clampY(avoid.top - ph - TBL_UI_GAP);
+      const boxA = boxOf(x, yAbove, pw, ph);
+      if (freeOfForbidden(boxA, forbidden)) return { x, y: yAbove };
+      const yBelow = clampY(avoid.bottom + TBL_UI_GAP);
+      const boxB = boxOf(x, yBelow, pw, ph);
+      if (freeOfForbidden(boxB, forbidden)) return { x, y: yBelow };
+    }
+  }
+  // fallback: direita do host (ou pin), topo
+  const x = xOpts[0] ?? pinRight;
+  return { x, y: y0 };
+}
+
+/**
+ * Barra da célula perto da célula, com proibição dura de interseção com o
+ * painel lateral. Não resolve por z-index: escolhe (x,y) livre.
+ */
+function placeTblCellBarNearCell(cellRect, bw, bh, panels) {
+  const clampX = (x) => Math.max(8, Math.min(x, innerWidth - bw - 8));
+  const clampY = (y) => Math.max(8, Math.min(y, innerHeight - bh - 8));
+  const forbidden = panels || [];
+
+  // limite horizontal: se o painel está à direita da célula, a barra não pode
+  // invadir a faixa do painel (max right edge = panel.left - gap)
+  let maxRight = innerWidth - 8;
+  let minLeft = 8;
+  for (const pr of forbidden) {
+    const cellCx = cellRect.left + cellRect.width / 2;
+    const panelCx = pr.left + pr.width / 2;
+    if (panelCx >= cellCx) {
+      // painel à direita → barra só à esquerda da borda do painel
+      maxRight = Math.min(maxRight, pr.left - TBL_UI_GAP);
+    } else {
+      // painel à esquerda → barra só à direita da borda do painel
+      minLeft = Math.max(minLeft, pr.right + TBL_UI_GAP);
+    }
+  }
+  const clampXInLane = (x) => {
+    let v = clampX(x);
+    // se a faixa útil for menor que a barra, mantém clamp de viewport
+    if (maxRight - minLeft >= bw) {
+      v = Math.max(minLeft, Math.min(v, maxRight - bw));
+    }
+    return v;
+  };
+
+  const anchors = [
+    // acima, centrado
+    () => ({
+      x: clampXInLane(cellRect.left + cellRect.width / 2 - bw / 2),
+      y: clampY(cellRect.top - bh - TBL_UI_GAP),
+    }),
+    // acima, alinhado à esquerda da célula
+    () => ({
+      x: clampXInLane(cellRect.left),
+      y: clampY(cellRect.top - bh - TBL_UI_GAP),
+    }),
+    // acima, alinhado à direita da célula (ainda na faixa)
+    () => ({
+      x: clampXInLane(cellRect.right - bw),
+      y: clampY(cellRect.top - bh - TBL_UI_GAP),
+    }),
+    // abaixo, centrado
+    () => ({
+      x: clampXInLane(cellRect.left + cellRect.width / 2 - bw / 2),
+      y: clampY(cellRect.bottom + TBL_UI_GAP),
+    }),
+    // abaixo, esquerda
+    () => ({
+      x: clampXInLane(cellRect.left),
+      y: clampY(cellRect.bottom + TBL_UI_GAP),
+    }),
+    // ao lado esquerdo da célula
+    () => ({
+      x: clampXInLane(cellRect.left - bw - TBL_UI_GAP),
+      y: clampY(cellRect.top + (cellRect.height - bh) / 2),
+    }),
+  ];
+
+  // candidatos forçados colados à borda livre do painel (último recurso útil)
+  for (const pr of forbidden) {
+    anchors.push(() => ({
+      x: clampXInLane(pr.left - bw - TBL_UI_GAP),
+      y: clampY(cellRect.top - bh - TBL_UI_GAP),
+    }));
+    anchors.push(() => ({
+      x: clampXInLane(pr.left - bw - TBL_UI_GAP),
+      y: clampY(cellRect.top),
+    }));
+    anchors.push(() => ({
+      x: clampXInLane(pr.right + TBL_UI_GAP),
+      y: clampY(cellRect.top - bh - TBL_UI_GAP),
+    }));
+  }
+
+  const dist = (p) => {
+    const cx = cellRect.left + cellRect.width / 2;
+    const cy = cellRect.top;
+    return Math.hypot(p.x + bw / 2 - cx, p.y + bh / 2 - cy);
+  };
+
+  let bestFree = null;
+  let bestFreeD = Infinity;
+  let bestAny = null;
+  let bestAnyD = Infinity;
+
+  for (const make of anchors) {
+    const p = make();
+    const box = boxOf(p.x, p.y, bw, bh);
+    const d = dist(p);
+    if (d < bestAnyD) { bestAnyD = d; bestAny = p; }
+    if (freeOfForbidden(box, forbidden) && d < bestFreeD) {
+      bestFreeD = d;
+      bestFree = p;
+    }
+  }
+  if (bestFree) return bestFree;
+
+  // força: cola à esquerda do primeiro painel (ou viewport), no Y da célula
+  if (forbidden.length) {
+    const pr = forbidden[0];
+    return {
+      x: clampX(pr.left - bw - TBL_UI_GAP),
+      y: clampY(cellRect.top - bh - TBL_UI_GAP),
+    };
+  }
+  return bestAny || {
+    x: clampX(cellRect.left + cellRect.width / 2 - bw / 2),
+    y: clampY(cellRect.top - bh - TBL_UI_GAP),
+  };
 }
 
 function paintTblCellColorButtonsSafe(colors) {
