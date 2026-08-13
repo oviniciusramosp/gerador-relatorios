@@ -38,11 +38,14 @@ export const HANDLE_GEOM = Object.freeze({
   },
 });
 
-/** Posições fixed (viewport) de [comentário] [+] [⠿] à esquerda do bloco. */
-export function handleLayout(rect, commentBtn = HANDLE_GEOM.H_BTN) {
+/** Posições fixed (viewport) de [comentário] [+] [⠿].
+ *  `xRect` = referência horizontal. Default = `rect`. Coluna direita passa o
+ *  .col-left da mesma página pra o pin não cair em cima do texto. */
+export function handleLayout(rect, commentBtn = HANDLE_GEOM.H_BTN, xRect = rect) {
   const { H_BTN, H_GAP, H_PAD, H_COMMENT_GAP } = HANDLE_GEOM;
+  const left = (xRect && xRect.left != null) ? xRect.left : rect.left;
   const midY = rect.top + rect.height / 2;
-  const dragLeft = rect.left - H_PAD - H_BTN;
+  const dragLeft = left - H_PAD - H_BTN;
   const addLeft = dragLeft - H_GAP - H_BTN;
   const commentLeft = addLeft - H_COMMENT_GAP - commentBtn;
   return { midY, dragLeft, addLeft, commentLeft };

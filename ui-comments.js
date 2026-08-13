@@ -5,6 +5,7 @@
  *   const comments = createCommentChrome({
  *     getHost(id) { return blockOrCoverItem(id); },
  *     getAnchorEl(id) { return envelopeEl(id); },
+ *     getAlignEl(id) { return colLeftOfSamePage(id) || envelopeEl(id); },
  *     onChange({ id, thread }) { writeThread(host, thread); save(); },
  *   });
  *   comments.sync([{ id, selected }]);
@@ -28,6 +29,7 @@ import {
  * @property {HTMLElement} [parent]
  * @property {(id: string) => object|null} getHost
  * @property {(id: string) => Element|null} getAnchorEl
+ * @property {(id: string) => Element|null} [getAlignEl] — X do pin (coluna esq. da página)
  * @property {(p: { id: string, thread: object }) => void} [onChange]
  * @property {(id: string) => void} [onOpen]
  */
@@ -117,8 +119,10 @@ export function createCommentChrome(opts = {}) {
       if (!el) { btn.hidden = true; continue; }
       const r = el.getBoundingClientRect();
       if (r.width < 4 || r.height < 4) { btn.hidden = true; continue; }
+      const alignEl = opts.getAlignEl?.(btn.dataset.id) || el;
+      const xr = alignEl && alignEl !== el ? alignEl.getBoundingClientRect() : r;
       const cBtn = btn.classList.contains('has-thread') ? HANDLE_GEOM.H_COMMENT_BTN : HANDLE_GEOM.H_BTN;
-      const { midY, commentLeft } = handleLayout(r, cBtn);
+      const { midY, commentLeft } = handleLayout(r, cBtn, xr);
       btn.style.left = commentLeft + 'px';
       btn.style.top = midY + 'px';
       btn.hidden = false;

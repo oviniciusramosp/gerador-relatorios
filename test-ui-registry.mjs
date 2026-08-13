@@ -62,6 +62,9 @@ assert.equal(HANDLE_GEOM.H_COMMENT_GUTTER, 72);
 assert.equal(typeof handleLayout, 'function');
 const lay = handleLayout({ left: 200, top: 40, height: 20 });
 assert.equal(lay.commentLeft, 200 - HANDLE_GEOM.H_PAD - HANDLE_GEOM.H_BTN - HANDLE_GEOM.H_GAP - HANDLE_GEOM.H_BTN - HANDLE_GEOM.H_COMMENT_GAP - HANDLE_GEOM.H_BTN);
+const right = handleLayout({ left: 400, top: 80, height: 40 }, HANDLE_GEOM.H_BTN, { left: 200 });
+assert.equal(right.commentLeft, lay.commentLeft, 'coluna direita alinha o X com a esquerda');
+assert.equal(right.midY, 100, 'Y continua no bloco da direita');
 
 // componentes ready críticos devem apontar módulos reais (não só CSS)
 assert.equal(uiById('widthSeg')?.module, 'ui-segment.js');

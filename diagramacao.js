@@ -5165,9 +5165,20 @@ function commentAnchorOf(id) {
     `.col-left > [data-id="${CSS.escape(id)}"], .col-right > [data-id="${CSS.escape(id)}"], .page-footnotes > [data-id="${CSS.escape(id)}"]`,
   ) || pagesEl.querySelector(`[data-id="${CSS.escape(id)}"]`);
 }
+/** X do pin = coluna esquerda da mesma página (direita não pode cair em cima do texto). */
+function commentAlignOf(id) {
+  const el = commentAnchorOf(id);
+  if (!el) return null;
+  if (el.closest('.col-right')) {
+    const left = el.closest('.page')?.querySelector('.col-left');
+    if (left) return left;
+  }
+  return el;
+}
 const commentChrome = createCommentChrome({
   getHost: commentHostOf,
   getAnchorEl: commentAnchorOf,
+  getAlignEl: commentAlignOf,
   onOpen(id) {
     if (findCoverItem(id)) selectCoverItem(id);
     else if (blockOf(id)) selectBlockFromHandle(id);
