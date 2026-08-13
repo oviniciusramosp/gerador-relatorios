@@ -28,7 +28,7 @@ import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser p
 import { mergePastedBlocks } from './paste-blocks.js';  // colar sobre seleção substitui; 1 p não abre bloco extra
 import {
   FOOTNOTE_RULE_GAP, footnoteZoneBottom,
-  assignFootnotes, noteStyleOf, isIndexFootnote,
+  assignFootnotes, noteStyleOf, isIndexFootnote, footnoteInnerGap,
 } from './footnote.js';  // nota acima da linha do rodapé (fora do CONTENT_H)
 import {
   stripTrailingPlaceholderBr, applyBlockHtml, readBlockHtml, markTrailingPlaceholderBr,
@@ -196,7 +196,7 @@ function colRightX() { return colL() + GAP; }
 // Sem placement explícito o default vem do TIPO: títulos H1–H4 e tabela ocupam as duas
 // colunas; o resto fica na esquerda. Ler sempre por placementOf() — nunca b.placement
 // direto — senão documentos antigos (sem o campo) perdem o default do tipo.
-const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid', 'table-grid', 'footnote']);
+const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid', 'table-grid']);
 const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : 'inline');
 // tipos com seletor "1 coluna / 2 colunas" (painel flutuante do bloco — não na sidebar)
 const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'caption', 'image-grid', 'table-grid']);
@@ -399,8 +399,29 @@ function applyCaptionFace(el, mode = 'default') {
 /** Face da nota: Rodapé = ⋮ da nota; Parágrafo = typeStyleOf('p') ao vivo (não snapshot). */
 function applyFootnoteFace(el, mode = 'default') {
   if (!el) return;
-  if (mode === 'p') { applyCaptionFace(el, 'p'); return; }
-  applyTypeStyle(el, 'footnote');
+  if (mode === 'p') applyCaptionFace(el, 'p');
+  else applyTypeStyle(el, 'footnote');
+  const gap = footnoteInnerGap(mode, typeStyleOf('p').gap, typeStyleOf('footnote').gap);
+  el.style.setProperty('--fn-para-gap', gap + 'px');
+}
+function footnoteHtmlOpts(b) {
+  return b && b.type === 'footnote' ? { keepEmptyBlocks: true } : undefined;
+}
+/** Texto/inline solto vira <div> pra o gap de parágrafo interno (div+div) aplicar. */
+function wrapLooseFootnoteInners(el) {
+  if (!el) return;
+  const isBlock = (n) => n.nodeType === 1 && (n.nodeName === 'DIV' || n.nodeName === 'P');
+  let n = el.firstChild;
+  while (n) {
+    if (isBlock(n) || (n.nodeType === 3 && !/\S/.test(n.nodeValue || ''))) {
+      n = n.nextSibling;
+      continue;
+    }
+    const wrap = document.createElement('div');
+    el.insertBefore(wrap, n);
+    while (wrap.nextSibling && !isBlock(wrap.nextSibling)) wrap.appendChild(wrap.nextSibling);
+    n = wrap.nextSibling;
+  }
 }
 function footnoteWidthOf(b) {
   return placementOf(b) === 'full' ? COL_FULL : colL();
@@ -1058,7 +1079,8 @@ function buildText(b, editing) {
   const isHead = HEAD_TYPES.has(b.type);
   const showHeadIcon = isHead && headHasIcon(b);
   const tag = isHead ? b.type
-    : b.type === 'quote' ? 'blockquote' : (b.type === 'li' || b.type === 'ol' || isCheck || isCallout) ? 'div' : 'p';
+    : b.type === 'quote' ? 'blockquote'
+      : (b.type === 'li' || b.type === 'ol' || b.type === 'footnote' || isCheck || isCallout) ? 'div' : 'p';
   const el = document.createElement(tag);
   // o texto do checklist/callout é interno SEM 'b' (moldura no envelope).
   // head com ícone MANTÉM 'b' + tipo no <hN> — senão perde .page h1.b { font-size:24px… }
@@ -1069,7 +1091,8 @@ function buildText(b, editing) {
         : 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
   el.dataset.id = b.id;
   el.dataset.ph = PH[b.type] || '';
-  applyBlockHtml(el, b.html);
+  applyBlockHtml(el, b.html, footnoteHtmlOpts(b));
+  if (b.type === 'footnote') wrapLooseFootnoteInners(el);
   if (editing) {
     el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR';  // corretor nativo PT-BR
   }
@@ -1210,7 +1233,9 @@ function paintActiveBlock(id) {
     `.col-left > [data-id="${id}"], .col-right > [data-id="${id}"], .page-footnotes > [data-id="${id}"]`
   ).forEach(el => {
     el.classList.add('active-block');
-    if (el.isContentEditable) markTrailingPlaceholderBr(el);
+    if (el.isContentEditable) {
+      markTrailingPlaceholderBr(el, el.classList.contains('footnote') ? { keepEmptyBlocks: true } : undefined);
+    }
   });
 }
 
@@ -4237,10 +4262,17 @@ pagesEl.addEventListener('keydown', (e) => {
   // ⌘⏎ / Ctrl+⏎ → quebra de página no cursor
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); breakAtCaret(host, b); return; }
 
-  // Shift+Enter → quebra de linha (explícito; evita <div> que alguns browsers metem)
+  // Shift+Enter → quebra de linha (explícito; evita <div> que alguns browsers metem).
   if (e.key === 'Enter' && e.shiftKey) {
     e.preventDefault();
     document.execCommand('insertLineBreak');
+    return;
+  }
+  // Nota: Enter cria parágrafo INTERNO (gap do ⋮ da face ativa) — não parte o bloco.
+  if (e.key === 'Enter' && b.type === 'footnote' && !(e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    wrapLooseFootnoteInners(host);
+    document.execCommand('insertParagraph');
     return;
   }
 
@@ -4327,6 +4359,11 @@ function enterAtCoverCaret(host, f) {
 }
 
 function enterAtCaret(host, b) {
+  // nota: 1 bloco por página — Enter nunca parte (keydown já insere parágrafo interno).
+  if (b.type === 'footnote') {
+    document.execCommand('insertParagraph');
+    return;
+  }
   const s0 = getSelection();
   if (s0 && !s0.isCollapsed) s0.deleteFromDocument();   // Enter sobre seleção apaga (Notion)
   const c = captureCaret();
@@ -4335,7 +4372,7 @@ function enterAtCaret(host, b) {
   // lista/citação/checklist vazia + Enter → desindenta (se subitem) ou vira parágrafo.
   // 'callout' entrou depois — é uma caixa avulsa, não uma lista, então Enter num callout
   // vazio deve sair dele (virar parágrafo), não deixar uma caixa vazia pra trás.
-  if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote' || b.type === 'check' || b.type === 'callout' || b.type === 'footnote') && !before.trim() && !after.trim()) {
+  if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote' || b.type === 'check' || b.type === 'callout') && !before.trim() && !after.trim()) {
     if (LIST_TYPES.has(b.type) && listIndentOf(b) > 0) {
       setListIndent(b, listIndentOf(b) - 1);
       b.html = '';
@@ -4344,15 +4381,12 @@ function enterAtCaret(host, b) {
     }
     b.type = 'p'; b.html = '';
     delete b.indent;
-    delete b.scope;
-    delete b.pinPage;
     render({ id: b.id, role: 'block', offset: 0 });
     return;
   }
   b.html = stripTrailingPlaceholderBr(before);
-  // título, citação, callout e nota de rodapé não continuam (viram parágrafo);
-  // lista/checklist continuam. Nota: 1 bloco por página — Enter não empilha outra nota.
-  const newType = (HEAD_TYPES.has(b.type) || b.type === 'callout' || b.type === 'quote' || b.type === 'footnote') ? 'p' : b.type;
+  // título, citação e callout não continuam (viram parágrafo); lista/checklist continuam.
+  const newType = (HEAD_TYPES.has(b.type) || b.type === 'callout' || b.type === 'quote') ? 'p' : b.type;
   const nb = mkBlock(newType, stripTrailingPlaceholderBr(after));
   // subitem: o novo item herda o nível do atual (continua a lista aninhada)
   if (LIST_TYPES.has(newType) && listIndentOf(b) > 0) nb.indent = listIndentOf(b);
@@ -4435,7 +4469,7 @@ pagesEl.addEventListener('input', (e) => {
   // com "/" seguido de não-espaços (o filtro); um espaço fecha, como no Notion. Não colide com
   // os atalhos "#/>/-/1./---" (nenhum começa com "/") nem com "/" no meio de uma frase (t[0]≠'/').
   if (TEXT_TYPES.has(b.type) && t[0] === '/' && /^\/(\S*)$/.test(t)) {
-    b.html = readBlockHtml(host); save();            // mantém o "/filtro" e o caret; o menu só escolhe
+    b.html = readBlockHtml(host, footnoteHtmlOpts(b)); save();            // mantém o "/filtro" e o caret; o menu só escolhe
     slash.open(b.id, t.slice(1));
     return;
   }
@@ -4463,8 +4497,11 @@ pagesEl.addEventListener('input', (e) => {
     render({ id: nb.id, role: 'block', offset: 0 });
     return;
   }
-  b.html = readBlockHtml(host);
+  b.html = readBlockHtml(host, footnoteHtmlOpts(b));
   syncTypeUI(b.type);
+  // nota mora fora do fluxo: rebuild de 180ms roubava o caret do parágrafo
+  // vazio (offset cai no fim da linha de cima) e o strip comia a linha nova.
+  if (b.type === 'footnote') { save(); return; }
   // reflow depois de pausar de digitar (evita rebuild a cada tecla)
   clearTimeout(inputT); inputT = setTimeout(() => render(), 180);
 });
@@ -4764,18 +4801,22 @@ let phBrObs = null;
 function stopPhBrWatch() {
   if (phBrObs) { phBrObs.disconnect(); phBrObs = null; }
 }
+function phBrOpts(el) {
+  return el && el.classList && el.classList.contains('footnote') ? { keepEmptyBlocks: true } : undefined;
+}
 function startPhBrWatch(el) {
   stopPhBrWatch();
   if (!el) return;
-  markTrailingPlaceholderBr(el);
-  phBrObs = new MutationObserver(() => markTrailingPlaceholderBr(el));
+  const opts = phBrOpts(el);
+  markTrailingPlaceholderBr(el, opts);
+  phBrObs = new MutationObserver(() => markTrailingPlaceholderBr(el, opts));
   phBrObs.observe(el, { childList: true, subtree: true });
   // Chrome/Safari metem o <br> depois do focusin — um frame extra pega o caso
-  requestAnimationFrame(() => markTrailingPlaceholderBr(el));
+  requestAnimationFrame(() => markTrailingPlaceholderBr(el, opts));
 }
 pagesEl.addEventListener('focusout', (e) => {
   const host = e.target.closest && e.target.closest('[contenteditable]');
-  if (host) markTrailingPlaceholderBr(host);
+  if (host) markTrailingPlaceholderBr(host, phBrOpts(host));
   stopPhBrWatch();
 });
 
@@ -5297,8 +5338,8 @@ function hitHandleTarget(clientX, clientY) {
     const blk = under.closest('.col-left > [data-id], .col-right > [data-id], .page-footnotes > [data-id]');
     if (blk) return { el: blk, kind: 'miolo', id: blk.dataset.id };
   }
-  // gutter à esquerda de cada bloco do miolo (faixa dos botões + folga)
-  for (const el of pagesEl.querySelectorAll('.col-left > [data-id], .col-right > [data-id], .page-footnotes > [data-id]')) {
+  // gutter à esquerda do texto / notas (não da col-right: o pin dela mora na faixa da esq.)
+  for (const el of pagesEl.querySelectorAll('.col-left > [data-id], .page-footnotes > [data-id]')) {
     const r = el.getBoundingClientRect();
     if (clientY >= r.top && clientY <= r.bottom
       && clientX >= r.left - H_COMMENT_GUTTER - 4 && clientX < r.left + 2) {

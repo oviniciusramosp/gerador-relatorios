@@ -13,11 +13,18 @@
 const TRAILING_DIV_BR = /<div(?:\s[^>]*)?>\s*<br(?:\s[^>]*)?\s*\/?>\s*<\/div>\s*$/i;
 const TRAILING_BR = /<br(?:\s[^>]*)?\s*\/?>\s*$/i;
 
-/** Remove um único <br> / <div><br></div> colado no fim do HTML. */
-export function stripTrailingPlaceholderBr(html) {
+/**
+ * Remove um único <br> / <div><br></div> colado no fim do HTML.
+ * keepEmptyBlocks: <div><br></div> / <p><br></p> no fim é parágrafo vazio
+ * de verdade (Enter na nota de rodapé) — não é placeholder do caret.
+ */
+export function stripTrailingPlaceholderBr(html, opts) {
   const s = String(html ?? '');
   if (!s) return '';
-  if (TRAILING_DIV_BR.test(s)) return s.replace(TRAILING_DIV_BR, '');
+  if (TRAILING_DIV_BR.test(s)) {
+    if (opts && opts.keepEmptyBlocks) return s;
+    return s.replace(TRAILING_DIV_BR, '');
+  }
   return s.replace(TRAILING_BR, '');
 }
 
@@ -53,24 +60,26 @@ export function isPlaceholderBreak(n) {
 /**
  * Marca o placeholder do fim com .br-ph (CSS display:none). Não mexe num
  * bloco que só tem o <br> — parágrafo em branco precisa da linha.
+ * keepEmptyBlocks: <div>/<p> vazio no fim fica visível (parágrafo interno).
  */
-export function markTrailingPlaceholderBr(el) {
+export function markTrailingPlaceholderBr(el, opts) {
   if (!el || !el.querySelectorAll) return;
   el.querySelectorAll('.br-ph').forEach((n) => n.classList.remove('br-ph'));
   const last = lastMeaningful(el);
   if (!last || !isPlaceholderBreak(last)) return;
   if (!previousMeaningful(last)) return;
+  if (opts && opts.keepEmptyBlocks && last.nodeName !== 'BR') return;
   last.classList.add('br-ph');
 }
 
-export function applyBlockHtml(el, html) {
+export function applyBlockHtml(el, html, opts) {
   if (!el) return;
-  el.innerHTML = stripTrailingPlaceholderBr(html);
-  markTrailingPlaceholderBr(el);
+  el.innerHTML = stripTrailingPlaceholderBr(html, opts);
+  markTrailingPlaceholderBr(el, opts);
 }
 
-export function readBlockHtml(el) {
+export function readBlockHtml(el, opts) {
   if (!el) return '';
-  markTrailingPlaceholderBr(el);
-  return stripTrailingPlaceholderBr(el.innerHTML);
+  markTrailingPlaceholderBr(el, opts);
+  return stripTrailingPlaceholderBr(el.innerHTML, opts);
 }

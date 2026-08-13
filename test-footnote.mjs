@@ -11,6 +11,7 @@ import {
   assignFootnotes,
   noteStyleOf,
   isIndexFootnote,
+  footnoteInnerGap,
 } from './footnote.js';
 
 // estilo: ausente/lixo = Rodapé; só 'p' vira Parágrafo (campo aditivo)
@@ -19,6 +20,15 @@ assert.equal(noteStyleOf({}), 'default');
 assert.equal(noteStyleOf({ noteStyle: 'default' }), 'default');
 assert.equal(noteStyleOf({ noteStyle: 'rodape' }), 'default');
 assert.equal(noteStyleOf({ noteStyle: 'p' }), 'p');
+
+// parágrafo interno: face decide qual ⋮ manda no gap (NaN/ausente → default)
+assert.equal(footnoteInnerGap('default', 14, 4), 4);
+assert.equal(footnoteInnerGap('p', 14, 4), 14);
+assert.equal(footnoteInnerGap('p', 22, 4), 22);
+assert.equal(footnoteInnerGap('default', 14, 8), 8);
+assert.equal(footnoteInnerGap('default', 14, undefined), 4);
+assert.equal(footnoteInnerGap('p', undefined, 4), 14);
+assert.equal(footnoteInnerGap('p', NaN, 4), 14);
 
 // geometria da spec: conteúdo [88..754], linha do rodapé base 803
 assert.equal(footnoteDeadZone(88, 666, 803, 0.5, FOOTNOTE_RULE_GAP), 42.5);

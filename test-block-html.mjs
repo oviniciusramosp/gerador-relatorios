@@ -34,6 +34,20 @@ assert.equal(stripTrailingPlaceholderBr('texto<div><br></div>'), 'texto');
 assert.equal(stripTrailingPlaceholderBr('texto<div><br/></div>'), 'texto');
 assert.equal(stripTrailingPlaceholderBr('texto<div class="x"><br></div>'), 'texto');
 
+// nota: Enter cria <div><br></div> real — keepEmptyBlocks não come a linha nova
+assert.equal(
+  stripTrailingPlaceholderBr('texto<div><br></div>', { keepEmptyBlocks: true }),
+  'texto<div><br></div>',
+);
+assert.equal(
+  stripTrailingPlaceholderBr('<div>a</div><div><br></div>', { keepEmptyBlocks: true }),
+  '<div>a</div><div><br></div>',
+);
+assert.equal(
+  stripTrailingPlaceholderBr('texto<br>', { keepEmptyBlocks: true }),
+  'texto',
+);
+
 // Shift+Enter no fim: dois <br> → sobra um (a linha nova intencional)
 assert.equal(stripTrailingPlaceholderBr('linha<br><br>'), 'linha<br>');
 assert.equal(stripTrailingPlaceholderBr('linha<br><div><br></div>'), 'linha<br>');

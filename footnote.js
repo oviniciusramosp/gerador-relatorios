@@ -12,6 +12,19 @@ export function noteStyleOf(b) {
   return b && b.noteStyle === 'p' ? 'p' : 'default';
 }
 
+const P_GAP_DEFAULT = 14;
+const FN_GAP_DEFAULT = 4;
+
+/** Gap entre parágrafos INTERNOS da nota: face Parágrafo → ⋮ do p; Rodapé → ⋮ da nota. */
+export function footnoteInnerGap(noteStyle, pGap, fnGap) {
+  if (noteStyle === 'p') {
+    const n = +pGap;
+    return Number.isFinite(n) ? n : P_GAP_DEFAULT;
+  }
+  const n = +fnGap;
+  return Number.isFinite(n) ? n : FN_GAP_DEFAULT;
+}
+
 /** Nota da página Índice/Resumo — não entra no miolo. */
 export function isIndexFootnote(b) {
   return !!(b && b.type === 'footnote' && b.scope === 'index');
