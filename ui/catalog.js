@@ -8,6 +8,8 @@ import { openSwatchPop } from '../swatch.js';
 import { enhanceAll } from '../range-snap.js';
 import { registerUiIcons, uiIco } from '../ui-icons.js';
 import { createBlockHandles } from '../ui-handles.js';
+import { createCommentChrome } from '../ui-comments.js';
+import { writeThread, emptyThread } from '../comments.js';
 import { ensureFmtbarChrome } from '../ui-fmtbar.js';
 import { initAppNav } from '../app-nav.js';
 import { initFeedback } from '../feedback.js';
@@ -214,6 +216,39 @@ function buildDemo(comp) {
           h.placeAtElement(target, 'demo-block');
         });
         box.querySelector('#handleHideBtn')?.addEventListener('click', () => h.hide());
+      });
+      return box;
+    }
+    case 'block-comments': {
+      const box = el(`
+        <div class="stack">
+          <p class="hint">Pin real de <code>createCommentChrome()</code> + thread (concluir / editar / excluir / responder).</p>
+          <div class="handle-stage" id="commentStageDemo">
+            <div class="handle-target" id="commentTargetDemo">Parágrafo de exemplo</div>
+          </div>
+          <button type="button" class="fieldbtn" id="commentShowBtn">Mostrar pin neste bloco</button>
+          <button type="button" class="fieldbtn" id="commentHideBtn">Esconder</button>
+        </div>`);
+      queueMicrotask(() => {
+        const host = { id: 'demo-comment', comments: undefined };
+        const target = box.querySelector('#commentTargetDemo');
+        const chrome = createCommentChrome({
+          parent: document.body,
+          getHost: () => host,
+          getAnchorEl: () => target,
+          onChange({ thread }) {
+            writeThread(host, thread);
+            chrome.sync([{ id: 'demo-comment', selected: true }]);
+          },
+        });
+        box.querySelector('#commentShowBtn')?.addEventListener('click', () => {
+          chrome.sync([{ id: 'demo-comment', selected: true }]);
+        });
+        box.querySelector('#commentHideBtn')?.addEventListener('click', () => {
+          writeThread(host, emptyThread());
+          chrome.close();
+          chrome.sync([]);
+        });
       });
       return box;
     }

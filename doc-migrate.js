@@ -9,6 +9,8 @@
  * (resumoOn, levels, ruleTop legado, logo da capa, type title/subtitle…).
  */
 
+import { normalizeDocComments } from './comments.js';
+
 export const RULE_W_DEFAULT = 0.5;
 export const RULE_W_LEGACY = 1;
 export const RULE_W_MIN = 0.25;
@@ -146,6 +148,8 @@ export function normalizeOpenedDoc(doc, raw = null) {
   // Regras do Miolo (paginação): default off; docs antigos sem o campo não reflowam
   ensureMioloRules(doc);
   migrateSpecialPages(doc);
+  // comments: campo aditivo no bloco/item. Ausente = sem thread. Lixo/vazio some.
+  normalizeDocComments(doc);
   return doc;
 }
 

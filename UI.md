@@ -88,6 +88,7 @@ canvas claro do miolo (`#4E39FF` no papel branco) — documentado no registry
 | `range-snap` | `range-snap.js` | `enhanceAll(root)` |
 | `ui-icons` | `ui-icons.js` | `registerUiIcons(); uiIco('menu', 18)` |
 | `notion-handles` | `ui-handles.js` | `createBlockHandles({ onMenuAction, … })` |
+| `block-comments` | `ui-comments.js` + `comments.js` | `createCommentChrome({ getHost, getAnchorEl, onChange })` |
 | `fmtbar` | `ui-fmtbar.js` | `ensureFmtbarChrome({ captionMode: true, withLink: false })` — Stories sem hyperlink |
 | `editor-shell` | `ui-shell.js` | `bindEditorShell({ onZoomFit, onZoomPct, … })` + `body.app-editor` |
 | `focus-ring` | `.focus-ring` | class no bloco selecionado |

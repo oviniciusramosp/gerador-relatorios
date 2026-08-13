@@ -60,7 +60,8 @@ import {
   IMAGE_GRID_MAX, IMAGE_GRID_GAP, IMAGE_GRID_GAP_MAX,
 } from './bloco-image-grid.js';import {
   buildTableGridEl, ensureTableGrid, tableGridEqualModeOf, tableGridEqualRowsOf,
-  tableGridGapOf, clampTableGridGap, setTableGridCols, applyTableStylesToGrid,
+  tableGridGapOf, clampTableGridGap, setTableGridCols, removeTableGridItem,
+  applyTableStylesToGrid,
   finalizeTableGridLayouts,
   TABLE_GRID_MAX, TABLE_GRID_GAP, TABLE_GRID_GAP_MAX,
 } from './bloco-table-grid.js';
@@ -91,7 +92,12 @@ import {
 import { initFeedback, openFeedbackReport } from './feedback.js';
 import { initAppNav } from './app-nav.js';
 import { COL_ICON, ALIGN_ICON, POS_ICON, widthSeg, textSeg } from './ui-segment.js';
-import { createBlockHandles, HANDLE_GEOM } from './ui-handles.js';
+import { createBlockHandles, HANDLE_GEOM, handleLayout } from './ui-handles.js';
+import {
+  hasOpenComments, writeThread, stripComments,
+  countCommentsByHeading, countCommentsOnItems, firstCommentedBlockId,
+} from './comments.js';
+import { createCommentChrome } from './ui-comments.js';
 registerIcons(IONICONS_LIB);                          // outline (default do app)
 registerIcons(IONICONS_LIB_SOLID, { style: 'solid' }); // filled (callout default)
 
@@ -1420,7 +1426,7 @@ function tableStyleFieldsHtml(b, mode = 'full') {
   let texto = '';
   let borda = '';
 
-  if (showStruct) {
+  if (showStruct || isItem) {
     tabela += `
     <div class="swrow"><span>Divisórias Verticais</span>
       <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>`;
@@ -1443,7 +1449,7 @@ function tableStyleFieldsHtml(b, mode = 'full') {
     <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
     <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>`;
   }
-  if (showShared) {
+  if (showStruct || isItem) {
     texto += `
     <label class="field"><span class="field-row">Tamanho da fonte <span class="field-val"><span data-role="fsv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar (use . ou ,). Shift no slider = 0,1 px">${fmtFontSize(fontSize)}</span>px<button type="button" class="resetbtn" data-a="fsreset" title="Redefinir para ${DEFAULT_TABLE_FONT_SIZE}px">↺</button></span></span>
       <input type="range" data-a="fontSize" min="${TABLE_FONT_SIZE_MIN}" max="${TABLE_FONT_SIZE_MAX}" step="${FONT_SIZE_FINE_STEP}" value="${fontSize}" data-snaps="6,8,10,12,14,16,18,24" data-fine-step="${FONT_SIZE_FINE_STEP}" data-edit="off">
@@ -1470,7 +1476,7 @@ function tableStyleFieldsHtml(b, mode = 'full') {
       </div>
     </div>`;
   }
-  if (showShared) {
+  if (showStruct || isItem) {
     borda += `
     <div class="field tbl-color-fields">
       <div class="field-row">Linhas
@@ -1479,7 +1485,10 @@ function tableStyleFieldsHtml(b, mode = 'full') {
           ${tblColorBtnHtml('borderInner', inner, 'fill', 'Linhas internas')}
         </span>
       </div>
-    </div>
+    </div>`;
+  }
+  if (showShared) {
+    borda += `
     <label class="field"><span class="field-row">Espessura externa <span class="field-val"><span data-role="bwov" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${bwOuter}</span>px<button type="button" class="resetbtn" data-a="bworeset" title="Redefinir para ${DEFAULT_BORDER_WIDTH}px">↺</button></span></span>
       <input type="range" data-a="borderWidthOuter" min="${TABLE_BORDER_WIDTH_MIN}" max="${TABLE_BORDER_WIDTH_MAX}" step="0.5" value="${bwOuter}" data-snaps="0,0.5,1,1.5,2,3,4" data-edit="off">
     </label>
@@ -2318,6 +2327,7 @@ function openTableGridPanel() {
   // body: layout/shared OU cores da tabela + estrutura
   const canApplyStyles = onItem && n > 1;
   const applyIco = uiIco('color-palette', 16, 'outline');
+  const delLabel = onItem ? `Remover Tabela ${itemIdx + 1}` : 'Remover Grid';
   tableGridPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Grid de Tabelas</div>
     <div class="field">Editando<div data-slot="focus"></div></div>
@@ -2326,13 +2336,13 @@ function openTableGridPanel() {
       title="${canApplyStyles
         ? 'Copia o visual desta tabela (cores, texto, borda) para as outras do grid.'
         : 'Adicione outra tabela no grid para aplicar estilos'}">${applyIco}<span>Aplicar estilos ao Grid</span></button>` : ''}
-    <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
+    <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>${delLabel}</span></button>`;
   tableGridPanel.hidden = false;
 
   const body = tableGridPanel.querySelector('[data-slot="body"]');
   if (onItem && it) {
-    // mesmo menu da tabela isolada (Tabela | Texto | Borda)
-    body.innerHTML = tableStyleFieldsHtml(resolveGridTableItem(b, it), 'full');
+    // por tabela: fonte, altura, cores (incl. linhas). Espessura/raio ficam no Grid.
+    body.innerHTML = tableStyleFieldsHtml(resolveGridTableItem(b, it), 'item');
   } else {
     body.innerHTML = `
       ${mioloGrid ? `<div class="field">Largura<div data-slot="place"></div></div>` : ''}
@@ -2533,6 +2543,14 @@ function openTableGridPanel() {
   enhanceAll(tableGridPanel);
 
   tableGridPanel.querySelector('[data-a="del"]')?.addEventListener('click', () => {
+    if (onItem) {
+      if (removeTableGridItem(b, itemIdx)) {
+        tableGridFocus = 'grid';
+        save(); scheduleCommit();
+        reopen();
+        return;
+      }
+    }
     tableGridCtx.removeBlock(b.id);
     tableGridFocus = 'grid';
     closeTableGridPanel();
@@ -2544,13 +2562,13 @@ function openTableGridPanel() {
 function positionTableGridPanel() {
   if (!tableGridPanel || tableGridPanel.hidden) return;
   const b = activeTableGridBlock();
+  // sempre o wrap do GRID — não a tabela focada (senão o painel cai no meio)
   const el = b && pagesEl.querySelector(`.tblgrid-wrap[data-id="${b.id}"]`);
   if (!el) return;
   const r = el.getBoundingClientRect();
   const pw = tableGridPanel.offsetWidth || 220;
   const ph = tableGridPanel.offsetHeight || 200;
-  const avoid = tblCellBarRectIfVisible();
-  const pos = placeSidePanelBesideHost(r, pw, ph, avoid);
+  const pos = placeBlockPanelRight(r, pw, ph);
   tableGridPanel.style.left = pos.x + 'px';
   tableGridPanel.style.top = pos.y + 'px';
   if (tblCellBar && !tblCellBar.hidden) updateTblCellBar();
@@ -3069,6 +3087,7 @@ function render(caret /* optional {id,offset,role} */) {
   }
   updatePreviewToc();
   layoutCoverColAdds();
+  syncCommentPins();
   save();
   scheduleCommit();
 }
@@ -3323,6 +3342,7 @@ const PREVIEW_TOC_CLOSE_MS = 1400;   // “muito tempo” fora → fecha sozinho
 let previewTocCloseT = null;
 let previewTocForceClosed = false;  // 2º clique fechou com mouse ainda em cima → não reabre no hover
 let previewTocCheckIco = '';        // ion-icon name="checkmark-circle" (solid), cacheado no init
+let previewTocCommentIco = '';      // chatbubble 12 outline, cacheado no init
 
 function reviewedList() {
   if (!Array.isArray(state.doc.reviewed)) state.doc.reviewed = [];
@@ -3487,8 +3507,15 @@ function updatePreviewToc() {
   panel.replaceChildren();
   const head = document.createElement('div');
   head.className = 'preview-toc-head';
-  head.innerHTML = '<span class="preview-toc-h-idx">Índice</span><span class="preview-toc-h-rev">Revisado</span>';
+  head.innerHTML = '<span class="preview-toc-h-idx">Índice</span><span class="preview-toc-h-cmt" aria-hidden="true"></span><span class="preview-toc-h-rev">Revisado</span>';
   panel.appendChild(head);
+
+  const chapterCounts = countCommentsByHeading(state.doc.blocks);
+  const countFor = (id) => {
+    if (id === PREVIEW_TOC_ID.cover) return countCommentsOnItems(state.doc.cover?.items);
+    if (id === PREVIEW_TOC_ID.back) return countCommentsOnItems(state.doc.back?.items);
+    return chapterCounts.get(id) || 0;
+  };
 
   const ico = previewTocCheckIco || uiIco('checkmark-circle', 16, 'solid');
   for (const r of rows) {
@@ -3505,6 +3532,21 @@ function updatePreviewToc() {
     item.textContent = r.text;
     item.title = r.text;
 
+    const n = countFor(r.id);
+    const countSlot = document.createElement('button');
+    countSlot.type = 'button';
+    countSlot.className = 'preview-toc-count' + (n ? '' : ' is-empty');
+    countSlot.tabIndex = n ? 0 : -1;
+    if (n) {
+      countSlot.dataset.id = r.id;
+      const icoC = previewTocCommentIco || uiIco('chatbubble', 12, 'outline');
+      countSlot.innerHTML = icoC + '<span>' + (n > 99 ? '99+' : String(n)) + '</span>';
+      countSlot.title = n === 1 ? '1 comentário' : `${n} comentários`;
+      countSlot.setAttribute('aria-label', countSlot.title);
+    } else {
+      countSlot.setAttribute('aria-hidden', 'true');
+    }
+
     const check = document.createElement('button');
     check.type = 'button';
     check.className = 'preview-toc-check';
@@ -3514,7 +3556,7 @@ function updatePreviewToc() {
     check.title = reviewed ? 'Desmarcar revisado' : 'Marcar como revisado';
     check.innerHTML = ico;
 
-    row.append(item, check);
+    row.append(item, countSlot, check);
     panel.appendChild(row);
   }
 }
@@ -3526,6 +3568,7 @@ function initPreviewToc() {
   // ion-icon name="list-outline" / checkmark-circle (solid, sem -outline)
   btn.innerHTML = uiIco('list', 18, 'outline');
   previewTocCheckIco = uiIco('checkmark-circle', 16, 'solid');
+  previewTocCommentIco = uiIco('chatbubble', 12, 'outline');
 
   // entra no botão/lista → abre (salvo se o usuário acabou de fechar no 2º clique)
   nav.addEventListener('mouseenter', () => {
@@ -3567,6 +3610,18 @@ function initPreviewToc() {
       e.preventDefault();
       e.stopPropagation();
       togglePreviewTocReviewed(check.dataset.id);
+      return;
+    }
+    const countBtn = e.target.closest && e.target.closest('button.preview-toc-count');
+    if (countBtn && countBtn.dataset.id) {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = countBtn.dataset.id;
+      if (id === PREVIEW_TOC_ID.cover || id === PREVIEW_TOC_ID.back || id === PREVIEW_TOC_ID.index) {
+        scrollStageToPreviewToc(id);
+        return;
+      }
+      scrollStageToBlock(firstCommentedBlockId(state.doc.blocks, id));
       return;
     }
     const item = e.target.closest && e.target.closest('.preview-toc-item');
@@ -4003,6 +4058,7 @@ function applyZoom() {
   // compensa a altura “perdida” pelo scale pra o scroll bater certo
   pagesEl.style.marginBottom = `-${(1 - z) * pagesEl.offsetHeight}px`;
   syncZoomUI(z);
+  commentChrome.position();
 }
 function openZoomPop() {
   if (!zoomPop || !zoomPctBtn) return;
@@ -4619,6 +4675,7 @@ function duplicateCoverItem(id) {
   const h = node ? node.offsetHeight : 24;
   const copy = structuredClone(f.item);
   copy.id = uid();
+  stripComments(copy);
   copy.y = Math.min((f.item.y || 0) + h + GAP_CV, COVER_AREA_H - 30);
   f.list.splice(f.idx + 1, 0, copy);
   state.sel = copy.id;
@@ -5021,8 +5078,8 @@ function showSnapGuide(content, y) {
 // geometria da gutter Notion: [+][dragger] | bloco — botões 16×16, alinhados ao meio do bloco
 // H_PAD 10 = 6+4 (dragger 4px mais à esquerda, longe das alças da tabela)
 // H_GAP 0 = sem vão entre o “+” e o dragger — canônico em ui-handles.HANDLE_GEOM
-const H_BTN = HANDLE_GEOM.H_BTN, H_GAP = HANDLE_GEOM.H_GAP, H_PAD = HANDLE_GEOM.H_PAD;
-const H_GUTTER = HANDLE_GEOM.H_GUTTER;
+// H_COMMENT_GAP 10 = comentário mais à esquerda do + do que o + do dragger
+const H_COMMENT_GUTTER = HANDLE_GEOM.H_COMMENT_GUTTER;
 // ícone de UI Ionicons (viewBox 512) em currentColor, centrado no botão
 const uiIco = (key, size = 12, style = 'outline') =>
   iconSvg(key, { x: 0, y: 0, w: size, h: size }, 'currentColor', 1.8, style, true)
@@ -5055,6 +5112,57 @@ const blockHandles = createBlockHandles({
 const bhandle = blockHandles.bhandle;
 const badd = blockHandles.badd;
 const bmenu = blockHandles.bmenu;
+
+function commentHostOf(id) {
+  return blockOf(id) || findCoverItem(id)?.item || null;
+}
+function commentAnchorOf(id) {
+  if (!id) return null;
+  const cov = pagesEl.querySelector(`.cover-item[data-cid="${CSS.escape(id)}"]`);
+  if (cov) return cov;
+  return pagesEl.querySelector(
+    `.col-left > [data-id="${CSS.escape(id)}"], .col-right > [data-id="${CSS.escape(id)}"], .page-footnotes > [data-id="${CSS.escape(id)}"]`,
+  ) || pagesEl.querySelector(`[data-id="${CSS.escape(id)}"]`);
+}
+const commentChrome = createCommentChrome({
+  getHost: commentHostOf,
+  getAnchorEl: commentAnchorOf,
+  onOpen(id) {
+    if (findCoverItem(id)) selectCoverItem(id);
+    else if (blockOf(id)) selectBlockFromHandle(id);
+  },
+  onChange({ id, thread }) {
+    writeThread(commentHostOf(id), thread);
+    save();
+    scheduleCommit();
+    syncCommentPins();
+    updatePreviewToc();
+  },
+});
+function syncCommentPins(hoverId = null) {
+  const entries = [];
+  const seen = new Set();
+  const add = (id, selected) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    entries.push({ id, selected: !!selected });
+  };
+  for (const b of state.doc.blocks || []) {
+    if (hasOpenComments(b)) add(b.id, b.id === state.activeId);
+  }
+  for (const cov of [state.doc.cover, state.doc.back]) {
+    for (const it of cov?.items || []) {
+      if (hasOpenComments(it)) add(it.id, it.id === state.sel);
+    }
+  }
+  // hover OU selecionado: pin temporário (mesmo critério do + / ⠿)
+  if (!idxFocus) {
+    if (hoverId && commentHostOf(hoverId)) add(hoverId, hoverId === (state.sel || state.activeId));
+    const selId = state.sel || state.activeId;
+    if (selId && commentHostOf(selId)) add(selId, true);
+  }
+  commentChrome.sync(entries);
+}
 let bmenuId = null;
 function closeBlockMenu() {
   blockHandles.closeMenu();
@@ -5108,6 +5216,7 @@ function duplicateBlock(id) {
   // clone profundo (tabela.rows, image.src, callout…) + id novo
   const copy = structuredClone(src);
   copy.id = uid();
+  stripComments(copy); // thread é do bloco original, não do clone
   state.doc.blocks.splice(i + 1, 0, copy);
   state.activeId = copy.id;
   state.sel = null;
@@ -5172,7 +5281,15 @@ function focusedHandleTarget() {
 function hitHandleTarget(clientX, clientY) {
   const under = document.elementFromPoint(clientX, clientY);
   if (under) {
-    if (under.closest('#bhandle') || under.closest('#badd') || under.closest('#bmenu')) {
+    const pin = under.closest('.blk-comment-pin');
+    if (pin && pin.dataset.id) {
+      const id = pin.dataset.id;
+      const el = commentAnchorOf(id);
+      const kind = el && el.classList.contains('cover-item') ? 'cover' : 'miolo';
+      return { el, kind, id, sticky: true };
+    }
+    if (under.closest('#bhandle') || under.closest('#badd') || under.closest('#bmenu')
+      || under.closest('#commentPanel')) {
       return handleFor ? { el: handleFor._el || null, kind: handleFor.kind, id: handleFor.id, sticky: true } : null;
     }
     const cov = under.closest('.cover-item');
@@ -5184,14 +5301,14 @@ function hitHandleTarget(clientX, clientY) {
   for (const el of pagesEl.querySelectorAll('.col-left > [data-id], .col-right > [data-id], .page-footnotes > [data-id]')) {
     const r = el.getBoundingClientRect();
     if (clientY >= r.top && clientY <= r.bottom
-      && clientX >= r.left - H_GUTTER - 4 && clientX < r.left + 2) {
+      && clientX >= r.left - H_COMMENT_GUTTER - 4 && clientX < r.left + 2) {
       return { el, kind: 'miolo', id: el.dataset.id };
     }
   }
   for (const el of pagesEl.querySelectorAll('.cover-item')) {
     const r = el.getBoundingClientRect();
     if (clientY >= r.top && clientY <= r.bottom
-      && clientX >= r.left - H_GUTTER - 4 && clientX < r.left + 2) {
+      && clientX >= r.left - H_COMMENT_GUTTER - 4 && clientX < r.left + 2) {
       return { el, kind: 'cover', id: el.dataset.cid };
     }
   }
@@ -5218,16 +5335,17 @@ function placeHandle(t) {
     }
   }
   // miolo na coluna direita: sem ⠿ / + (igual imagem)
-  if (t.kind === 'miolo' && isRightPlacement(t.id)) {
-    bhandle.hidden = true; badd.hidden = true; handleFor = null; return;
+  // nota de rodapé: mora fora do fluxo — sem ⠿ / +; Remover fica no painel
+  if (t.kind === 'miolo') {
+    const blk = t.id && blockOf(t.id);
+    if (isRightPlacement(t.id) || (blk && blk.type === 'footnote')) {
+      bhandle.hidden = true; badd.hidden = true; handleFor = null; return;
+    }
   }
   handleFor = { kind: t.kind, id: t.id, _el: t.el };
   const r = t.el.getBoundingClientRect();
-  // eixo vertical = centro do bloco; botões 20px alinhados entre si
-  // [+] [gap] [⠿] [pad] | bloco
-  const midY = r.top + r.height / 2;
-  const dragLeft = r.left - H_PAD - H_BTN;
-  const addLeft = dragLeft - H_GAP - H_BTN;
+  // [comentário] [gap maior] [+] [gap 0] [⠿] [pad] | bloco
+  const { midY, dragLeft, addLeft } = handleLayout(r);
   bhandle.style.left = dragLeft + 'px';
   bhandle.style.top = midY + 'px';
   bhandle.hidden = false;
@@ -5236,9 +5354,11 @@ function placeHandle(t) {
   badd.style.top = midY + 'px';
   badd.hidden = false;
 }
+let commentHoverId = null;
 const showHandleAtFocused = () => {
-  if (idxFocus) { bhandle.hidden = true; badd.hidden = true; handleFor = null; return; }
+  if (idxFocus) { bhandle.hidden = true; badd.hidden = true; handleFor = null; syncCommentPins(); return; }
   if (!bdrag && !cdrag && !drag && !handlePending) placeHandle(focusedHandleTarget());
+  syncCommentPins(commentHoverId);
 };
 
 // document (não só #pages): +/dragger moram no body — saindo do bloco pro botão
@@ -5248,6 +5368,11 @@ document.addEventListener('mousemove', (e) => {
   if (idxFocus) return;
   const hov = hitHandleTarget(e.clientX, e.clientY);
   placeHandle(hov || focusedHandleTarget());
+  const hid = hov?.id || null;
+  if (hid !== commentHoverId) {
+    commentHoverId = hid;
+    syncCommentPins(hid);
+  }
 });
 
 // alça: click = seleciona + menu Duplicar/Remover; arrastar = reordenar / capa Y
@@ -5866,8 +5991,8 @@ document.addEventListener('mousedown', (e) => {
   const t = e.target;
   if (!(t && t.closest)) return;
   // âncoras e popovers que devem permanecer abertos
-  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #tblCellBar, #linkedit, #rightLayerMenu')) return;
-  if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu')) return;
+  if (t.closest('#imgPanel, #tablePanel, #imageGridPanel, #tableGridPanel, #iconPanel, #textPlacePanel, #coverPanel, #logoPanel, #idxPanel, #resumoPanel, #blockStylePanel, #downloadMenu, #zoomPop, #addImgMenu, #bmenu, #fmtbar, #calloutBar, #tblCellBar, #linkedit, #rightLayerMenu, #commentPanel')) return;
+  if (t.closest('.swatch-pop, .ico-pop, .tbl-menu, .blockmenu, .blk-comment-pin')) return;
   if (t.closest('#btnPrint, #zoomPct, #zoomFit, #bhandle, #badd')) return;
   // imagem: clicar fora limpa a seleção (fecha o painel)
   if (state.sel && !t.closest('.rimg, figure.fig, .divider.b, .e-pbreak, .cover-item, .cover-logo-hit')) {
@@ -8712,12 +8837,21 @@ function openTextPlacePanel() {
     : '';
   // 1/2 cols (e nota) usam "Largura"; lista/citação/callout usam as 3 posições = "Colunas"
   const placeLabel = (COL_FMT_TYPES.has(b.type) || b.type === 'footnote') ? 'Largura' : 'Colunas';
+  const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
+  const delBtn = b.type === 'footnote'
+    ? `<button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`
+    : '';
   textPlacePanel.innerHTML = `
     <div class="eyebrow" style="margin:0">${labels[b.type] || 'Texto'}</div>
     <div class="field">${placeLabel}<div data-slot="place"></div></div>
-    ${styleField}`;
+    ${styleField}
+    ${delBtn}`;
   textPlacePanel.hidden = false;
   mountTextPlaceSeg(textPlacePanel.querySelector('[data-slot="place"]'), b, () => openTextPlacePanel());
+  textPlacePanel.querySelector('[data-a="del"]')?.addEventListener('click', () => {
+    deleteBlockById(b.id);
+    closeTextPlacePanel();
+  });
   const styleSlot = textPlacePanel.querySelector('[data-slot="notestyle"]');
   if (styleSlot) {
     const NOTE_P_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><text x="3" y="12" font-size="11" font-weight="700" fill="currentColor" stroke="none" font-family="system-ui,sans-serif">¶</text></svg>';
@@ -12027,6 +12161,7 @@ stage.addEventListener('scroll', () => {
   if (idxPanel && !idxPanel.hidden) positionIdxPanel();
   if (resumoPanel && !resumoPanel.hidden) positionResumoPanel();
   bhandle.hidden = true; badd.hidden = true;    // alças fixed → escondem ao rolar
+  commentChrome.position();                     // pins de thread ficam visíveis
   closeBlockMenu();
   closeAddImgMenu();
 }, { passive: true });
@@ -12042,6 +12177,7 @@ addEventListener('resize', () => {
   if (logoPanel && !logoPanel.hidden) positionLogoPanel();
   if (idxPanel && !idxPanel.hidden) positionIdxPanel();
   if (resumoPanel && !resumoPanel.hidden) positionResumoPanel();
+  commentChrome.position();
 });
 
 // ─────────────────────────── undo / redo ────────────────────────────────────

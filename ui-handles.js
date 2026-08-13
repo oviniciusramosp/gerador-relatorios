@@ -25,11 +25,28 @@ export const HANDLE_GEOM = Object.freeze({
   H_BTN: 16,
   H_GAP: 0,
   H_PAD: 10,
+  // comentário à esquerda do +: gap MAIOR que o vão +↔dragger (H_GAP=0)
+  H_COMMENT_GAP: 10,
+  // pin com thread: botão/ícone maiores (vazio fica no H_BTN=16, como o +)
+  H_COMMENT_BTN: 20,
   DRAG_PX: 5,
   get H_GUTTER() {
     return this.H_BTN + this.H_GAP + this.H_BTN + this.H_PAD; // 42
   },
+  get H_COMMENT_GUTTER() {
+    return this.H_COMMENT_BTN + this.H_COMMENT_GAP + this.H_GUTTER; // 72
+  },
 });
+
+/** Posições fixed (viewport) de [comentário] [+] [⠿] à esquerda do bloco. */
+export function handleLayout(rect, commentBtn = HANDLE_GEOM.H_BTN) {
+  const { H_BTN, H_GAP, H_PAD, H_COMMENT_GAP } = HANDLE_GEOM;
+  const midY = rect.top + rect.height / 2;
+  const dragLeft = rect.left - H_PAD - H_BTN;
+  const addLeft = dragLeft - H_GAP - H_BTN;
+  const commentLeft = addLeft - H_COMMENT_GAP - commentBtn;
+  return { midY, dragLeft, addLeft, commentLeft };
+}
 
 /**
  * @typedef {object} CreateBlockHandlesOpts

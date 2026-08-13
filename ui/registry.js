@@ -216,6 +216,18 @@ export const UI_REGISTRY = [
     demo: 'fmtbar',
   },
   {
+    id: 'block-comments',
+    title: 'Comentários de bloco',
+    status: 'ready',
+    module: 'ui-comments.js',
+    css: ['.blk-comment-pin', '#commentPanel', 'paradigma.css'],
+    when: 'Thread por bloco no Diagramador: pin à esquerda do +, painel float-panel',
+    never: 'Reinventar pin/painel no monólito; box-shadow próprio; innerHTML do texto da mensagem',
+    importHint: "import { createCommentChrome } from './ui-comments.js'; import { writeThread, hasOpenComments } from './comments.js'",
+    apps: ['diagramacao'],
+    demo: 'block-comments',
+  },
+  {
     id: 'editor-shell',
     title: 'Shell do editor (header + sidebar + zoom + segment)',
     status: 'ready',

@@ -209,6 +209,19 @@ assert.deepEqual(back.blocks, raw.blocks);
 assert.equal(back.index.resumo, raw.index.resumo);
 assert.equal(back.index.resumoOn, undefined, 'round-trip não inventa resumoOn no dump cru');
 
+// comments: campo aditivo no bloco — open antigo não inventa; dump preserva
+assert.equal(opened.blocks[0].comments, undefined, 'doc antigo não ganha comments no open');
+const withComments = {
+  ...JSON.parse(JSON.stringify(raw)),
+  blocks: [
+    { id: 'cmt', type: 'p', html: 'com nota', comments: { resolved: false, messages: [{ id: 'c1', text: 'revisar cifra', createdAt: 1, updatedAt: 1 }] } },
+  ],
+};
+const openedCmt = openCompat(withComments);
+assert.equal(openedCmt.blocks[0].comments.messages[0].text, 'revisar cifra', 'comments sobrevivem ao open');
+const cmtBack = deserializeDoc(serializeDoc(withComments));
+assert.equal(cmtBack.blocks[0].comments.messages[0].text, 'revisar cifra', 'comments sobrevivem ao round-trip');
+
 // campo aditivo (feature futura) não pode ser engolido pela serialização
 const withExtra = {
   ...raw,

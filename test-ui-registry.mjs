@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { UI_REGISTRY, uiById, uiReady } from './ui/registry.js';
 import { widthSeg, COL_ICON, ALIGN_ICON, POS_ICON } from './ui-segment.js';
 import { uiIco, menuIco, registerUiIcons } from './ui-icons.js';
-import { HANDLE_GEOM, createBlockHandles } from './ui-handles.js';
+import { HANDLE_GEOM, createBlockHandles, handleLayout } from './ui-handles.js';
 import { ensureFmtbarChrome } from './ui-fmtbar.js';
 import { bindEditorShell } from './ui-shell.js';
 
@@ -56,12 +56,20 @@ assert.equal(typeof bindEditorShell, 'function');
 assert.equal(HANDLE_GEOM.H_BTN, 16);
 assert.equal(HANDLE_GEOM.H_PAD, 10);
 assert.equal(HANDLE_GEOM.H_GUTTER, 42);
+assert.ok(HANDLE_GEOM.H_COMMENT_GAP > HANDLE_GEOM.H_GAP, 'gap do comentário > gap +↔dragger');
+assert.equal(HANDLE_GEOM.H_COMMENT_BTN, 20);
+assert.equal(HANDLE_GEOM.H_COMMENT_GUTTER, 72);
+assert.equal(typeof handleLayout, 'function');
+const lay = handleLayout({ left: 200, top: 40, height: 20 });
+assert.equal(lay.commentLeft, 200 - HANDLE_GEOM.H_PAD - HANDLE_GEOM.H_BTN - HANDLE_GEOM.H_GAP - HANDLE_GEOM.H_BTN - HANDLE_GEOM.H_COMMENT_GAP - HANDLE_GEOM.H_BTN);
 
 // componentes ready críticos devem apontar módulos reais (não só CSS)
 assert.equal(uiById('widthSeg')?.module, 'ui-segment.js');
 assert.equal(uiById('ui-icons')?.module, 'ui-icons.js');
 assert.equal(uiById('notion-handles')?.status, 'ready');
 assert.equal(uiById('notion-handles')?.module, 'ui-handles.js');
+assert.equal(uiById('block-comments')?.status, 'ready');
+assert.equal(uiById('block-comments')?.module, 'ui-comments.js');
 assert.equal(uiById('fmtbar')?.status, 'ready');
 assert.equal(uiById('fmtbar')?.module, 'ui-fmtbar.js');
 assert.equal(uiById('editor-shell')?.status, 'ready');
