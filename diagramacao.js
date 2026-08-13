@@ -4098,7 +4098,9 @@ pagesEl.addEventListener('keydown', (e) => {
       if (b.type === 'footnote') {
         const i = idxOf(b.id);
         const prev = i > 0 ? state.doc.blocks[i - 1] : null;
-        if (!stripHtml(b.html).replace(/\s+/g, ' ').trim() || (prev && prev.type === 'footnote')) {
+        if (!stripHtml(b.html).replace(/\s+/g, ' ').trim()) {
+          e.preventDefault(); deleteBlockById(b.id);
+        } else if (prev && prev.type === 'footnote') {
           e.preventDefault(); mergeBackwards(b);
         }
         return;
