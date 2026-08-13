@@ -34,9 +34,9 @@ export const TABLE_ITEM_STYLE_KEYS = [
 ];
 
 /**
- * Copia estilos visuais da tabela `fromIndex` para as demais do grid.
- * - Por item: cores, linhas alternadas, alinhamento da tabela
- * - Shared (fonte, bordas, raio): já no bloco grid — reafirma ensureSharedTableStyle
+ * Copia o visual da tabela `fromIndex` para as demais.
+ * Por item: cores, alt, alinhamento. Shared (fonte, bordas, raio): vira o
+ * comum do grid e as outras herdam.
  * @returns {number} quantas tabelas destino receberam estilos (0 = nada a fazer)
  */
 export function applyTableStylesToGrid(grid, fromIndex) {
@@ -44,6 +44,11 @@ export function applyTableStylesToGrid(grid, fromIndex) {
   const srcIdx = fromIndex | 0;
   const src = grid.items[srcIdx];
   if (!src || grid.items.length < 2) return 0;
+  for (const k of TABLE_GRID_SHARED_KEYS) {
+    const v = src[k] != null ? src[k] : grid[k];
+    if (v == null) delete grid[k];
+    else grid[k] = v;
+  }
   let n = 0;
   for (let i = 0; i < grid.items.length; i++) {
     if (i === srcIdx) continue;
@@ -61,6 +66,7 @@ export function applyTableStylesToGrid(grid, fromIndex) {
       }
       dest[k] = v;
     }
+    for (const k of TABLE_GRID_SHARED_KEYS) delete dest[k];
     ensureTable(dest);
     n++;
   }
@@ -103,7 +109,7 @@ export function ensureTableGrid(b) {
     }
     delete it.id;
     delete it.type;
-    for (const k of TABLE_GRID_SHARED_KEYS) delete it[k];
+    stripSharedFromTableItem(it, b);
     ensureTable(it);
   }
   if (!b.items.length) b.items = [seedTableItem()];
@@ -276,12 +282,12 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
 
     const itemCtx = {
       commit: () => {
-        stripSharedFromTableItem(it);
+        stripSharedFromTableItem(it, b);
         ensureTable(it);
         ctx.commit?.();
       },
       rerender: () => {
-        stripSharedFromTableItem(it);
+        stripSharedFromTableItem(it, b);
         ensureTable(it);
         ctx.rerender?.();
       },
@@ -289,7 +295,7 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
 
     const tbl = buildTableEl(resolved, editing, itemCtx, colWidths[i]);
     // tira shared do item em memória (já aplicados no DOM via build); merges ficam
-    stripSharedFromTableItem(it);
+    stripSharedFromTableItem(it, b);
     // id sintético p/ focusCell / Tab na tabela do grid
     tbl.dataset.id = `__tg_${b.id}_${i}`;
     tbl.dataset.gridId = b.id;

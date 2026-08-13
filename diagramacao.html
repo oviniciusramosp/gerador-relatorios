@@ -1039,6 +1039,14 @@
     font-style: italic; font-weight: 400; font-size: 8px; line-height: 14px; color: #828080;
     text-align: justify; letter-spacing: -0.01em;
   }
+  /* nota de rodapé: mesma face da legenda; mora na faixa acima da linha do rodapé */
+  .page .page-footnotes {
+    position: absolute; left: 48px; right: 48px; z-index: 2;
+  }
+  .page .footnote.b {
+    font-style: italic; font-weight: 400; font-size: 8px; line-height: 14px; color: #828080;
+    text-align: justify; letter-spacing: -0.01em;
+  }
   .page blockquote.b {
     font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: left;
     border-left: 2px solid #29E899; padding-left: 8px;
@@ -1862,6 +1870,19 @@
   #imgPanel .field-row, #tablePanel .field-row, #imageGridPanel .field-row, #tableGridPanel .field-row, #coverPanel .field-row, #logoPanel .field-row, #blockStylePanel .field-row, #idxPanel .field-row, #resumoPanel .field-row, aside .field-row { display: flex; justify-content: space-between; align-items: baseline; }
   #imgPanel .field-val, #tablePanel .field-val, #imageGridPanel .field-val, #tableGridPanel .field-val, #coverPanel .field-val, #logoPanel .field-val, #blockStylePanel .field-val, #idxPanel .field-val, #resumoPanel .field-val, aside .field-val { display: inline-flex; align-items: center; gap: .3rem; }
   /* cores da tabela: pares inline (fundo + texto) — CSS do chip vive em bloco-tabela.js */
+  /* panes Tabela|Texto|Borda — grid próprio (não contents: hidden+contents vazava filhos) */
+  #tablePanel [data-tbl-pane],
+  #tableGridPanel [data-tbl-pane] { display: grid; gap: .55rem; }
+  #tablePanel [data-tbl-pane][hidden],
+  #tableGridPanel [data-tbl-pane][hidden] { display: none; }
+  #tablePanel .tbl-merge-row,
+  #tableGridPanel .tbl-merge-row {
+    display: flex; gap: .4rem;
+  }
+  #tablePanel .tbl-merge-row .fieldbtn,
+  #tableGridPanel .tbl-merge-row .fieldbtn { flex: 1; justify-content: center; }
+  #tablePanel .tbl-merge-row[hidden],
+  #tableGridPanel .tbl-merge-row[hidden] { display: none; }
   #tablePanel .tbl-color-fields,
   #tableGridPanel .tbl-color-fields {
     display: grid; gap: .55rem;
@@ -2483,6 +2504,7 @@
             <div class="blockrow"><button data-type="h4"><span class="ico" style="font-size:10px;font-weight:700">H</span><span class="lbl">H4</span><span class="sc">####</span></button><button type="button" class="blockmenu" data-styletype="h4" title="Editar estilo do H4"></button></div>
             <div class="blockrow"><button data-type="p"><span class="ico">¶</span><span class="lbl">Parágrafo</span></button><button type="button" class="blockmenu" data-styletype="p" title="Editar estilo do Parágrafo"></button></div>
             <div class="blockrow"><button data-type="caption"><span class="ico" style="font-size:11px;font-style:italic">Aa</span><span class="lbl">Legenda</span></button><button type="button" class="blockmenu" data-styletype="caption" title="Editar estilo da Legenda"></button></div>
+            <div class="blockrow"><button data-type="footnote"><span class="ico" style="font-size:10px;font-style:italic">¹</span><span class="lbl">Nota de rodapé</span><span class="sc">[^]</span></button><button type="button" class="blockmenu" data-styletype="footnote" title="Editar estilo da Nota de rodapé"></button></div>
             <div class="blockrow"><button data-type="li"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="2.5" cy="4" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r="1.1" fill="currentColor" stroke="none"/><path d="M6 4h8M6 8h8M6 12h8"/></svg></span><span class="lbl">Lista de Pontos</span><span class="sc">-</span></button><button type="button" class="blockmenu" data-styletype="li" title="Editar estilo da Lista de Pontos"></button></div>
             <div class="blockrow"><button data-type="ol"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><text x="0" y="6" font-size="6" fill="currentColor" stroke="none" font-weight="700">1</text><text x="0" y="13" font-size="6" fill="currentColor" stroke="none" font-weight="700">2</text><path d="M6 4.5h8M6 11h8"/></svg></span><span class="lbl">Lista Numérica</span><span class="sc">1.</span></button><button type="button" class="blockmenu" data-styletype="ol" title="Editar estilo da Lista Numérica"></button></div>
             <div class="blockrow"><button data-type="check"><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="5" height="5" rx="1.2"/><path d="M3.2 5l1 1 1.6-2"/><path d="M9.5 5h4.5"/><rect x="2" y="9.5" width="5" height="5" rx="1.2"/><path d="M9.5 12h4.5"/></svg></span><span class="lbl">Checklist</span><span class="sc">[]</span></button><button type="button" class="blockmenu" data-styletype="check" title="Editar estilo do Checklist"></button></div>
@@ -2569,6 +2591,7 @@
     <option value="h4">H4</option>
     <option value="p">Parágrafo</option>
     <option value="caption">Legenda</option>
+    <option value="footnote">Nota de rodapé</option>
     <option value="li">Lista de Pontos</option>
     <option value="ol">Lista Numérica</option>
     <option value="check">Checklist</option>

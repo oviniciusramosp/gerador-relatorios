@@ -251,17 +251,17 @@ import {
     ],
   };
   ensureTableGrid(b);
-  // shared tirado dos items
-  assert.equal(b.items[0].fontSize, undefined);
-  assert.equal(b.items[1].borderOuter, undefined);
+  // override no item sobrevive; herança (igual ao comum) é que some
+  assert.equal(b.items[0].fontSize, 20, 'fonte da Tabela 1 é override');
+  assert.equal(b.items[1].borderOuter, '#999999', 'borda da Tabela 2 é override');
   assert.equal(b.fontSize, 14);
   assert.equal(b.borderOuter, '#111111');
   // per-item cores permanecem
   assert.equal(b.items[0].bg, '#EEEEEE');
   assert.equal(b.items[0].headerColor, '#DDDDDD');
   const resolved = resolveGridTableItem(b, b.items[0]);
-  assert.equal(resolved.fontSize, 14);
-  assert.equal(resolved.borderOuter, '#111111');
+  assert.equal(resolved.fontSize, 20, 'resolve não sobrescreve override');
+  assert.equal(resolved.borderOuter, '#111111', 'borda herdada do grid');
   assert.equal(resolved.bg, '#EEEEEE');
 }
 
@@ -465,6 +465,25 @@ import {
   const one = { type: 'table-grid', items: [{ rows: [['A'], ['1']], bg: '#abc' }] };
   ensureTableGrid(one);
   assert.equal(applyTableStylesToGrid(one, 0), 0);
+}
+
+// override de fonte na Tabela N sobrevive ao ensure; Aplicar espalha pro grid
+{
+  const b = {
+    type: 'table-grid',
+    fontSize: 10,
+    items: [
+      { rows: [['A'], ['1']], fontSize: 18, bg: '#EEF2FF' },
+      { rows: [['X'], ['2']], bg: '#FFFFFF' },
+    ],
+  };
+  ensureTableGrid(b);
+  assert.equal(b.items[0].fontSize, 18, 'override da Tabela 1 não some no ensure');
+  assert.equal(b.items[1].fontSize, undefined, 'Tabela 2 herda o comum');
+  assert.equal(applyTableStylesToGrid(b, 0), 1);
+  assert.equal(b.fontSize, 18, 'Aplicar promove a fonte da Tabela 1 a comum');
+  assert.equal(b.items[1].bg, '#EEF2FF');
+  assert.equal(b.items[1].fontSize, undefined, 'destino herda o comum, sem duplicar');
 }
 
 // ── ensureTableGrid preserva a MESMA ref do item (merge no canvas não some) ─

@@ -27,6 +27,9 @@ import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingív
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import { mergePastedBlocks } from './paste-blocks.js';  // colar sobre seleção substitui; 1 p não abre bloco extra
 import {
+  FOOTNOTE_RULE_GAP, footnoteDeadZone, footnoteZoneBottom, assignFootnotes,
+} from './footnote.js';  // nota acima da linha do rodapé (fora do CONTENT_H)
+import {
   stripTrailingPlaceholderBr, applyBlockHtml, readBlockHtml, markTrailingPlaceholderBr,
 } from './block-html.js';  // <br> fantasma no fim do contenteditable (seleção cresce / blur encolhe)
 import {
@@ -222,7 +225,8 @@ const HEAD_TYPES = new Set(['h1', 'h2', 'h3', 'h4']);
 // 'check' (checklist, trilha B t7) e 'callout' (trilha G) são editáveis e reusam buildText;
 // 'table' NÃO é text (célula própria)
 // 'caption' = legenda solta (mesma tipografia da figcaption de imagem), em qualquer ponto do fluxo
-const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'caption', 'li', 'ol', 'quote', 'check', 'callout']);  // blocos editáveis
+// 'footnote' = nota acima da linha do rodapé (mesmo default da legenda; fora do fluxo)
+const TEXT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'caption', 'footnote', 'li', 'ol', 'quote', 'check', 'callout']);  // blocos editáveis
 // listas com subitens via Tab / Shift+Tab (b.indent = 0..MAX_LIST_INDENT)
 const LIST_TYPES = new Set(['li', 'ol', 'check']);
 const MAX_LIST_INDENT = 4;   // 5 níveis (0..4)
@@ -287,7 +291,7 @@ function applyListMarkers(el, b) {
 const PH = {
   title: 'Título do relatório', subtitle: 'Subtítulo',
   h1: 'Título', h2: 'Subtítulo', h3: 'Título 3', h4: 'Título 4',
-  p: 'Escreva…', caption: 'Legenda…', li: '', ol: '', quote: 'Citação', check: '', callout: 'Escreva…',
+  p: 'Escreva…', caption: 'Legenda…', footnote: 'Nota de rodapé…', li: '', ol: '', quote: 'Citação', check: '', callout: 'Escreva…',
 };
 const URL_RE = /^(https?:\/\/|www\.)[^\s]+$/i;
 
@@ -308,6 +312,8 @@ const TYPE_STYLE_DEFAULTS = {
   p: { fontSize: 10, lineHeight: 14, color: '#4E4E4E', letterSpacing: -0.01, gap: 14 },
   // legenda solta = mesma tipografia da figcaption de imagem (itálico 8px #828080)
   caption: { fontSize: 8, lineHeight: 14, color: '#828080', letterSpacing: -0.01, gap: 14 },
+  // mesma face da legenda; gap menor (notas empilham na faixa morta ~42px)
+  footnote: { fontSize: 8, lineHeight: 14, color: '#828080', letterSpacing: -0.01, gap: 4 },
   li: { gap: 6, marker: '•', subMarker: '◦', markerColor: '#29E899' },
   ol: { gap: 6, subStyle: 'number', markerColor: '#29E899' },   // subStyle: number | letter | bullet
   check: { gap: 6, checkColor: '#29E899', checkedOpacity: 0.55 },
@@ -351,8 +357,8 @@ function applyTypeStyle(el, type) {
   if (o.fontSize != null && Number.isFinite(+o.fontSize)) el.style.fontSize = (+o.fontSize) + 'px';
   if (o.lineHeight != null && Number.isFinite(+o.lineHeight)) el.style.lineHeight = (+o.lineHeight) + 'px';
   if (o.letterSpacing != null && Number.isFinite(+o.letterSpacing)) el.style.letterSpacing = (+o.letterSpacing) + 'em';
-  // legenda (bloco solto + figcaption): face itálica fixa da spec de imagem
-  if (textType === 'caption') {
+  // legenda (bloco solto + figcaption) e nota de rodapé: face itálica da spec de imagem
+  if (textType === 'caption' || textType === 'footnote') {
     el.style.fontStyle = 'italic';
     el.style.fontWeight = '400';
     el.style.textAlign = 'justify';
@@ -1168,7 +1174,7 @@ function paintActiveBlock(id) {
   if (typeof updateTblCellBar === 'function') updateTblCellBar();
   if (!id) return;
   pagesEl.querySelectorAll(
-    `.col-left > [data-id="${id}"], .col-right > [data-id="${id}"]`
+    `.col-left > [data-id="${id}"], .col-right > [data-id="${id}"], .page-footnotes > [data-id="${id}"]`
   ).forEach(el => el.classList.add('active-block'));
 }
 
@@ -1354,6 +1360,9 @@ function tblColorBtnHtml(attr, color, kind, title) {
     style="--c:${c};background:${c}"></button>`;
 }
 
+// aba do painel de estilo (Tabela | Texto | Borda). Sobrevive a rebuild do popover.
+let tableStyleSec = 'tabela';
+
 function tableStyleFieldsHtml(b, mode = 'full') {
   const headerColor = tableHeaderBg(b);
   const headerText = tableHeaderTextOf(b);
@@ -1377,22 +1386,23 @@ function tableStyleFieldsHtml(b, mode = 'full') {
   // linhas alternadas: tabela avulsa (full) e por tabela no grid (item)
   const showAlt = showStruct || isItem;
 
-  let html = '';
+  let tabela = '';
+  let texto = '';
+  let borda = '';
+
   if (showStruct) {
-    html += `
+    tabela += `
     <div class="swrow"><span>Linhas Verticais</span>
-      <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>
-    <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
-    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>`;
+      <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>`;
   }
-  // grid item: alinhamento default daquela tabela (por célula fica na #tblCellBar)
-  if (isItem) {
-    html += `
+  // grid item / tabela avulsa: alinhamento default (por célula fica na #tblCellBar)
+  if (showStruct || isItem) {
+    tabela += `
     <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
     <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>`;
   }
   if (showAlt) {
-    html += `
+    tabela += `
     <div class="swrow"><span>Linhas alternadas</span>
       <button type="button" class="sw" data-a="alt" role="switch" aria-checked="${altOn}"></button></div>
     <div class="field tbl-alt-color-field" data-role="alt-color" ${altOn ? '' : 'hidden'}>
@@ -1404,7 +1414,7 @@ function tableStyleFieldsHtml(b, mode = 'full') {
     </div>`;
   }
   if (showShared) {
-    html += `
+    texto += `
     <label class="field"><span class="field-row">Tamanho da fonte <span class="field-val"><span data-role="fsv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${fontSize}</span>px<button type="button" class="resetbtn" data-a="fsreset" title="Redefinir para ${DEFAULT_TABLE_FONT_SIZE}px">↺</button></span></span>
       <input type="range" data-a="fontSize" min="${TABLE_FONT_SIZE_MIN}" max="${TABLE_FONT_SIZE_MAX}" step="1" value="${fontSize}" data-snaps="6,8,10,12,14,16,18,24" data-edit="off">
     </label>
@@ -1414,7 +1424,7 @@ function tableStyleFieldsHtml(b, mode = 'full') {
   }
   if (showColors) {
     // pares inline (fundo + texto) no padrão do fmtbar — cabeçalho e corpo
-    html += `
+    texto += `
     <div class="field tbl-color-fields">
       <div class="field-row">Cabeçalho
         <span class="tbl-color-pair" role="group" aria-label="Cores do cabeçalho">
@@ -1431,7 +1441,7 @@ function tableStyleFieldsHtml(b, mode = 'full') {
     </div>`;
   }
   if (showShared) {
-    html += `
+    borda += `
     <div class="field tbl-color-fields">
       <div class="field-row">Linhas
         <span class="tbl-color-pair" role="group" aria-label="Cores das linhas">
@@ -1450,15 +1460,57 @@ function tableStyleFieldsHtml(b, mode = 'full') {
       <input type="range" data-a="radius" min="0" max="${TABLE_RADIUS_MAX}" step="1" value="${radius}" data-snaps="0,4,8,12,16,24" data-edit="off">
     </label>`;
   }
-  // Mesclar no painel do bloco; Linha/Coluna de cabeçalho só no menu da alça (⋯)
+
+  const secs = [];
+  if (tabela) secs.push({ val: 'tabela', label: 'Tabela' });
+  if (texto) secs.push({ val: 'texto', label: 'Texto' });
+  if (borda) secs.push({ val: 'borda', label: 'Borda' });
+  let html = '';
+  if (secs.length > 1) {
+    html += `<div class="field">Ajustar<div data-slot="tbl-style-sec"></div></div>`;
+  }
+  if (tabela) html += `<div data-tbl-pane="tabela">${tabela}</div>`;
+  if (texto) html += `<div data-tbl-pane="texto">${texto}</div>`;
+  if (borda) html += `<div data-tbl-pane="borda">${borda}</div>`;
+  // fora das abas: aparece em qualquer segmento quando a seleção tem 2+ células
   if (showStruct || isItem) {
     html += `
-    <div class="row img-tc-row" style="display:flex;gap:.4rem">
-      <button type="button" class="fieldbtn" data-a="merge" style="flex:1;justify-content:center" title="Mescla a seleção; com 1 célula, junta à da direita (ou abaixo)">Mesclar</button>
-      <button type="button" class="fieldbtn" data-a="unmerge" style="flex:1;justify-content:center" title="Desfaz o merge da célula ativa">Desagrupar</button>
+    <div class="row img-tc-row tbl-merge-row" data-role="tbl-merge-row" hidden>
+      <button type="button" class="fieldbtn" data-a="merge" title="Mescla as células selecionadas">Mesclar</button>
+      <button type="button" class="fieldbtn" data-a="unmerge" title="Desfaz o merge da seleção">Desagrupar</button>
     </div>`;
   }
   return html;
+}
+
+/** Seleção cobre 2+ células (range) ou uma célula já mesclada (col/rowspan). */
+function tableSelIsMulti(live) {
+  if (!live) return false;
+  const sel = live.getSelection?.();
+  if (!sel) return false;
+  const r0 = Math.min(+sel.r0, +(sel.r1 ?? sel.r0));
+  const r1 = Math.max(+sel.r0, +(sel.r1 ?? sel.r0));
+  const c0 = Math.min(+sel.c0, +(sel.c1 ?? sel.c0));
+  const c1 = Math.max(+sel.c0, +(sel.c1 ?? sel.c0));
+  if (![r0, r1, c0, c1].every(Number.isFinite)) return false;
+  if ((r1 - r0 + 1) * (c1 - c0 + 1) > 1) return true;
+  const el = live.cellEl?.(r0, c0);
+  return !!(el && ((el.colSpan || 1) > 1 || (el.rowSpan || 1) > 1));
+}
+
+function syncTableMergeButtons() {
+  const rows = [];
+  if (tablePanel && !tablePanel.hidden) {
+    const r = tablePanel.querySelector('[data-role="tbl-merge-row"]');
+    if (r) rows.push(r);
+  }
+  if (tableGridPanel && !tableGridPanel.hidden) {
+    const r = tableGridPanel.querySelector('[data-role="tbl-merge-row"]');
+    if (r) rows.push(r);
+  }
+  if (!rows.length) return;
+  const on = tableSelIsMulti(tableLiveActive());
+  for (const row of rows) row.hidden = !on;
 }
 
 /**
@@ -1693,6 +1745,27 @@ function wireTableStyleControls(root, b, hooks = {}) {
   root.querySelectorAll('.resetbtn').forEach((btn) => {
     btn.addEventListener('mousedown', (e) => e.preventDefault());
   });
+
+  // segment Tabela | Texto | Borda — só monta se houver 2+ painéis
+  const secSlot = root.querySelector('[data-slot="tbl-style-sec"]');
+  const panes = [...root.querySelectorAll('[data-tbl-pane]')];
+  if (secSlot && panes.length) {
+    const available = panes.map((p) => p.dataset.tblPane);
+    if (!available.includes(tableStyleSec)) tableStyleSec = available[0];
+    const TBL_SEC_LABEL = { tabela: 'Tabela', texto: 'Texto', borda: 'Borda' };
+    const showSec = (val) => {
+      tableStyleSec = val;
+      panes.forEach((p) => { p.hidden = p.dataset.tblPane !== val; });
+    };
+    const mountSec = () => {
+      secSlot.replaceChildren(textSeg(tableStyleSec, available.map((v) => ({
+        val: v, label: TBL_SEC_LABEL[v] || v,
+      })), (v) => { showSec(v); mountSec(); }));
+    };
+    showSec(tableStyleSec);
+    mountSec();
+  }
+  syncTableMergeButtons();
 
   // Mesclar / Desagrupar — live API (DOM span) com fallback no bloco real + render
   const liveFor = () => {
@@ -2069,10 +2142,8 @@ function positionImageGridPanel() {
   if (!el) return;
   const r = el.getBoundingClientRect();
   const pw = imageGridPanel.offsetWidth || 220, ph = imageGridPanel.offsetHeight || 200;
-  let x = r.right + 10;
-  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  imageGridPanel.style.left = x + 'px'; imageGridPanel.style.top = y + 'px';
+  const pos = placeBlockPanelRight(r, pw, ph);
+  imageGridPanel.style.left = pos.x + 'px'; imageGridPanel.style.top = pos.y + 'px';
 }
 function updateImageGridBar() {
   const b = activeImageGridBlock();
@@ -2194,27 +2265,23 @@ function openTableGridPanel() {
 
   // segment: Grid + Tabela 1…N
   // body: layout/shared OU cores da tabela + estrutura
+  const canApplyStyles = onItem && n > 1;
+  const applyIco = uiIco('color-palette', 16, 'outline');
   tableGridPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Grid de Tabelas</div>
     <div class="field">Editando<div data-slot="focus"></div></div>
     <div data-slot="body"></div>
+    ${onItem ? `<button type="button" class="fieldbtn" data-a="apply-styles" ${canApplyStyles ? '' : 'disabled'}
+      title="${canApplyStyles
+        ? 'Copia o visual desta tabela (cores, texto, borda) para as outras do grid.'
+        : 'Adicione outra tabela no grid para aplicar estilos'}">${applyIco}<span>Aplicar estilos ao Grid</span></button>` : ''}
     <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
   tableGridPanel.hidden = false;
 
   const body = tableGridPanel.querySelector('[data-slot="body"]');
   if (onItem && it) {
-    const canApplyStyles = n > 1;
-    body.innerHTML = `
-      <div class="eyebrow" style="margin:0">Tabela ${itemIdx + 1}</div>
-      <div class="row img-tc-row" style="display:flex;gap:.4rem">
-        <button type="button" class="fieldbtn" data-a="addrow" style="flex:1;justify-content:center">+ Linha</button>
-        <button type="button" class="fieldbtn" data-a="addcol" style="flex:1;justify-content:center">+ Coluna</button>
-      </div>
-      <button type="button" class="fieldbtn" data-a="apply-styles" ${canApplyStyles ? '' : 'disabled'}
-        title="${canApplyStyles
-          ? 'Copia cores, linhas alternadas e alinhamento desta tabela para as outras. Fonte, bordas e raio já são comuns (aba Grid).'
-          : 'Adicione outra tabela no grid para aplicar estilos'}">Aplicar estilos no grid</button>
-      ${tableStyleFieldsHtml(it, 'item')}`;
+    // mesmo menu da tabela isolada (Tabela | Texto | Borda)
+    body.innerHTML = tableStyleFieldsHtml(resolveGridTableItem(b, it), 'full');
   } else {
     body.innerHTML = `
       ${mioloGrid ? `<div class="field">Largura<div data-slot="place"></div></div>` : ''}
@@ -2236,7 +2303,6 @@ function openTableGridPanel() {
         <button type="button" class="fieldbtn${!equalRows ? ' on' : ''}" data-a="auto-rows" style="flex:1;justify-content:center"
           title="Cada linha com altura automática (conteúdo)">Alturas Auto</button>
       </div>
-      <div class="eyebrow" style="margin:.2rem 0 0">Estilo comum</div>
       ${tableStyleFieldsHtml(b, 'shared')}`;
   }
 
@@ -2281,22 +2347,7 @@ function openTableGridPanel() {
       },
       after: () => { save(); scheduleCommit(); },
     });
-    body.querySelector('[data-a="addrow"]')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // muta o item real do bloco (mesma ref de rows)
-      addTableRow(b.items[itemIdx], null);
-      save(); scheduleCommit();
-      reopen();
-    });
-    body.querySelector('[data-a="addcol"]')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      addTableCol(b.items[itemIdx], null);
-      save(); scheduleCommit();
-      reopen();
-    });
-    body.querySelector('[data-a="apply-styles"]')?.addEventListener('click', (e) => {
+    tableGridPanel.querySelector('[data-a="apply-styles"]')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       if (applyTableStylesToGrid(b, itemIdx) <= 0) return;
@@ -2751,14 +2802,14 @@ function numberLists() {
 // JANELA sobre o bloco — o mesmo b aparece em duas páginas, cortado numa quebra de linha.
 const frag = (b, gap, clipTop = 0, clipH = null) => ({ b, gap, clipTop, clipH });
 
-function paginate() {
+function paginateFlow(contentH) {
   syncMeasurerCols();
   numberLists();
   const pages = [{ left: [], right: [] }];
   // qualquer bloco pode morar na coluna direita (antes só imagem); a quebra de página é
   // estrutural do fluxo e nunca sai dele.
   const isRight = (b) => b.type !== 'pagebreak' && placementOf(b) === 'right';
-  const stream = state.doc.blocks.filter(b => !isRight(b));
+  const stream = state.doc.blocks.filter(b => !isRight(b) && b.type !== 'footnote');
   const rights = state.doc.blocks.filter(isRight);
 
   // Coluna de prova: a cada bloco, empilha de verdade e mede a altura. Se estoura
@@ -2776,7 +2827,7 @@ function paginate() {
       // ela corta — só quando editing. No PDF (exportPagesHtml roda editing=false) a barra
       // some sozinha, mas a QUEBRA continua: empurramos a página nova nos dois modos.
       if (editing) {
-        const gap = Math.min(PBREAK_GAP, Math.max(0, CONTENT_H - PBREAK_H - used));
+        const gap = Math.min(PBREAK_GAP, Math.max(0, contentH - PBREAK_H - used));
         pages[pages.length - 1].left.push(frag(b, gap));
       }
       newPage(); continue;
@@ -2804,18 +2855,18 @@ function paginate() {
       if (primeiro && nextKeep && cur.left.length > 0) {
         const gNext = gapBefore(nextKeep, b);
         const need = gap + h + gNext + nextKeepLead;
-        if (used + need > CONTENT_H) {
+        if (used + need > contentH) {
           newPage();
           continue;
         }
       }
-      const room = CONTENT_H - used - gap, resto = h - posto;
+      const room = contentH - used - gap, resto = h - posto;
       // tenta colocar; se o stack real estourar e a página já tem coisa, desfaz e reabre página.
       const tryPush = (f) => {
         const topBefore = used + (f.gap || 0);   // topo previsto do frag (âncora do cadeado)
         const node = trialAppend(f);
         const total = trialHeight();
-        if (total > CONTENT_H && cur.left.length > 0) {
+        if (total > contentH && cur.left.length > 0) {
           trialCol.removeChild(node);
           return false;
         }
@@ -2874,6 +2925,45 @@ function paginate() {
     const pi = Math.min(Math.max(r.page | 0, 0), pages.length - 1);
     pages[pi].right.push(r);
   }
+  fillPageNotes(pages);
+  return pages;
+}
+
+function pageIndexOfIn(pages, b) {
+  if (!b) return null;
+  let last = null;
+  for (let i = 0; i < pages.length; i++) {
+    if (pages[i].left.some((f) => f.b.id === b.id)) last = i;
+  }
+  return last;
+}
+function measureNotesH(notes) {
+  if (!notes || !notes.length) return 0;
+  const gap = typeStyleOf('footnote').gap ?? 4;
+  let h = 0;
+  notes.forEach((b, i) => {
+    const el = buildText(b, editing);
+    el.style.width = COL_FULL + 'px';
+    mF.appendChild(el);
+    h += Math.ceil(el.getBoundingClientRect().height);
+    mF.removeChild(el);
+    if (i) h += gap;
+  });
+  return h;
+}
+function fillPageNotes(pages) {
+  const byPage = assignFootnotes(state.doc.blocks, (b) => pageIndexOfIn(pages, b));
+  pages.forEach((pg, i) => { pg.notes = byPage[i] || []; });
+}
+function paginate() {
+  let pages = paginateFlow(CONTENT_H);
+  const dead = footnoteDeadZone(CONTENT_TOP, CONTENT_H, RULE_BOT_BOTTOM, ruleWidthOf('bot'), FOOTNOTE_RULE_GAP);
+  let overflow = 0;
+  for (const pg of pages) {
+    const h = measureNotesH(pg.notes);
+    if (h > dead) overflow = Math.max(overflow, h - dead);
+  }
+  if (overflow > 0) pages = paginateFlow(Math.max(120, CONTENT_H - overflow));
   return pages;
 }
 
@@ -3092,7 +3182,23 @@ function renderContentPage(pg, contentIdx, number) {
   });
   content.append(colLeftEl, colRightEl);
   page.appendChild(content);
+  appendPageFootnotes(page, pg.notes);
   return page;
+}
+
+function appendPageFootnotes(page, notes) {
+  const list = (notes || []).filter((b) => editing || stripHtml(b.html).replace(/\s+/g, ' ').trim());
+  if (!list.length) return;
+  const zone = document.createElement('div');
+  zone.className = 'page-footnotes';
+  zone.style.bottom = footnoteZoneBottom(PAGE_H, RULE_BOT_BOTTOM, ruleWidthOf('bot'), FOOTNOTE_RULE_GAP) + 'px';
+  const noteGap = typeStyleOf('footnote').gap ?? 4;
+  list.forEach((b, i) => {
+    const el = buildText(b, editing);
+    if (i) el.style.marginTop = noteGap + 'px';
+    zone.appendChild(el);
+  });
+  page.appendChild(zone);
 }
 
 // tipografia do Índice / Resumo: default = Parágrafo (typeStyleOf('p')); override em
@@ -3968,6 +4074,12 @@ pagesEl.addEventListener('keydown', (e) => {
   }
 
   if (e.key === 'Enter' && !e.shiftKey) {
+    // nota de rodapé é um campo na faixa do rodapé — Enter quebra linha, não abre bloco no miolo
+    if (b.type === 'footnote') {
+      e.preventDefault();
+      document.execCommand('insertLineBreak');
+      return;
+    }
     e.preventDefault(); enterAtCaret(host, b); return;
   }
 
@@ -3980,6 +4092,15 @@ pagesEl.addEventListener('keydown', (e) => {
         b.html = readBlockHtml(host);
         setListIndent(b, listIndentOf(b) - 1);
         render({ id: b.id, role: 'block', offset: 0 });
+        return;
+      }
+      // nota vazia some; se tem texto, só funde com a nota anterior (não com o parágrafo do miolo)
+      if (b.type === 'footnote') {
+        const i = idxOf(b.id);
+        const prev = i > 0 ? state.doc.blocks[i - 1] : null;
+        if (!stripHtml(b.html).replace(/\s+/g, ' ').trim() || (prev && prev.type === 'footnote')) {
+          e.preventDefault(); mergeBackwards(b);
+        }
         return;
       }
       e.preventDefault(); mergeBackwards(b);
@@ -4233,7 +4354,7 @@ function insertAfterWithSlash(afterId) {
 let pendingCoverImageId = null;   // id do cover-item esperando o arquivo de imagem
 function applyCoverItemType(it, type) {
   if (!it) return;
-  if (type === 'pagebreak') type = 'p';
+  if (type === 'pagebreak' || type === 'footnote') type = 'p';
   if (type === 'image') {
     // só troca o type depois do arquivo carregar (cancelar o picker não deixa item quebrado)
     pendingCoverImageId = it.id;
@@ -4353,13 +4474,13 @@ function insertCoverWithSlash(kind, afterId) {
     if (el) {
       if (el.isContentEditable) el.focus();
       // capa: Título/Subtítulo no topo + paleta do miolo, sem quebra de página
-      slash.open(it.id, '', { exclude: ['pagebreak'], extra: COVER_SLASH_EXTRA });
+      slash.open(it.id, '', { exclude: ['pagebreak', 'footnote'], extra: COVER_SLASH_EXTRA });
     }
   });
 }
 // paleta / inserções tipadas na capa (sem abrir o slash)
 function insertCoverTyped(kind, type, afterId) {
-  if (!kind || type === 'pagebreak') return;
+  if (!kind || type === 'pagebreak' || type === 'footnote') return;
   const cov = kind === 'back' ? state.doc.back : state.doc.cover;
   if (!cov) return;
   clearIdxFocus();
@@ -4915,7 +5036,7 @@ function focusedHandleTarget() {
   if (state.activeId) {
     // envelope do bloco (frag / check / callout / tabela / figure / rimg) — altura TOTAL
     const b = pagesEl.querySelector(
-      `.col-left > [data-id="${state.activeId}"], .col-right > [data-id="${state.activeId}"]`
+      `.col-left > [data-id="${state.activeId}"], .col-right > [data-id="${state.activeId}"], .page-footnotes > [data-id="${state.activeId}"]`
     );
     if (b) return { el: b, kind: 'miolo', id: state.activeId };
   }
@@ -4931,11 +5052,11 @@ function hitHandleTarget(clientX, clientY) {
     }
     const cov = under.closest('.cover-item');
     if (cov) return { el: cov, kind: 'cover', id: cov.dataset.cid };
-    const blk = under.closest('.col-left > [data-id], .col-right > [data-id]');
+    const blk = under.closest('.col-left > [data-id], .col-right > [data-id], .page-footnotes > [data-id]');
     if (blk) return { el: blk, kind: 'miolo', id: blk.dataset.id };
   }
   // gutter à esquerda de cada bloco do miolo (faixa dos botões + folga)
-  for (const el of pagesEl.querySelectorAll('.col-left > [data-id], .col-right > [data-id]')) {
+  for (const el of pagesEl.querySelectorAll('.col-left > [data-id], .col-right > [data-id], .page-footnotes > [data-id]')) {
     const r = el.getBoundingClientRect();
     if (clientY >= r.top && clientY <= r.bottom
       && clientX >= r.left - H_GUTTER - 4 && clientX < r.left + 2) {
@@ -4964,7 +5085,7 @@ function placeHandle(t) {
     if (t && t.sticky && t.id) {
       const el = t.kind === 'cover'
         ? pagesEl.querySelector(`.cover-item[data-cid="${t.id}"]`)
-        : pagesEl.querySelector(`.col-left > [data-id="${t.id}"], .col-right > [data-id="${t.id}"]`);
+        : pagesEl.querySelector(`.col-left > [data-id="${t.id}"], .col-right > [data-id="${t.id}"], .page-footnotes > [data-id="${t.id}"]`);
       if (el) t = { el, kind: t.kind, id: t.id };
       else { bhandle.hidden = true; badd.hidden = true; handleFor = null; return; }
     } else {
@@ -5132,7 +5253,7 @@ function dropTargetAt(x, y) {
   if (colR) { const p = colR.closest('.page'); return p && p.dataset.page != null ? { kind: 'right', page: +p.dataset.page } : null; }
   const page = el.closest('.page');
   if (!page || page.dataset.cover || page.querySelector('.idx-content')) return null;   // só miolo
-  const blocks = [...pagesEl.querySelectorAll('.col-left > [data-id]')];
+  const blocks = [...pagesEl.querySelectorAll('.col-left > [data-id], .page-footnotes > [data-id]')];
   if (!blocks.length) return null;
   let ref = null, before = true, bestD = Infinity;
   for (const bl of blocks) {
@@ -5157,7 +5278,7 @@ function showDrop(t) {
 function applyDrop(id, t) {
   const b = blockOf(id); if (!b || !t) return;
   if (t.kind === 'right') {
-    if (b.type === 'pagebreak') return;            // quebra de página é do fluxo, não tem coluna
+    if (b.type === 'pagebreak' || b.type === 'footnote') return;
     b.placement = 'right'; if (b.y == null) b.y = 0; b.page = t.page;
     render(); return;
   }
@@ -5422,9 +5543,8 @@ function positionImgPanel() {
   if (!el) return;
   const r = el.getBoundingClientRect();
   const pw = imgPanel.offsetWidth || 220, ph = imgPanel.offsetHeight || 200;
-  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  imgPanel.style.left = x + 'px'; imgPanel.style.top = y + 'px';
+  const pos = placeBlockPanelRight(r, pw, ph);
+  imgPanel.style.left = pos.x + 'px'; imgPanel.style.top = pos.y + 'px';
 }
 function closeImgPanel() { if (imgPanel) imgPanel.hidden = true; }
 
@@ -5975,9 +6095,8 @@ function positionCoverPanel() {
   if (!el) return;
   const r = el.getBoundingClientRect();
   const pw = coverPanel.offsetWidth || 220, ph = coverPanel.offsetHeight || 240;
-  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  coverPanel.style.left = x + 'px'; coverPanel.style.top = y + 'px';
+  const pos = placeBlockPanelRight(r, pw, ph);
+  coverPanel.style.left = pos.x + 'px'; coverPanel.style.top = pos.y + 'px';
 }
 function closeCoverPanel() {
   if (coverPanel) coverPanel.hidden = true;
@@ -6085,9 +6204,8 @@ function positionLogoPanel() {
   if (!el) return;
   const r = el.getBoundingClientRect();
   const pw = logoPanel.offsetWidth || 232, ph = logoPanel.offsetHeight || 320;
-  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  logoPanel.style.left = x + 'px'; logoPanel.style.top = y + 'px';
+  const pos = placeBlockPanelRight(r, pw, ph);
+  logoPanel.style.left = pos.x + 'px'; logoPanel.style.top = pos.y + 'px';
 }
 function closeLogoPanel() { if (logoPanel) logoPanel.hidden = true; }
 
@@ -6224,9 +6342,8 @@ function positionIdxPanel() {
   if (!el) return;
   const r = el.getBoundingClientRect();
   const pw = idxPanel.offsetWidth || 232, ph = idxPanel.offsetHeight || 200;
-  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  idxPanel.style.left = x + 'px'; idxPanel.style.top = y + 'px';
+  const pos = placeBlockPanelRight(r, pw, ph);
+  idxPanel.style.left = pos.x + 'px'; idxPanel.style.top = pos.y + 'px';
 }
 function closeIdxPanel() { if (idxPanel) idxPanel.hidden = true; }
 
@@ -6298,9 +6415,8 @@ function positionResumoPanel() {
   if (!el) return;
   const r = el.getBoundingClientRect();
   const pw = resumoPanel.offsetWidth || 232, ph = resumoPanel.offsetHeight || 80;
-  let x = r.right + 10; if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  resumoPanel.style.left = x + 'px'; resumoPanel.style.top = y + 'px';
+  const pos = placeBlockPanelRight(r, pw, ph);
+  resumoPanel.style.left = pos.x + 'px'; resumoPanel.style.top = pos.y + 'px';
 }
 function closeResumoPanel() { if (resumoPanel) resumoPanel.hidden = true; }
 
@@ -6366,6 +6482,7 @@ function parseMarkdown(text) {
       if (ind) blk.indent = ind;
       out.push(blk);
     }
+    else if ((m = line.match(/^\[\^\]\s+(.*)/))) { flush(); out.push(mkBlock('footnote', inlineMd(m[1]))); }
     else if ((m = line.match(/^>\s?(.*)/))) { flush(); out.push(mkBlock('quote', inlineMd(m[1]))); }
     else if (/^(-{3,}|_{3,}|\*{3,})\s*$/.test(line)) { flush(); out.push(mkBlock('divider', '')); }
     else para.push(line.trim());
@@ -6629,6 +6746,7 @@ function toMarkdown() {
       }
       case 'check': return '  '.repeat(listIndentOf(b)) + (b.checked ? '- [x] ' : '- [ ] ') + strip(b.html);
       case 'table': return tableMd(b.rows, strip);                              // trilha B (t6)
+      case 'footnote': return '[^] ' + strip(b.html);
       case 'quote': return '> ' + strip(b.html);
       // trilha G: sem sintaxe md própria pra callout — reusa blockquote (">"); ao reimportar
       // via parseMarkdown volta como 'quote' simples (perda aceitável em v1). Ionicon → ℹ️.
@@ -8173,7 +8291,9 @@ function openBlockStylePanel(type, anchorEl) {
       <input type="range" data-a="headingIconSize" min="12" max="64" step="1" value="${icoSz}" data-snaps="12,16,20,24,28,32,40,48,64" data-edit="off">
     </label>`;
     } else {
-      const gapLbl = isListGap ? 'Espaço entre itens' : 'Espaço entre parágrafos';
+      const gapLbl = isListGap ? 'Espaço entre itens'
+        : type === 'footnote' ? 'Espaço entre notas'
+        : 'Espaço entre parágrafos';
       fields += `
     <label class="field"><span class="field-row">${gapLbl} <span class="field-val"><span data-role="gapv">${fmtPx(v('gap'))}</span><button type="button" class="resetbtn" data-r="gap" title="Redefinir para ${def.gap}px">↺</button></span></span>
       <input type="range" data-a="gap" min="0" max="48" step="1" value="${v('gap')}" data-snaps="0,6,14,16,24,48">
@@ -8366,7 +8486,7 @@ function syncColUI() {
   const b = state.activeId && blockOf(state.activeId);
   // quebra de página e divisor não têm coluna (o divisor é selecionado, não focado — nunca
   // chega aqui; a guarda é só pra não depender disso).
-  if (!b || b.type === 'pagebreak' || b.type === 'divider') {
+  if (!b || b.type === 'pagebreak' || b.type === 'divider' || b.type === 'footnote') {
     setSidebarReveal(blockColEl, false); blockColSlot.replaceChildren();
     if (blockLockEl) setSidebarReveal(blockLockEl, false);
     return;
@@ -8477,10 +8597,8 @@ function positionTextPlacePanel() {
   if (!el) return;
   const r = (el.closest('.frag') || el).getBoundingClientRect();
   const pw = textPlacePanel.offsetWidth || 220, ph = textPlacePanel.offsetHeight || 100;
-  let x = r.right + 10;
-  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  textPlacePanel.style.left = x + 'px'; textPlacePanel.style.top = y + 'px';
+  const pos = placeBlockPanelRight(r, pw, ph);
+  textPlacePanel.style.left = pos.x + 'px'; textPlacePanel.style.top = pos.y + 'px';
 }
 function updateTextPlaceBar() {
   const b = state.activeId && blockOf(state.activeId);
@@ -8502,7 +8620,7 @@ function setActiveType(t) {
   // capa/contracapa: paleta da aba Conteúdo age no item selecionado ou insere na capa focada
   const coverKind = activeCoverKind();
   if (coverKind) {
-    if (t === 'pagebreak') return;   // não existe na capa
+    if (t === 'pagebreak' || t === 'footnote') return;   // não existe na capa
     const f = state.sel && findCoverItem(state.sel);
     if (f && COVER_EDIT_TYPES.has(coverTypeOf(f.item)) && COVER_EDIT_TYPES.has(t)) {
       const it = f.item;
@@ -8532,7 +8650,7 @@ function setActiveType(t) {
     if (wasHead && !HEAD_TYPES.has(t)) clearHeadIconFields(b);
     // tipos 1/2 col não usam coluna direita no UI — se vinha de right, volta ao fluxo
     // (default do tipo: H1–H4/grid = 2 cols, p = 1 col).
-    if (COL_FMT_TYPES.has(t) && b.placement === 'right') {
+    if (t === 'footnote' || (COL_FMT_TYPES.has(t) && b.placement === 'right')) {
       delete b.placement; delete b.y; delete b.page; delete b.anchor;
     }
     render(keep && keep.id === b.id ? keep : { id: b.id, role: 'block', offset: 0 });
@@ -8910,10 +9028,8 @@ function positionIconBlockPanel() {
   if (!el) return;
   const r = el.getBoundingClientRect();
   const pw = iconPanel.offsetWidth || 220, ph = iconPanel.offsetHeight || 280;
-  let x = r.right + 10;
-  if (x + pw > innerWidth - 8) x = Math.max(8, r.left - pw - 10);
-  const y = Math.min(Math.max(8, r.top), innerHeight - ph - 8);
-  iconPanel.style.left = x + 'px'; iconPanel.style.top = y + 'px';
+  const pos = placeBlockPanelRight(r, pw, ph);
+  iconPanel.style.left = pos.x + 'px'; iconPanel.style.top = pos.y + 'px';
 }
 
 // #file: fallback sem File System Access API (Safari/Firefox) — pickFile() ainda usa
@@ -11148,6 +11264,7 @@ if (tblCellBar) {
 }
 
 function updateTblCellBar() {
+  syncTableMergeButtons();
   if (!tblCellBar) return;
   if (!editing) { tblCellBar.hidden = true; return; }
   const live = tableLiveActive();
@@ -11188,14 +11305,13 @@ function updateTblCellBar() {
   tblCellBar.hidden = false;
   const bw = tblCellBar.offsetWidth || 320;
   const bh = tblCellBar.offsetHeight || 36;
-  // 1) barra perto da célula, fora do retângulo do painel
-  const pos = placeTblCellBarNearCell(rect, bw, bh, tblSidePanelRects());
+  const blockRect = live.wrap?.getBoundingClientRect?.() || rect;
+  // sempre acima do bloco — nunca sobre a tabela
+  const pos = placeTblCellBarNearCell(rect, bw, bh, tblSidePanelRects(), blockRect);
   tblCellBar.style.left = pos.x + 'px';
   tblCellBar.style.top = pos.y + 'px';
-  // 2) se ainda houver interseção (painel alto / faixa estreita), empurra o painel
   nudgeSidePanelsAwayFromCellBar();
-  // 3) re-ancora a barra com o painel já deslocado (sem re-chamar nudge)
-  const pos2 = placeTblCellBarNearCell(rect, bw, bh, tblSidePanelRects());
+  const pos2 = placeTblCellBarNearCell(rect, bw, bh, tblSidePanelRects(), blockRect);
   tblCellBar.style.left = pos2.x + 'px';
   tblCellBar.style.top = pos2.y + 'px';
 }
@@ -11259,11 +11375,9 @@ function nudgeSidePanelsAwayFromCellBar() {
     const ph = pr.height;
     let x = pr.left;
     let y = pr.top;
-    // prefere à direita da barra; senão à esquerda; senão abaixo
+    // só direita da barra ou abaixo — nunca à esquerda (cobre ⠿ / +)
     if (bar.right + TBL_UI_GAP + pw <= innerWidth - 8) {
       x = bar.right + TBL_UI_GAP;
-    } else if (bar.left - pw - TBL_UI_GAP >= 8) {
-      x = bar.left - pw - TBL_UI_GAP;
     } else {
       y = Math.min(Math.max(8, bar.bottom + TBL_UI_GAP), Math.max(8, innerHeight - ph - 8));
     }
@@ -11281,166 +11395,74 @@ function nudgeSidePanelsAwayFromCellBar() {
 }
 
 /**
- * Painel contextual ao lado do host (tabela / grid).
- * Preferência: direita do host; se não cabe, esquerda — mas NUNCA em cima do
- * host se houver espaço na borda da viewport. Se `avoid` (barra da célula)
- * colidir, desce ou empurra para o lado livre.
+ * Menus de bloco: sempre à direita do host.
+ * Nunca flip pra esquerda — lá ficam a alça ⠿ e o “+”.
+ * Se a janela é estreita, pina na borda direita (pode sobrepor o bloco, não o gutter).
+ */
+function placeBlockPanelRight(hostR, pw, ph, gap = TBL_UI_GAP) {
+  const prefer = hostR.right + gap;
+  const pin = Math.max(8, innerWidth - pw - 8);
+  const x = (prefer + pw <= innerWidth - 8) ? prefer : pin;
+  const y = Math.min(Math.max(8, hostR.top), Math.max(8, innerHeight - ph - 8));
+  return { x, y };
+}
+
+/**
+ * Painel contextual à direita do host (tabela / grid).
+ * Sem flip pra esquerda. Se `avoid` (barra da célula) colidir, desce no mesmo X.
  */
 function placeSidePanelBesideHost(hostR, pw, ph, avoid) {
   const clampY = (y) => Math.min(Math.max(8, y), Math.max(8, innerHeight - ph - 8));
   const forbidden = avoid ? [avoid] : [];
-
-  const rightX = hostR.right + TBL_UI_GAP;
-  const leftX = hostR.left - pw - TBL_UI_GAP;
-  const pinRight = Math.max(8, innerWidth - pw - 8);
-
-  const xOpts = [];
-  if (rightX + pw <= innerWidth - 8) xOpts.push(rightX);
-  if (leftX >= 8) xOpts.push(leftX);
-  // última opção: colado na borda da janela (não flipar em cima da tabela)
-  if (!xOpts.includes(pinRight)) xOpts.push(pinRight);
-  if (leftX < 8 && rightX + pw > innerWidth - 8) xOpts.push(Math.max(8, leftX));
-
+  const { x } = placeBlockPanelRight(hostR, pw, ph);
   const y0 = clampY(hostR.top);
-  for (const x of xOpts) {
-    // tenta y alinhado ao topo do host, depois desce em passos se colidir com avoid
-    for (let dy = 0; dy <= Math.max(0, innerHeight - ph - 16); dy += 48) {
-      const y = clampY(y0 + dy);
-      const box = boxOf(x, y, pw, ph);
-      if (freeOfForbidden(box, forbidden)) return { x, y };
-    }
-    // tenta acima do avoid
-    if (avoid) {
-      const yAbove = clampY(avoid.top - ph - TBL_UI_GAP);
-      const boxA = boxOf(x, yAbove, pw, ph);
-      if (freeOfForbidden(boxA, forbidden)) return { x, y: yAbove };
-      const yBelow = clampY(avoid.bottom + TBL_UI_GAP);
-      const boxB = boxOf(x, yBelow, pw, ph);
-      if (freeOfForbidden(boxB, forbidden)) return { x, y: yBelow };
-    }
+  for (let dy = 0; dy <= Math.max(0, innerHeight - ph - 16); dy += 48) {
+    const y = clampY(y0 + dy);
+    const box = boxOf(x, y, pw, ph);
+    if (freeOfForbidden(box, forbidden)) return { x, y };
   }
-  // fallback: direita do host (ou pin), topo
-  const x = xOpts[0] ?? pinRight;
+  if (avoid) {
+    const yAbove = clampY(avoid.top - ph - TBL_UI_GAP);
+    const boxA = boxOf(x, yAbove, pw, ph);
+    if (freeOfForbidden(boxA, forbidden)) return { x, y: yAbove };
+    const yBelow = clampY(avoid.bottom + TBL_UI_GAP);
+    const boxB = boxOf(x, yBelow, pw, ph);
+    if (freeOfForbidden(boxB, forbidden)) return { x, y: yBelow };
+  }
   return { x, y: y0 };
 }
 
 /**
- * Barra da célula perto da célula, com proibição dura de interseção com o
- * painel lateral. Não resolve por z-index: escolhe (x,y) livre.
+ * Barra de formatação da célula: sempre ACIMA do bloco da tabela.
+ * Não cobre o miolo (abaixo / ao lado da célula) nem o gutter ⠿ / +.
+ * Recua no X se for cruzar o painel lateral.
  */
-function placeTblCellBarNearCell(cellRect, bw, bh, panels) {
+function placeTblCellBarNearCell(cellRect, bw, bh, panels, blockRect) {
+  const host = blockRect || cellRect;
   const clampX = (x) => Math.max(8, Math.min(x, innerWidth - bw - 8));
-  const clampY = (y) => Math.max(8, Math.min(y, innerHeight - bh - 8));
-  const forbidden = panels || [];
+  const gap = TBL_UI_GAP;
 
-  // limite horizontal: se o painel está à direita da célula, a barra não pode
-  // invadir a faixa do painel (max right edge = panel.left - gap)
-  let maxRight = innerWidth - 8;
-  let minLeft = 8;
-  for (const pr of forbidden) {
-    const cellCx = cellRect.left + cellRect.width / 2;
-    const panelCx = pr.left + pr.width / 2;
-    if (panelCx >= cellCx) {
-      // painel à direita → barra só à esquerda da borda do painel
-      maxRight = Math.min(maxRight, pr.left - TBL_UI_GAP);
-    } else {
-      // painel à esquerda → barra só à direita da borda do painel
-      minLeft = Math.max(minLeft, pr.right + TBL_UI_GAP);
-    }
-  }
-  const clampXInLane = (x) => {
-    let v = clampX(x);
-    // se a faixa útil for menor que a barra, mantém clamp de viewport
-    if (maxRight - minLeft >= bw) {
-      v = Math.max(minLeft, Math.min(v, maxRight - bw));
-    }
-    return v;
-  };
+  // sempre acima do bloco — se o topo da página aperta, clipa fora em vez de descer sobre a tabela
+  const y = host.top - bh - gap;
 
-  const anchors = [
-    // acima, centrado
-    () => ({
-      x: clampXInLane(cellRect.left + cellRect.width / 2 - bw / 2),
-      y: clampY(cellRect.top - bh - TBL_UI_GAP),
-    }),
-    // acima, alinhado à esquerda da célula
-    () => ({
-      x: clampXInLane(cellRect.left),
-      y: clampY(cellRect.top - bh - TBL_UI_GAP),
-    }),
-    // acima, alinhado à direita da célula (ainda na faixa)
-    () => ({
-      x: clampXInLane(cellRect.right - bw),
-      y: clampY(cellRect.top - bh - TBL_UI_GAP),
-    }),
-    // abaixo, centrado
-    () => ({
-      x: clampXInLane(cellRect.left + cellRect.width / 2 - bw / 2),
-      y: clampY(cellRect.bottom + TBL_UI_GAP),
-    }),
-    // abaixo, esquerda
-    () => ({
-      x: clampXInLane(cellRect.left),
-      y: clampY(cellRect.bottom + TBL_UI_GAP),
-    }),
-    // ao lado esquerdo da célula
-    () => ({
-      x: clampXInLane(cellRect.left - bw - TBL_UI_GAP),
-      y: clampY(cellRect.top + (cellRect.height - bh) / 2),
-    }),
-  ];
-
-  // candidatos forçados colados à borda livre do painel (último recurso útil)
-  for (const pr of forbidden) {
-    anchors.push(() => ({
-      x: clampXInLane(pr.left - bw - TBL_UI_GAP),
-      y: clampY(cellRect.top - bh - TBL_UI_GAP),
-    }));
-    anchors.push(() => ({
-      x: clampXInLane(pr.left - bw - TBL_UI_GAP),
-      y: clampY(cellRect.top),
-    }));
-    anchors.push(() => ({
-      x: clampXInLane(pr.right + TBL_UI_GAP),
-      y: clampY(cellRect.top - bh - TBL_UI_GAP),
-    }));
+  // centra na célula, preso à faixa do bloco
+  let x = cellRect.left + cellRect.width / 2 - bw / 2;
+  const leftBound = Math.max(8, host.left);
+  const rightBound = Math.min(innerWidth - 8, host.right);
+  if (rightBound - leftBound >= bw) {
+    x = Math.max(leftBound, Math.min(x, rightBound - bw));
+  } else {
+    x = clampX(host.left);
   }
 
-  const dist = (p) => {
-    const cx = cellRect.left + cellRect.width / 2;
-    const cy = cellRect.top;
-    return Math.hypot(p.x + bw / 2 - cx, p.y + bh / 2 - cy);
-  };
-
-  let bestFree = null;
-  let bestFreeD = Infinity;
-  let bestAny = null;
-  let bestAnyD = Infinity;
-
-  for (const make of anchors) {
-    const p = make();
-    const box = boxOf(p.x, p.y, bw, bh);
-    const d = dist(p);
-    if (d < bestAnyD) { bestAnyD = d; bestAny = p; }
-    if (freeOfForbidden(box, forbidden) && d < bestFreeD) {
-      bestFreeD = d;
-      bestFree = p;
-    }
+  for (const pr of (panels || [])) {
+    const barBox = boxOf(x, y, bw, bh);
+    if (!rectsOverlapPad(barBox, pr, gap)) continue;
+    const leftOfPanel = pr.left - bw - gap;
+    if (leftOfPanel >= 8) x = Math.min(x, leftOfPanel);
   }
-  if (bestFree) return bestFree;
 
-  // força: cola à esquerda do primeiro painel (ou viewport), no Y da célula
-  if (forbidden.length) {
-    const pr = forbidden[0];
-    return {
-      x: clampX(pr.left - bw - TBL_UI_GAP),
-      y: clampY(cellRect.top - bh - TBL_UI_GAP),
-    };
-  }
-  return bestAny || {
-    x: clampX(cellRect.left + cellRect.width / 2 - bw / 2),
-    y: clampY(cellRect.top - bh - TBL_UI_GAP),
-  };
+  return { x: clampX(x), y };
 }
 
 function paintTblCellColorButtonsSafe(colors) {

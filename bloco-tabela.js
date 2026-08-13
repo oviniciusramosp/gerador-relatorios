@@ -210,18 +210,25 @@ export function unwrapTableData(b) {
   return b.__gridItem || b;
 }
 
-/** Tira estilos shared do item (não devem ir pro JSON do item). */
-export function stripSharedFromTableItem(item) {
+/**
+ * Tira shared herdado do grid (igual ao comum). Override no item (fonte, borda…)
+ * fica — o menu “Tabela N” é o da tabela isolada; “Aplicar estilos ao Grid”
+ * é que espalha.
+ * Sem `grid`: apaga todo shared (legado).
+ */
+export function stripSharedFromTableItem(item, grid) {
   if (!item || typeof item !== 'object') return item;
-  for (const k of TABLE_GRID_SHARED_KEYS) delete item[k];
+  for (const k of TABLE_GRID_SHARED_KEYS) {
+    if (!grid || item[k] === grid[k] || item[k] == null) delete item[k];
+  }
   return item;
 }
 
 /**
  * Prepara o **item real** do grid para build/edição:
- * copia estilos shared do bloco grid para o item (temporário) e devolve o MESMO
- * objeto `item`. Toda mutação (merges, rows, headerRow) grava no lugar certo.
- * O caller deve stripSharedFromTableItem após o build se não quiser poluir o save.
+ * preenche shared AUSENTE a partir do bloco grid e devolve o MESMO `item`.
+ * Não sobrescreve override (fontSize etc. da Tabela N).
+ * Depois do build: stripSharedFromTableItem(item, grid) pra não gravar herança.
  */
 export function resolveGridTableItem(grid, item) {
   if (!item || typeof item !== 'object') {
@@ -235,6 +242,7 @@ export function resolveGridTableItem(grid, item) {
   if (!Array.isArray(item.rows)) item.rows = seed();
   ensureTable(item);
   for (const k of TABLE_GRID_SHARED_KEYS) {
+    if (item[k] != null) continue;
     if (grid && grid[k] != null) item[k] = grid[k];
     else delete item[k];
   }
