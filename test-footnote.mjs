@@ -9,7 +9,16 @@ import {
   footnoteDeadZone,
   footnoteZoneBottom,
   assignFootnotes,
+  noteStyleOf,
+  isIndexFootnote,
 } from './footnote.js';
+
+// estilo: ausente/lixo = Rodapé; só 'p' vira Parágrafo (campo aditivo)
+assert.equal(noteStyleOf(null), 'default');
+assert.equal(noteStyleOf({}), 'default');
+assert.equal(noteStyleOf({ noteStyle: 'default' }), 'default');
+assert.equal(noteStyleOf({ noteStyle: 'rodape' }), 'default');
+assert.equal(noteStyleOf({ noteStyle: 'p' }), 'p');
 
 // geometria da spec: conteúdo [88..754], linha do rodapé base 803
 assert.equal(footnoteDeadZone(88, 666, 803, 0.5, FOOTNOTE_RULE_GAP), 42.5);
@@ -100,6 +109,30 @@ assert.equal(footnoteZoneBottom(842, 803, 1, 6), 46);
 {
   const by = assignFootnotes([{ id: 'n', type: 'footnote' }], () => null);
   assert.equal(by[0][0].id, 'n');
+}
+
+// pinPage fixa a nota na página do hover, mesmo com o bloco anterior noutra
+{
+  const blocks = [
+    { id: 'p', type: 'p' },
+    { id: 'n', type: 'footnote', pinPage: 2 },
+  ];
+  const by = assignFootnotes(blocks, (b) => (b.id === 'p' ? 0 : null));
+  assert.equal(by[0], undefined);
+  assert.equal(by[2][0].id, 'n');
+}
+
+// nota do Índice não vai pro miolo
+{
+  assert.equal(isIndexFootnote({ type: 'footnote', scope: 'index' }), true);
+  assert.equal(isIndexFootnote({ type: 'footnote' }), false);
+  const blocks = [
+    { id: 'p', type: 'p' },
+    { id: 'idx', type: 'footnote', scope: 'index' },
+    { id: 'n', type: 'footnote' },
+  ];
+  const by = assignFootnotes(blocks, (b) => (b.id === 'p' ? 0 : null));
+  assert.deepEqual(by[0].map((b) => b.id), ['n']);
 }
 
 console.log('test-footnote: ok');

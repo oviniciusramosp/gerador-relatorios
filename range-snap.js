@@ -22,6 +22,46 @@ const THRESH_FRAC = 0.035;
 /** input → true enquanto o valor veio da digitação (ímã não deve puxar). */
 const skipSnap = new WeakSet();
 
+/** Passo fino de tamanho de fonte (px). Shift no slider usa isto; sem Shift = 1 px + ímã. */
+export const FONT_SIZE_FINE_STEP = 0.1;
+
+/** Label de px com no máx. 1 casa (10 → "10"; 10.5 → "10.5"). */
+export function fmtFontSize(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '0';
+  const q = Math.round(v * 10) / 10;
+  return Number.isInteger(q) ? String(q) : q.toFixed(1);
+}
+
+export function fmtFontSizePx(n) {
+  return fmtFontSize(n) + 'px';
+}
+
+/**
+ * Valor do range durante o arraste.
+ * - digitação (typed): não mexe
+ * - Shift + fineStep: passo fino, sem ímã
+ * - senão: ímã nos snaps; se tem fineStep e não grudou, arredonda em 1
+ */
+export function refineRangeDragValue(raw, {
+  min = 0, max = 100, snaps = [], shift = false, typed = false, fineStep = null,
+} = {}) {
+  const v = Number(raw);
+  if (!Number.isFinite(v)) return raw;
+  if (typed) return v;
+  if (shift) {
+    if (fineStep > 0) return quantizeClamp(v, min, max, fineStep);
+    return v;
+  }
+  if (snaps.length) {
+    const hit = nearestSnap(v, snaps);
+    const th = threshold(min, max, snaps);
+    if (hit && hit.dist <= th) return hit.value;
+  }
+  if (fineStep > 0) return quantizeClamp(v, min, max, 1);
+  return v;
+}
+
 /** Shift pressionado = ajuste fino sem ímã (keydown/keyup em capture no window). */
 let shiftHeld = false;
 if (typeof window !== 'undefined') {
@@ -532,15 +572,18 @@ export function enhanceRange(input) {
       }
       input.setAttribute(DONE, '');
 
-      // capture: ímã antes dos handlers do app (que leem e.target.value no bubble).
-      // digitação e Shift = livre (isFreeSnap).
+      // capture: ímã / passo fino antes dos handlers do app.
+      // digitação = livre; Shift = sem ímã (+ data-fine-step se houver).
       input.addEventListener('input', () => {
-        if (isFreeSnap(input)) return;
-        const a = min(), b = max();
-        const hit = nearestSnap(+input.value, snaps);
-        if (hit && hit.dist <= threshold(a, b, snaps) && String(hit.value) !== input.value) {
-          input.value = String(hit.value);
-        }
+        const fineRaw = +input.dataset.fineStep;
+        const fine = Number.isFinite(fineRaw) && fineRaw > 0 ? fineRaw : null;
+        const next = refineRangeDragValue(+input.value, {
+          min: min(), max: max(), snaps,
+          shift: shiftHeld,
+          typed: skipSnap.has(input),
+          fineStep: fine,
+        });
+        if (String(next) !== input.value) input.value = String(next);
       }, true);
 
       new MutationObserver(paintTicks)

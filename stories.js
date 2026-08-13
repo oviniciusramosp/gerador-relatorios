@@ -8,7 +8,7 @@
  * Ícones de token: coin-icons.js + pasta coin-icons/ (mesma base do mexc-bot).
  */
 
-import { enhanceAll, wireFieldEditKeys, isFreeSnap } from './range-snap.js';
+import { enhanceAll, wireFieldEditKeys, isFreeSnap, FONT_SIZE_FINE_STEP, fmtFontSizePx } from './range-snap.js';
 import { deserializeDoc, serializeDocZip, loadDocZip } from './doc-format.js';
 import { makeZip } from './zip-lite.js';
 import { projectBaseName, projectFormatFromName } from './project-link.js';
@@ -2338,8 +2338,8 @@ function openTextPanel() {
     <label class="field"><span class="field-row">Largura <span class="field-val"><span data-role="scalev">${fmtImgScalePct(scalePct)}</span>%<button type="button" class="resetbtn" data-a="scalereset" title="Largura total">↺</button></span></span>
       <input type="range" data-a="scale" min="10" max="100" step="${IMG_SCALE_STEP}" value="${scalePct}" data-snaps="10,25,50,75,100">
     </label>
-    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${size}px</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir para 24px">↺</button></span></span>
-      <input type="range" data-a="size" min="10" max="72" step="1" value="${size}" data-snaps="10,14,18,24,32,48,72">
+    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${fmtFontSizePx(size)}</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir para 24px">↺</button></span></span>
+      <input type="range" data-a="size" min="10" max="72" step="${FONT_SIZE_FINE_STEP}" value="${size}" data-snaps="10,14,18,24,32,48,72" data-fine-step="${FONT_SIZE_FINE_STEP}" title="Shift = ajuste fino (0,1 px)">
     </label>
     <label class="field">Cor
       <button type="button" class="colorfield" data-a="color" title="Cor do texto" aria-label="Cor do texto" style="background:${color}"></button>
@@ -2406,7 +2406,7 @@ function openTextPanel() {
     const el = liveEl();
     if (el) el.style.fontSize = n + 'px';
     const szv = textPanel.querySelector('[data-role="szv"]');
-    if (szv) szv.textContent = n + 'px';
+    if (szv) szv.textContent = fmtFontSizePx(n);
     const range = textPanel.querySelector('input[data-a="size"]');
     if (range && document.activeElement !== range) range.value = String(n);
     save(); scheduleCommit();

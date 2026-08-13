@@ -21,6 +21,10 @@ import {
   quantizeClamp,
   parseEditToRange,
   isFreeSnap,
+  FONT_SIZE_FINE_STEP,
+  fmtFontSize,
+  fmtFontSizePx,
+  refineRangeDragValue,
 } from './range-snap.js';
 
 // ── parse do que o usuário digita ────────────────────────────────────────────
@@ -111,4 +115,33 @@ assert.equal(readEditDelay({ getAttribute: () => null }), DEFAULT_EDIT_DELAY_MS)
 assert.equal(isFreeSnap(null), false);
 assert.equal(isFreeSnap({}), false);
 
-console.log('ok — range-edit: parse, scale, quantize (sem snap), delay, pipeline digitado→range, free-snap');
+// ── fonte: decimais + Shift = passo fino ─────────────────────────────────────
+assert.equal(FONT_SIZE_FINE_STEP, 0.1);
+assert.equal(fmtFontSize(10), '10');
+assert.equal(fmtFontSize(10.5), '10.5');
+assert.equal(fmtFontSize(10.50), '10.5');
+assert.equal(fmtFontSizePx(10.5), '10.5px');
+assert.equal(fmtFontSizePx(12), '12px');
+
+const fontSnaps = [8, 10, 12, 16, 20, 24];
+// sem Shift, perto do ímã → inteiro do snap
+assert.equal(refineRangeDragValue(10.2, {
+  min: 8, max: 48, snaps: fontSnaps, fineStep: 0.1,
+}), 10);
+// sem Shift, longe do ímã → passo grosso 1 px (13.4 está a >thresh de 12 e 16)
+assert.equal(refineRangeDragValue(13.4, {
+  min: 8, max: 48, snaps: fontSnaps, fineStep: 0.1,
+}), 13);
+// Shift → 0,1 px, sem ímã
+assert.equal(refineRangeDragValue(10.37, {
+  min: 8, max: 48, snaps: fontSnaps, shift: true, fineStep: 0.1,
+}), 10.4);
+assert.equal(refineRangeDragValue(10.32, {
+  min: 8, max: 48, snaps: fontSnaps, shift: true, fineStep: 0.1,
+}), 10.3);
+// digitação não é arredondada aqui (o parse já quantizou)
+assert.equal(refineRangeDragValue(10.5, {
+  min: 8, max: 48, snaps: fontSnaps, typed: true, fineStep: 0.1,
+}), 10.5);
+
+console.log('ok — range-edit: parse, scale, quantize (sem snap), delay, pipeline digitado→range, free-snap, fonte decimal');

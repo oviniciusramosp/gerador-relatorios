@@ -11,12 +11,14 @@
  * - “+”/reordenar no grid mutando clone desligado do item (rows some no rerender)
  * - focar célula do grid e o keep de seleção não reconhecer `__tg_<id>_i`
  *   (blur na hora → tabela parece não-editável)
+ * - PDF com equal height: última row da menor sem height explícito
+ *   (frame estica, linhas verticais param no texto)
  */
 import assert from 'node:assert/strict';
 import {
   ensureTableGrid, tableGridEqualModeOf, tableGridEqualRowsOf, tableGridGapOf,
   clampTableGridGap, setTableGridCols, layoutTableGridCols, seedTableItem,
-  applyTableStylesToGrid, computeEqualRowHeights,
+  applyTableStylesToGrid, computeEqualRowHeights, computeStretchedLastRowHeights,
   TABLE_GRID_MAX, TABLE_GRID_GAP,
 } from './bloco-table-grid.js';
 import {
@@ -436,6 +438,25 @@ import {
   delete b.equalRows;
   ensureTableGrid(b);
   assert.equal(tableGridEqualRowsOf(b), false);
+}
+
+// ── equal=height: última row da menor preenche (linhas verticais no PDF) ────
+{
+  // tabelas 100 e 70; última row 40 e 30 → a menor cresce 30 (30+30=60)
+  assert.deepEqual(
+    computeStretchedLastRowHeights([100, 70], [40, 30]),
+    [40, 60],
+  );
+  // já iguais: última não muda
+  assert.deepEqual(
+    computeStretchedLastRowHeights([80, 80], [25, 20]),
+    [25, 20],
+  );
+  // 3 tabelas: só as menores crescem
+  assert.deepEqual(
+    computeStretchedLastRowHeights([50, 80, 60], [20, 30, 22]),
+    [50, 30, 42],
+  );
 }
 
 // ── applyTableStylesToGrid: cores da Tabela N → demais itens ────────────────

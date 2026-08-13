@@ -9,12 +9,13 @@
  * - default de equal/titles/captions/gap poluindo o JSON
  * - setGridCols fora de 1..4
  * - gap custom não entrando no layout
+ * - PDF/export filtrando slots vazios e 1 foto esticando nas 2 colunas
  */
 import assert from 'node:assert/strict';
 import {
-  ensureImageGrid, equalModeOf, layoutImageFrames, setGridCols, setGridItemImage,
-  clearGridItemImage, setTitlesOn, setCaptionsOn, titlesOn, captionsOn,
-  captionStyleOf, gapOf, clampGap, IMAGE_GRID_MAX, IMAGE_GRID_GAP,
+  ensureImageGrid, equalModeOf, layoutImageFrames, planImageGrid, setGridCols,
+  setGridItemImage, clearGridItemImage, setTitlesOn, setCaptionsOn, titlesOn,
+  captionsOn, captionStyleOf, gapOf, clampGap, IMAGE_GRID_MAX, IMAGE_GRID_GAP,
   seedGridItem, itemAspect,
 } from './bloco-image-grid.js';
 
@@ -153,6 +154,34 @@ import {
   assert.ok(Math.abs(frames[0].h - frames[1].h) < 1e-6);
   const sumW = frames[0].w + frames[1].w;
   assert.ok(Math.abs(sumW - (totalW - gap)) < 1e-6, `soma larguras com gap ${gap}: ${sumW}`);
+}
+
+// ── export = preview: 2 slots, 1 foto NÃO estica na faixa ───────────────────
+{
+  const b = { type: 'image-grid', items: [
+    { src: 'a', nw: 200, nh: 100 },
+    { src: null, nw: 0, nh: 0 },
+  ] };
+  const totalW = 400;
+  const gap = IMAGE_GRID_GAP;
+  const edit = planImageGrid(b, totalW, { editing: true });
+  const pdf = planImageGrid(b, totalW, { editing: false });
+  assert.equal(edit.n, 2);
+  assert.equal(pdf.n, 2, 'PDF não colapsa pra 1 coluna');
+  assert.equal(pdf.skip, false);
+  const colW = (totalW - gap) / 2;
+  assert.ok(Math.abs(pdf.frames[0].w - colW) < 1e-6, 'foto fica na metade da faixa');
+  assert.ok(Math.abs(pdf.frames[1].w - colW) < 1e-6, 'slot vazio reserva a coluna');
+  assert.equal(edit.frames[0].w, pdf.frames[0].w);
+}
+
+{
+  const b = { type: 'image-grid' };
+  ensureImageGrid(b);
+  const emptyPdf = planImageGrid(b, 499, { editing: false });
+  assert.equal(emptyPdf.n, 2);
+  assert.equal(emptyPdf.skip, true, 'grid sem foto some no PDF');
+  assert.equal(planImageGrid(b, 499, { editing: true }).skip, false);
 }
 
 console.log('test-image-grid: ok');

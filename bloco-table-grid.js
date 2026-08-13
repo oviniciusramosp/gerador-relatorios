@@ -168,6 +168,31 @@ export function computeEqualRowHeights(natural) {
   });
 }
 
+/** Altura explícita na <tr> E nas <td> — o print ignora height só na row. */
+function applyRowBoxHeight(tr, h) {
+  if (!tr || !(h > 0)) return;
+  const px = h + 'px';
+  tr.style.height = px;
+  tr.style.minHeight = px;
+  [...tr.cells].forEach((td) => {
+    td.style.height = px;
+    td.style.minHeight = px;
+    td.style.boxSizing = 'border-box';
+  });
+}
+
+function resetTableRowHeights(t) {
+  [...t.rows].forEach((tr) => {
+    tr.style.height = '';
+    tr.style.minHeight = '';
+    [...tr.cells].forEach((td) => {
+      td.style.height = '';
+      td.style.minHeight = '';
+    });
+  });
+  t.style.height = '';
+}
+
 /**
  * Aplica equalRows no DOM: mede rows, equaliza, última da menor preenche.
  * @param {HTMLElement} gridEl — .tblgrid
@@ -177,14 +202,7 @@ export function layoutEqualRowHeights(gridEl) {
   const tables = [...gridEl.querySelectorAll('.tblgrid-cell table.tbl')];
   if (tables.length < 2) return;
 
-  // reset para medir natural
-  tables.forEach((t) => {
-    [...t.rows].forEach((tr) => {
-      tr.style.height = '';
-      tr.style.minHeight = '';
-    });
-    t.style.height = '';
-  });
+  tables.forEach(resetTableRowHeights);
 
   const natural = tables.map((t) =>
     [...t.rows].map((tr) => tr.getBoundingClientRect().height));
@@ -194,13 +212,67 @@ export function layoutEqualRowHeights(gridEl) {
     const heights = assigned[ti] || [];
     [...t.rows].forEach((tr, ri) => {
       const h = heights[ri];
-      if (h != null && h > 0) {
-        tr.style.height = h + 'px';
-        tr.style.minHeight = h + 'px';
-      }
+      if (h != null && h > 0) applyRowBoxHeight(tr, h);
     });
     const sum = heights.reduce((a, h) => a + h, 0);
     if (sum > 0) t.style.height = sum + 'px';
+  });
+}
+
+/**
+ * Última row da menor tabela: cresce até a altura da mais alta.
+ * [100, 70] + last [40, 30] → last [40, 60]
+ */
+export function computeStretchedLastRowHeights(tableHeights, lastRowHeights) {
+  const hs = Array.isArray(tableHeights) ? tableHeights : [];
+  const last = Array.isArray(lastRowHeights) ? lastRowHeights : [];
+  const n = Math.max(hs.length, last.length);
+  const maxH = Math.max(0, ...hs.map((h) => Math.max(0, +h || 0)));
+  return Array.from({ length: n }, (_, i) => {
+    const th = Math.max(0, +hs[i] || 0);
+    const lh = Math.max(0, +last[i] || 0);
+    return lh + Math.max(0, maxH - th);
+  });
+}
+
+/**
+ * Igualar só a altura total (equal=height): última row da menor preenche
+ * até a tabela mais alta. Sem isso o .tbl-frame estica no PDF e as linhas
+ * verticais da <table> (ainda na altura do texto) param no meio.
+ */
+export function layoutEqualTableHeights(gridEl) {
+  if (!gridEl) return;
+  const tables = [...gridEl.querySelectorAll('.tblgrid-cell table.tbl')];
+  if (tables.length < 2) return;
+
+  tables.forEach(resetTableRowHeights);
+
+  const tableHs = tables.map((t) => t.getBoundingClientRect().height);
+  const lastHs = tables.map((t) => {
+    const last = t.rows[t.rows.length - 1];
+    return last ? last.getBoundingClientRect().height : 0;
+  });
+  const maxH = Math.max(0, ...tableHs);
+  if (maxH <= 0) return;
+  const lastTarget = computeStretchedLastRowHeights(tableHs, lastHs);
+
+  tables.forEach((t, i) => {
+    const last = t.rows[t.rows.length - 1];
+    if (!last) return;
+    applyRowBoxHeight(last, lastTarget[i]);
+    t.style.height = maxH + 'px';
+  });
+}
+
+/** Roda o equalizador certo em cada grid já montado (export precisa ser sync). */
+export function finalizeTableGridLayouts(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('.tblgrid').forEach((grid) => {
+    const wrap = grid.closest('.tblgrid-wrap') || grid;
+    const equalRows = wrap.dataset.equalRows === '1' || grid.dataset.equalRows === '1';
+    const equalH = wrap.dataset.equal === 'height' || grid.dataset.equal === 'height';
+    if (equalRows) layoutEqualRowHeights(grid);
+    else if (equalH) layoutEqualTableHeights(grid);
   });
 }
 
@@ -347,9 +419,14 @@ export function buildTableGridEl(b, editing, ctx = {}, colW = 499) {
 
   wrap.appendChild(grid);
 
-  // equaliza altura das rows entre tabelas (após layout)
-  if (equalRows && n > 1) {
-    const run = () => layoutEqualRowHeights(grid);
+  // equaliza altura (após o grid entrar no documento). No export o
+  // finalizeTableGridLayouts roda de novo, sync, porque o rAF não chega
+  // antes do outerHTML.
+  if ((equalRows || equal === 'height') && n > 1) {
+    const run = () => {
+      if (equalRows) layoutEqualRowHeights(grid);
+      else layoutEqualTableHeights(grid);
+    };
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => requestAnimationFrame(run));
     } else {
@@ -394,7 +471,9 @@ function clearSiblingTableCellFocus(gridWrap, keepItemIndex) {
   /* ativa por cima das vizinhas: “+”/alças na borda não ficam sob a célula ao lado */
   .tblgrid-cell.is-active { z-index: 4; }
   .tblgrid-cell .tbl-wrap { width: 100% !important; overflow: visible; }
-  .page.editing .tblgrid-cell.is-active .tbl-frame {
+  /* anel da Tabela N: só com o grid selecionado e hover nessa tabela */
+  .page.editing .tblgrid-wrap.active-block .tblgrid-cell:hover .tbl-frame,
+  .page.editing .tblgrid-wrap.active-block .tblgrid-cell.is-active:hover .tbl-frame {
     outline: 1.5px solid color-mix(in srgb, #4E39FF 55%, transparent);
     outline-offset: 2px;
   }
@@ -403,8 +482,13 @@ function clearSiblingTableCellFocus(gridWrap, keepItemIndex) {
   .page.editing .tblgrid-cell:not(.is-active) .tbl td:focus {
     outline: none;
   }
-  /* tabela selecionada no grid: “+” de linha/coluna sempre visíveis */
-  .tblgrid-cell.is-active .tbl-editing .tbl-edge-add { opacity: 1; }
+  /* Chrome print: border-collapse não estica a linha vertical com a td
+     alta. box-shadow inset segue o height explícito (layoutEqual*). */
+  @media print {
+    .tblgrid .tbl:not(.no-vlines) [data-vrule="1"] {
+      box-shadow: inset calc(-1 * var(--tbl-border-w-inner, var(--tbl-border-w, 1px))) 0 0 var(--tbl-border-inner, #C9C9C9);
+    }
+  }
   `;
   document.head.appendChild(s);
 })();

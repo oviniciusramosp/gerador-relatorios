@@ -7,6 +7,16 @@
 
 export const FOOTNOTE_RULE_GAP = 6;   // folga entre a última nota e a linha do rodapé
 
+/** 'default' = estilo Rodapé (⋮ da nota); 'p' = tipografia viva do Parágrafo. */
+export function noteStyleOf(b) {
+  return b && b.noteStyle === 'p' ? 'p' : 'default';
+}
+
+/** Nota da página Índice/Resumo — não entra no miolo. */
+export function isIndexFootnote(b) {
+  return !!(b && b.type === 'footnote' && b.scope === 'index');
+}
+
 /** Espaço (px) entre o fim da coluna de conteúdo e a linha do rodapé. */
 export function footnoteDeadZone(contentTop, contentH, ruleBotBottom, ruleH, gap) {
   const noteBottom = ruleBotBottom - (ruleH || 0) - (gap || 0);
@@ -37,6 +47,11 @@ export function assignFootnotes(blocks, pageOf) {
   for (const b of blocks || []) {
     if (!b || b.placement === 'right') continue;
     if (b.type === 'footnote') {
+      if (b.scope === 'index') continue;   // página Índice/Resumo, não o miolo
+      if (b.pinPage != null && Number.isFinite(+b.pinPage)) {
+        push(b, +b.pinPage);
+        continue;
+      }
       push(b, curPage);
       continue;
     }

@@ -560,9 +560,10 @@ export function clampTableBorderWidth(n) {
 }
 
 export function clampTableFontSize(n) {
-  const v = Math.round(Number(n));
+  const v = Number(n);
   if (!Number.isFinite(v)) return DEFAULT_TABLE_FONT_SIZE;
-  return Math.max(TABLE_FONT_SIZE_MIN, Math.min(TABLE_FONT_SIZE_MAX, v));
+  const clamped = Math.max(TABLE_FONT_SIZE_MIN, Math.min(TABLE_FONT_SIZE_MAX, v));
+  return Math.round(clamped * 10) / 10;
 }
 
 export function clampTableLineHeight(n) {
@@ -883,6 +884,9 @@ export function applyTableChrome(host, b) {
         cell.style.borderLeftWidth = cc === 0 ? '0' : bwI;
         cell.style.borderRightWidth = (cc + cs - 1) >= lastC ? '0' : bwI;
         cell.style.borderBottomWidth = (rr + rs - 1) >= lastR ? '0' : bwI;
+        // print do grid: box-shadow inset só nas células com linha vertical interna
+        if ((cc + cs - 1) < lastC && !(b && b.hideVLines)) cell.dataset.vrule = '1';
+        else delete cell.dataset.vrule;
         if (cell.classList.contains('tbl-head-cell') || cell.tagName === 'TH') {
           cell.style.background = headerBg;
           cell.style.color = headerText;
@@ -2352,7 +2356,7 @@ function focusCell(tableId, r, c) {
   .tbl-dragging-row, .tbl-dragging-row * { cursor: grabbing !important; user-select: none !important; }
   .tbl-dragging-col, .tbl-dragging-col * { cursor: grabbing !important; user-select: none !important; }
 
-  /* “+” redondo 12×12 — no miolo só perto da borda; na modal sempre visível */
+  /* “+” redondo — só bloco selecionado + hover na tabela (não vaza p/ outro bloco) */
   .tbl-edge-add {
     position: absolute; width: 14px; height: 14px; padding: 0; border: 0;
     border-radius: 50%; background: #fff; color: #4E39FF;
@@ -2360,17 +2364,15 @@ function focusCell(tableId, r, c) {
     display: grid; place-items: center;
     cursor: pointer; opacity: 0; transition: opacity .1s, background .1s, box-shadow .1s;
     box-shadow: 0 0 0 1px color-mix(in srgb, #4E39FF 35%, transparent);
-    pointer-events: auto; z-index: 4;
+    pointer-events: none; z-index: 4;
   }
-  .tbl-editing.tbl-near-bot .tbl-add-row,
-  .tbl-editing.tbl-near-right .tbl-add-col,
-  .tbl-edge-add:hover { opacity: 1; }
+  .page.editing .tbl-wrap.active-block:hover .tbl-edge-add,
+  .page.editing .tblgrid-wrap.active-block .tbl-wrap:hover .tbl-edge-add,
+  .page.editing .cover-item.cover-sel .tbl-wrap:hover .tbl-edge-add,
+  .page.editing .cover-item.cover-sel .tblgrid-wrap .tbl-wrap:hover .tbl-edge-add {
+    opacity: 1; pointer-events: auto;
+  }
   .tbl-edge-add:hover { background: color-mix(in srgb, #4E39FF 10%, #fff); }
-  /* grid de tabelas: “+” de borda um pouco mais visíveis (hover ainda reforça) */
-  .tblgrid-wrap .tbl-editing .tbl-edge-add { opacity: .55; }
-  .tblgrid-wrap .tbl-editing.tbl-near-bot .tbl-add-row,
-  .tblgrid-wrap .tbl-editing.tbl-near-right .tbl-add-col,
-  .tblgrid-wrap .tbl-editing .tbl-edge-add:hover { opacity: 1; }
   /* “+” posicionados em JS sobre a borda da table (parent = wrap) */
   .tbl-add-row { transform: translate(-50%, -50%); }
   .tbl-add-col { transform: translate(-50%, -50%); }

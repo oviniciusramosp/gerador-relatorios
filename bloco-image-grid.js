@@ -1,6 +1,7 @@
 /* Bloco Grid de Imagens — 1 a 4 colunas; título/legenda sob demanda (bloco inteiro).
  *
  *   buildImageGridEl(b, editing, ctx) → DOM
+ *     preview e PDF compartilham as colunas (slots vazios reservam espaço)
  *     b.items[]       — até 4 células { src, nw, nh, title?, caption? }
  *     b.equal         — 'width' (default) | 'height'
  *     b.titles        — true = reserva título em TODAS as colunas (default off)
@@ -83,6 +84,29 @@ export function gapOf(b) {
 export function itemAspect(it) {
   if (it && it.src && it.nw > 0 && it.nh > 0) return it.nw / it.nh;
   return IMAGE_GRID_EMPTY_AR;
+}
+
+/**
+ * Plano de colunas compartilhado entre preview e PDF.
+ * Sempre N = items.length — filtrar vazios no export fazia 1 foto
+ * esticar nas 2 colunas da página. `skip` só quando o PDF não tem
+ * nenhuma foto (não emite placeholders).
+ */
+export function planImageGrid(b, colW, { editing = true } = {}) {
+  ensureImageGrid(b);
+  const items = b.items;
+  const n = Math.max(1, items.length);
+  const gap = gapOf(b);
+  const equal = equalModeOf(b);
+  const hasImage = items.some((it) => !!it.src);
+  return {
+    n,
+    gap,
+    equal,
+    hasImage,
+    skip: !editing && !hasImage,
+    frames: layoutImageFrames(items, colW, gap, equal),
+  };
 }
 
 /**
@@ -201,22 +225,12 @@ export function setCaptionsOn(b, on) {
  */
 export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
   ensureImageGrid(b);
-  const equal = equalModeOf(b);
-  const gap = gapOf(b);
   const radius = b.radius != null ? b.radius : DEFAULT_RADIUS;
   const showTitle = titlesOn(b);
   const showCap = captionsOn(b);
   const capStyle = captionStyleOf(b);
-
-  // em edição: todos os slots; no PDF/export: só células com imagem
-  const entries = b.items.map((it, i) => ({ it, i }))
-    .filter(({ it }) => editing || !!it.src);
-  const layoutItems = entries.map(({ it }) => it);
-  const frames = layoutImageFrames(
-    layoutItems.length ? layoutItems : [seedGridItem()],
-    colW, gap, equal,
-  );
-  const n = Math.max(1, entries.length || 1);
+  const { n, gap, equal, skip, frames } = planImageGrid(b, colW, { editing });
+  const entries = b.items.map((it, i) => ({ it, i }));
 
   const wrap = document.createElement('div');
   wrap.className = 'imggrid-wrap b';
@@ -248,7 +262,9 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
   if (showCap) rowParts.push('auto');
   grid.style.gridTemplateRows = rowParts.join(' ');
 
-  if (!entries.length) {
+  // Grid sem nenhuma foto: no PDF não emite placeholders; no editor os slots
+  // vazios continuam (o + de cada coluna).
+  if (skip || !entries.length) {
     wrap.appendChild(grid);
     return wrap;
   }
@@ -342,16 +358,19 @@ export function buildImageGridEl(b, editing, ctx = {}, colW = 499) {
     } else {
       // placeholder: altura do layout (= max das imagens com equal=width; ou H comum em height)
       frame.style.height = fr.h + 'px';
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'imggrid-empty';
-      btn.dataset.item = String(i);
-      btn.innerHTML = '<span class="imggrid-empty-ico" aria-hidden="true">+</span><span>Imagem</span>';
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        ctx.pickImage?.(b.id, i);
-      });
-      frame.appendChild(btn);
+      if (editing) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'imggrid-empty';
+        btn.dataset.item = String(i);
+        btn.innerHTML = '<span class="imggrid-empty-ico" aria-hidden="true">+</span><span>Imagem</span>';
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          ctx.pickImage?.(b.id, i);
+        });
+        frame.appendChild(btn);
+      }
+      // PDF: frame vazio só reserva a coluna (sem + / borda tracejada)
     }
 
     cell.appendChild(frame);

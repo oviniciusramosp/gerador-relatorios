@@ -21,13 +21,14 @@ import {
 import {
   rotateOf, setBlockRotate, snapRotate, clampRotate, ROTATE_SNAPS,
 } from './stories-core.js';   // rotação de imagem (mesmo contrato dos Stories)
-import { enhanceAll, wireFieldEditKeys, isFreeSnap } from './range-snap.js';  // snap + digitação (Enter aplica, sem quebrar linha); Shift = sem ímã
+import { enhanceAll, wireFieldEditKeys, isFreeSnap, FONT_SIZE_FINE_STEP, fmtFontSize, fmtFontSizePx } from './range-snap.js';  // snap + digitação; Shift = passo fino na fonte
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
 import { mergePastedBlocks } from './paste-blocks.js';  // colar sobre seleção substitui; 1 p não abre bloco extra
 import {
-  FOOTNOTE_RULE_GAP, footnoteDeadZone, footnoteZoneBottom, assignFootnotes,
+  FOOTNOTE_RULE_GAP, footnoteZoneBottom,
+  assignFootnotes, noteStyleOf, isIndexFootnote,
 } from './footnote.js';  // nota acima da linha do rodapé (fora do CONTENT_H)
 import {
   stripTrailingPlaceholderBr, applyBlockHtml, readBlockHtml, markTrailingPlaceholderBr,
@@ -60,6 +61,7 @@ import {
 } from './bloco-image-grid.js';import {
   buildTableGridEl, ensureTableGrid, tableGridEqualModeOf, tableGridEqualRowsOf,
   tableGridGapOf, clampTableGridGap, setTableGridCols, applyTableStylesToGrid,
+  finalizeTableGridLayouts,
   TABLE_GRID_MAX, TABLE_GRID_GAP, TABLE_GRID_GAP_MAX,
 } from './bloco-table-grid.js';
 import { initSlashMenu } from './slash.js';          // trilha B (t1): menu "/" de tipos
@@ -73,6 +75,10 @@ import {
   PNUM_COLOR_DEFAULT, FOOT_COLOR_DEFAULT,
 } from './doc-migrate.js';  // defaults/migração ao abrir .pdgm (puro; compartilhado com test-pdgm-compat)
 import { projectFormatFromName, projectBaseName, shouldReloadLinkedProject } from './project-link.js';
+import {
+  normalizeViewPage, viewPageFromDataset, pickViewPage,
+  resolveViewPage, viewPagesEqual,
+} from './view-page.js';  // página visível do palco (sobrevive a F5; não vai no .pdgm)
 import { registerIcons, findIcon, iconSvg, isTextIcon, textIconLabel } from './timeline-icons.js';
 import { IONICONS_LIB, IONICONS_LIB_SOLID } from './ionicons-lib.js';  // outline + solid (charts / callout)
 import { openIconPop, paintIconBtn } from './icon-pop.js';
@@ -184,12 +190,12 @@ function colRightX() { return colL() + GAP; }
 // Sem placement explícito o default vem do TIPO: títulos H1–H4 e tabela ocupam as duas
 // colunas; o resto fica na esquerda. Ler sempre por placementOf() — nunca b.placement
 // direto — senão documentos antigos (sem o campo) perdem o default do tipo.
-const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid', 'table-grid']);
+const DEFAULT_FULL = new Set(['h1', 'h2', 'h3', 'h4', 'table', 'image-grid', 'table-grid', 'footnote']);
 const placementOf = (b) => b.placement || (DEFAULT_FULL.has(b.type) ? 'full' : 'inline');
-// tipos com seletor "1 coluna / 2 colunas" (sidebar + painel flutuante à direita)
+// tipos com seletor "1 coluna / 2 colunas" (painel flutuante do bloco — não na sidebar)
 const COL_FMT_TYPES = new Set(['h1', 'h2', 'h3', 'h4', 'p', 'caption', 'image-grid', 'table-grid']);
-// texto puro (p/legenda): painel flutuante só de Largura; H1–H4 usam o #iconPanel
-const TEXT_PLACE_TYPES = new Set(['p', 'caption']);
+// texto sem painel próprio: Colunas/Largura no #textPlacePanel. H1–H4 → #iconPanel.
+const TEXT_PLACE_TYPES = new Set(['p', 'caption', 'footnote', 'quote', 'callout', 'li', 'ol', 'check']);
 
 // Espaçamento vertical ANTES de um bloco — depende do tipo do bloco de cima (prev).
 // Calculado no JS (não em CSS) porque é contextual; a paginação e o render usam o
@@ -384,6 +390,15 @@ function applyCaptionFace(el, mode = 'default') {
   }
   applyTypeStyle(el, 'caption');
 }
+/** Face da nota: Rodapé = ⋮ da nota; Parágrafo = typeStyleOf('p') ao vivo (não snapshot). */
+function applyFootnoteFace(el, mode = 'default') {
+  if (!el) return;
+  if (mode === 'p') { applyCaptionFace(el, 'p'); return; }
+  applyTypeStyle(el, 'footnote');
+}
+function footnoteWidthOf(b) {
+  return placementOf(b) === 'full' ? COL_FULL : colL();
+}
 /** Títulos "Índice" / "Resumo": espelham o H1 global (⋮ da paleta), inclusive cor.
  *  Usa typeStyleOf (default + override) — não só blockStyles, senão cor default some. */
 function applyIdxTitleStyle(el) {
@@ -400,6 +415,11 @@ function applyIdxTitleStyle(el) {
 // a configuração (rodapé, nº inicial) e a ORIGEM vinculada (arquivo/Google Docs),
 // que permite Sincronizar e reimportar o conteúdo a qualquer momento.
 const LS_KEY = 'pdgm-diagramacao-cfg-v1';
+// página visível (capa/índice/miolo/contracapa) — chrome de sessão, não documento.
+// sessionReady trava o 1º paint do seed pra não apagar a chave salva antes do IDB.
+let sessionViewPage = null;
+let sessionReady = false;
+let persistViewT;
 let uidN = 0;
 const uid = () => 'b' + (Date.now().toString(36)) + (uidN++).toString(36);
 
@@ -673,6 +693,8 @@ function ensureFreePdf() {
 // Estado vive em cfg.sidebarSecs (mesmo LS_KEY do save) — sobrevive a reload.
 const SIDEBAR_SEC_DEFAULTS = {
   documento: true, capa: false, index: false, back: false, header: true, footer: true,
+  // aba Conteúdo: Títulos/Parágrafos abertos; Mídia/Tabelas/Outros fechados
+  'bt-headers': true, 'bt-paragraphs': true, 'bt-images': false, 'bt-tables': false, 'bt-others': false,
 };
 function readSidebarSecs() {
   const out = {};
@@ -747,6 +769,7 @@ function load() {
     ensureIndexColors(idx);
     // migração: capas salvas antes do Y livre / logo / type / bgFit — ver migrateSpecialPages
     migrateSpecialPages(state.doc);
+    sessionViewPage = normalizeViewPage(cfg.viewPage);
   } catch {}
 }
 let saveT;
@@ -770,6 +793,9 @@ function save() { clearTimeout(saveT); saveT = setTimeout(() => {
     source: state.doc.source || null, cover: state.doc.cover, back: state.doc.back, index: state.doc.index,
     // seções expandíveis da sidebar (Texto/Capa/…) — UI chrome, não documento
     sidebarSecs: readSidebarSecs(),
+    // página visível: só grava depois do restore; o 1º paint do seed não pode
+    // sobrescrever a chave com miolo:0 antes do IDB voltar o documento real
+    viewPage: sessionReady ? (readCurrentViewPage() || sessionViewPage) : sessionViewPage,
   };
   try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); }
   catch {                                    // quota (imagem de fundo grande) → salva sem os bg
@@ -1042,6 +1068,7 @@ function buildText(b, editing) {
     el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR';  // corretor nativo PT-BR
   }
   applyTypeStyle(el, b.type);
+  if (b.type === 'footnote') applyFootnoteFace(el, noteStyleOf(b));
   // indent de lista (Tab): li/ol aplicam no próprio .b; check aplica no envelope abaixo
   if (!isCheck && !isCallout && LIST_TYPES.has(b.type)) applyListIndentStyle(el, b);
   // marcador: ol usa _num/_nums (numberLists); li usa marker/subMarker do ⋮
@@ -1175,7 +1202,10 @@ function paintActiveBlock(id) {
   if (!id) return;
   pagesEl.querySelectorAll(
     `.col-left > [data-id="${id}"], .col-right > [data-id="${id}"], .page-footnotes > [data-id="${id}"]`
-  ).forEach(el => el.classList.add('active-block'));
+  ).forEach(el => {
+    el.classList.add('active-block');
+    if (el.isContentEditable) markTrailingPlaceholderBr(el);
+  });
 }
 
 // picker de ícone do Callout = openIconPop + toggle Solid|Outline.
@@ -1392,14 +1422,8 @@ function tableStyleFieldsHtml(b, mode = 'full') {
 
   if (showStruct) {
     tabela += `
-    <div class="swrow"><span>Linhas Verticais</span>
+    <div class="swrow"><span>Divisórias Verticais</span>
       <button type="button" class="sw" data-a="vlines" role="switch" aria-checked="${vlinesOn}"></button></div>`;
-  }
-  // grid item / tabela avulsa: alinhamento default (por célula fica na #tblCellBar)
-  if (showStruct || isItem) {
-    tabela += `
-    <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
-    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>`;
   }
   if (showAlt) {
     tabela += `
@@ -1413,10 +1437,16 @@ function tableStyleFieldsHtml(b, mode = 'full') {
       </div>
     </div>`;
   }
+  // grid item / tabela avulsa: alinhamento default (por célula fica na #tblCellBar)
+  if (showStruct || isItem) {
+    tabela += `
+    <div class="field">Alinhamento (tabela)<div data-slot="align"></div></div>
+    <div class="field">Vertical (tabela)<div data-slot="valign"></div></div>`;
+  }
   if (showShared) {
     texto += `
-    <label class="field"><span class="field-row">Tamanho da fonte <span class="field-val"><span data-role="fsv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="numeric" title="Clique para digitar">${fontSize}</span>px<button type="button" class="resetbtn" data-a="fsreset" title="Redefinir para ${DEFAULT_TABLE_FONT_SIZE}px">↺</button></span></span>
-      <input type="range" data-a="fontSize" min="${TABLE_FONT_SIZE_MIN}" max="${TABLE_FONT_SIZE_MAX}" step="1" value="${fontSize}" data-snaps="6,8,10,12,14,16,18,24" data-edit="off">
+    <label class="field"><span class="field-row">Tamanho da fonte <span class="field-val"><span data-role="fsv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar (use . ou ,). Shift no slider = 0,1 px">${fmtFontSize(fontSize)}</span>px<button type="button" class="resetbtn" data-a="fsreset" title="Redefinir para ${DEFAULT_TABLE_FONT_SIZE}px">↺</button></span></span>
+      <input type="range" data-a="fontSize" min="${TABLE_FONT_SIZE_MIN}" max="${TABLE_FONT_SIZE_MAX}" step="${FONT_SIZE_FINE_STEP}" value="${fontSize}" data-snaps="6,8,10,12,14,16,18,24" data-fine-step="${FONT_SIZE_FINE_STEP}" data-edit="off">
     </label>
     <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lhv" class="field-edit" contenteditable="true" spellcheck="false" inputmode="decimal" title="Clique para digitar">${fmtTableLineHeight(lineHeight)}</span><button type="button" class="resetbtn" data-a="lhreset" title="Redefinir para ${DEFAULT_TABLE_LINE_HEIGHT}">↺</button></span></span>
       <input type="range" data-a="lineHeight" min="${TABLE_LINE_HEIGHT_MIN}" max="${TABLE_LINE_HEIGHT_MAX}" step="0.05" value="${lineHeight}" data-snaps="1,1.15,1.35,1.5,1.75,2,2.5" data-edit="off">
@@ -1726,9 +1756,9 @@ function wireTableStyleControls(root, b, hooks = {}) {
   wireNum({
     role: 'fsv', attr: 'fontSize', resetAttr: 'fsreset',
     clamp: clampTableFontSize, of: tableFontSizeOf, def: DEFAULT_TABLE_FONT_SIZE,
-    fmt: (n) => String(n),
+    fmt: fmtFontSize,
     parse: (raw) => {
-      const n = Math.round(Number(String(raw ?? '').replace(/[^\d.-]/g, '')));
+      const n = Number(String(raw ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
       return Number.isFinite(n) ? n : null;
     },
   });
@@ -1839,9 +1869,13 @@ function openTablePanel() {
   const trash = typeof TRASH_ICO !== 'undefined' ? TRASH_ICO : uiIco('trash', 16, 'outline');
   tablePanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Tabela</div>
+    <div class="field">Colunas<div data-slot="place"></div></div>
     ${tableStyleFieldsHtml(b)}
     <button type="button" class="fieldbtn danger" data-a="del">${trash}<span>Remover</span></button>`;
   tablePanel.hidden = false;
+  mountTextPlaceSeg(tablePanel.querySelector('[data-slot="place"]'), b, () => {
+    if (state.activeId === b.id || state.sel === b.id) openTablePanel();
+  });
 
   const paintTable = () => {
     const host = pagesEl.querySelector(`.tbl-wrap[data-id="${b.id}"]`);
@@ -2178,8 +2212,25 @@ function activeTableGridBlock() {
 }
 function closeTableGridPanel() { if (tableGridPanel) tableGridPanel.hidden = true; }
 
+/** Tira .is-active de todos os grids (ou só o `blockId`). */
+function clearTableGridFocus(blockId) {
+  const sel = blockId
+    ? `.tblgrid-wrap[data-id="${blockId}"]`
+    : '.tblgrid-wrap';
+  pagesEl.querySelectorAll(sel).forEach((host) => {
+    host.querySelectorAll('.tblgrid-cell.is-active').forEach((cell) => {
+      cell.classList.remove('is-active');
+    });
+  });
+}
+
 /** Outline da tabela ativa no grid (is-active no .tblgrid-cell). */
 function paintTableGridFocus(blockId, focus) {
+  pagesEl.querySelectorAll('.tblgrid-wrap').forEach((el) => {
+    if (el.dataset.id !== String(blockId)) {
+      el.querySelectorAll('.tblgrid-cell.is-active').forEach((c) => c.classList.remove('is-active'));
+    }
+  });
   const host = pagesEl.querySelector(`.tblgrid-wrap[data-id="${blockId}"]`);
   if (!host) return;
   const keep = focus === 'grid' ? -1 : +focus;
@@ -2519,6 +2570,7 @@ function updateTableGridBar() {
   } else {
     tableGridPanelDismissed = false;
     if (!b) tableGridFocus = 'grid';
+    clearTableGridFocus();
     closeTableGridPanel();
   }
 }
@@ -2802,7 +2854,8 @@ function numberLists() {
 // JANELA sobre o bloco — o mesmo b aparece em duas páginas, cortado numa quebra de linha.
 const frag = (b, gap, clipTop = 0, clipH = null) => ({ b, gap, clipTop, clipH });
 
-function paginateFlow(contentH) {
+function paginateFlow() {
+  const contentH = CONTENT_H;
   syncMeasurerCols();
   numberLists();
   const pages = [{ left: [], right: [] }];
@@ -2937,34 +2990,19 @@ function pageIndexOfIn(pages, b) {
   }
   return last;
 }
-function measureNotesH(notes) {
-  if (!notes || !notes.length) return 0;
-  const gap = typeStyleOf('footnote').gap ?? 4;
-  let h = 0;
-  notes.forEach((b, i) => {
-    const el = buildText(b, editing);
-    el.style.width = COL_FULL + 'px';
-    mF.appendChild(el);
-    h += Math.ceil(el.getBoundingClientRect().height);
-    mF.removeChild(el);
-    if (i) h += gap;
-  });
-  return h;
-}
 function fillPageNotes(pages) {
   const byPage = assignFootnotes(state.doc.blocks, (b) => pageIndexOfIn(pages, b));
   pages.forEach((pg, i) => { pg.notes = byPage[i] || []; });
+  // pinPage além da última página: gruda na última (reflow encolheu o doc)
+  if (byPage.length > pages.length) {
+    const last = pages[pages.length - 1];
+    for (let i = pages.length; i < byPage.length; i++) {
+      last.notes.push(...(byPage[i] || []));
+    }
+  }
 }
 function paginate() {
-  let pages = paginateFlow(CONTENT_H);
-  const dead = footnoteDeadZone(CONTENT_TOP, CONTENT_H, RULE_BOT_BOTTOM, ruleWidthOf('bot'), FOOTNOTE_RULE_GAP);
-  let overflow = 0;
-  for (const pg of pages) {
-    const h = measureNotesH(pg.notes);
-    if (h > dead) overflow = Math.max(overflow, h - dead);
-  }
-  if (overflow > 0) pages = paginateFlow(Math.max(120, CONTENT_H - overflow));
-  return pages;
+  return paginateFlow();
 }
 
 // ─────────────────────────── render ─────────────────────────────────────────
@@ -3182,23 +3220,43 @@ function renderContentPage(pg, contentIdx, number) {
   });
   content.append(colLeftEl, colRightEl);
   page.appendChild(content);
-  appendPageFootnotes(page, pg.notes);
+  appendFootnoteSlot(page, pg.notes);
   return page;
 }
 
-function appendPageFootnotes(page, notes) {
+function appendFootnoteSlot(page, notes) {
   const list = (notes || []).filter((b) => editing || stripHtml(b.html).replace(/\s+/g, ' ').trim());
-  if (!list.length) return;
-  const zone = document.createElement('div');
-  zone.className = 'page-footnotes';
-  zone.style.bottom = footnoteZoneBottom(PAGE_H, RULE_BOT_BOTTOM, ruleWidthOf('bot'), FOOTNOTE_RULE_GAP) + 'px';
-  const noteGap = typeStyleOf('footnote').gap ?? 4;
-  list.forEach((b, i) => {
-    const el = buildText(b, editing);
-    if (i) el.style.marginTop = noteGap + 'px';
-    zone.appendChild(el);
-  });
-  page.appendChild(zone);
+  if (!editing && !list.length) return;
+  const slot = document.createElement('div');
+  slot.className = 'fn-slot';
+  const slotBottom = footnoteZoneBottom(PAGE_H, RULE_BOT_BOTTOM, ruleWidthOf('bot'), FOOTNOTE_RULE_GAP);
+  slot.style.bottom = slotBottom + 'px';
+  // sem nota: “+” colado na linha do rodapé, só se o miolo não cobriu a faixa.
+  // com nota: altura automática (cresce pra cima); o miolo não encolhe — quebra de página é manual.
+  slot.style.height = list.length ? 'auto' : '22px';
+  const col = page.querySelector('.col-left');
+  const last = col && [...col.querySelectorAll(':scope > [data-id]')].at(-1);
+  const lastBotPage = last ? CONTENT_TOP + last.offsetTop + last.offsetHeight : CONTENT_TOP;
+  const addTop = PAGE_H - slotBottom - 22;
+  if (editing && !list.length && lastBotPage <= addTop + 1) {
+    const add = document.createElement('div');
+    add.className = 'fn-add';
+    add.innerHTML = '<button type="button" class="fn-add-btn" title="Adicionar nota de rodapé">+</button>';
+    slot.appendChild(add);
+  }
+  if (list.length) {
+    const zone = document.createElement('div');
+    zone.className = 'page-footnotes';
+    const noteGap = typeStyleOf('footnote').gap ?? 4;
+    list.forEach((b, i) => {
+      const el = buildText(b, editing);
+      el.style.width = footnoteWidthOf(b) + 'px';
+      if (i) el.style.marginTop = noteGap + 'px';
+      zone.appendChild(el);
+    });
+    slot.appendChild(zone);
+  }
+  page.appendChild(slot);
 }
 
 // tipografia do Índice / Resumo: default = Parágrafo (typeStyleOf('p')); override em
@@ -3303,11 +3361,56 @@ function collectPreviewTocNav() {
   }
   return rows;
 }
-function scrollStageToEl(el) {
+function scrollStageToEl(el, behavior = 'smooth') {
   if (!el) return;
   const er = el.getBoundingClientRect();
   const sr = stage.getBoundingClientRect();
-  stage.scrollBy({ top: er.top - sr.top - 28, behavior: 'smooth' });
+  stage.scrollBy({ top: er.top - sr.top - 28, behavior });
+}
+
+function collectViewPageItems() {
+  return [...pagesEl.querySelectorAll('.page')].map((el) => {
+    const view = viewPageFromDataset(el.dataset);
+    return view ? { el, view } : null;
+  }).filter(Boolean);
+}
+
+function readCurrentViewPage() {
+  const items = collectViewPageItems();
+  if (!items.length) return null;
+  const sr = stage.getBoundingClientRect();
+  return pickViewPage(
+    items.map((it) => ({ view: it.view, top: it.el.getBoundingClientRect().top })),
+    sr.top + 40,
+  );
+}
+
+function restoreViewPage(view) {
+  const key = normalizeViewPage(view);
+  if (!key) return;
+  const items = collectViewPageItems();
+  const target = resolveViewPage(key, items.map((it) => it.view));
+  if (!target) return;
+  const hit = items.find((it) => viewPagesEqual(it.view, target));
+  if (hit) scrollStageToEl(hit.el, 'auto');
+}
+
+function persistViewPageNow() {
+  if (!sessionReady) return;
+  try {
+    const cfg = JSON.parse(localStorage.getItem(LS_KEY)) || {};
+    const vp = readCurrentViewPage();
+    if (vp) {
+      cfg.viewPage = vp;
+      sessionViewPage = vp;
+      localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+    }
+  } catch {}
+}
+function schedulePersistViewPage() {
+  if (!sessionReady) return;
+  clearTimeout(persistViewT);
+  persistViewT = setTimeout(persistViewPageNow, 200);
 }
 function scrollStageToBlock(id) {
   scrollStageToEl(pagesEl.querySelector(`[data-id="${CSS.escape(id)}"]`));
@@ -3549,6 +3652,8 @@ function renderIndexPage(toc, contentStart, number) {
     wrap.appendChild(sec);
   }
   page.appendChild(wrap);
+  const idxNotes = state.doc.blocks.filter((b) => isIndexFootnote(b));
+  appendFootnoteSlot(page, idxNotes);
   return page;
 }
 
@@ -3612,8 +3717,18 @@ function renderCoverPage(kind, cov) {
   return page;
 }
 
-// no-op legado: a zona col-add da capa só existe vazia (CSS top/bottom:0); sem layout por altura.
-function layoutCoverColAdds() {}
+// "+" do miolo: overlay depois do último bloco. Some se não cabe na coluna
+// (capa vazia é CSS inset:0 — não precisa de top).
+function layoutCoverColAdds() {
+  if (!editing) return;
+  pagesEl.querySelectorAll('.col-left > .col-add').forEach((add) => {
+    const col = add.parentElement;
+    const last = [...col.querySelectorAll(':scope > [data-id]')].at(-1);
+    const top = last ? last.offsetTop + last.offsetHeight + 6 : 0;
+    add.style.top = top + 'px';
+    add.classList.toggle('fits', top + 22 <= col.clientHeight);
+  });
+}
 
 const LOGO_BASE_H = 30;   // altura-base (px) do logo em size=1; o slider (40–260%) escala em cima
 // sel do logo na capa/contracapa: state.sel = 'logo:cover' | 'logo:back' (não colide com ids de cover-item)
@@ -4074,12 +4189,6 @@ pagesEl.addEventListener('keydown', (e) => {
   }
 
   if (e.key === 'Enter' && !e.shiftKey) {
-    // nota de rodapé é um campo na faixa do rodapé — Enter quebra linha, não abre bloco no miolo
-    if (b.type === 'footnote') {
-      e.preventDefault();
-      document.execCommand('insertLineBreak');
-      return;
-    }
     e.preventDefault(); enterAtCaret(host, b); return;
   }
 
@@ -4170,7 +4279,7 @@ function enterAtCaret(host, b) {
   // lista/citação/checklist vazia + Enter → desindenta (se subitem) ou vira parágrafo.
   // 'callout' entrou depois — é uma caixa avulsa, não uma lista, então Enter num callout
   // vazio deve sair dele (virar parágrafo), não deixar uma caixa vazia pra trás.
-  if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote' || b.type === 'check' || b.type === 'callout') && !before.trim() && !after.trim()) {
+  if ((b.type === 'li' || b.type === 'ol' || b.type === 'quote' || b.type === 'check' || b.type === 'callout' || b.type === 'footnote') && !before.trim() && !after.trim()) {
     if (LIST_TYPES.has(b.type) && listIndentOf(b) > 0) {
       setListIndent(b, listIndentOf(b) - 1);
       b.html = '';
@@ -4179,14 +4288,15 @@ function enterAtCaret(host, b) {
     }
     b.type = 'p'; b.html = '';
     delete b.indent;
+    delete b.scope;
+    delete b.pinPage;
     render({ id: b.id, role: 'block', offset: 0 });
     return;
   }
   b.html = stripTrailingPlaceholderBr(before);
-  // título, citação e callout não continuam (viram parágrafo); lista/checklist continuam
-  // (é o ponto de ter uma lista). Callout é caixa avulsa — Enter não empilha caixas.
-  // Citação: Enter sempre abre parágrafo (não encadeia blockquotes).
-  const newType = (HEAD_TYPES.has(b.type) || b.type === 'callout' || b.type === 'quote') ? 'p' : b.type;
+  // título, citação, callout e nota de rodapé não continuam (viram parágrafo);
+  // lista/checklist continuam. Nota: 1 bloco por página — Enter não empilha outra nota.
+  const newType = (HEAD_TYPES.has(b.type) || b.type === 'callout' || b.type === 'quote' || b.type === 'footnote') ? 'p' : b.type;
   const nb = mkBlock(newType, stripTrailingPlaceholderBr(after));
   // subitem: o novo item herda o nível do atual (continua a lista aninhada)
   if (LIST_TYPES.has(newType) && listIndentOf(b) > 0) nb.indent = listIndentOf(b);
@@ -4335,6 +4445,11 @@ const slash = initSlashMenu({
 
 // Notion: "+" ao lado da alça / no fim da coluna → parágrafo novo + menu de tipos (mesmo do "/")
 function insertAfterWithSlash(afterId) {
+  const after = afterId && blockOf(afterId);
+  if (isIndexFootnote(after) || (after && after.type === 'footnote')) {
+    // rodapé: 1 bloco por página — o “+” da alça não empilha outra nota
+    return;
+  }
   clearIdxFocus();
   if (state.sel) {
     state.sel = null;
@@ -4412,6 +4527,7 @@ function applyCoverItemType(it, type) {
 
 // última capa/contracapa clicada — paleta da aba Conteúdo sabe onde inserir sem seleção
 let lastCoverKind = null;
+let lastSpecial = null;   // 'index' quando a paleta deve mirar Índice/Resumo
 function coverKindOf(cov) {
   return cov === state.doc.back ? 'back' : 'cover';
 }
@@ -4551,6 +4667,8 @@ pagesEl.addEventListener('focusin', (e) => {
     if (gw) b = blockOf(gw.dataset.id);
   }
   if (!b) return;
+  if (host.closest && host.closest('.page[data-special="index"]')) lastSpecial = 'index';
+  else if (!(host.closest && host.closest('.page[data-cover]'))) lastSpecial = null;
   clearIdxFocus();
   state.activeId = b.id; syncTypeUI(b.type);
   lastCoverKind = null;                    // miolo em foco → paleta não manda pra capa
@@ -4580,7 +4698,7 @@ pagesEl.addEventListener('focusin', (e) => {
   updateImageGridBar();
   updateTableGridBar();
   updateTextPlaceBar();
-  syncColUI();                             // coluna do bloco ativo na aba Conteúdo
+  syncColUI();                             // cadeado da coluna direita (Colunas mora no painel do bloco)
 });
 
 // Chrome/Safari inserem o <br> placeholder DEPOIS do focusin. Sem observar,
@@ -4595,6 +4713,8 @@ function startPhBrWatch(el) {
   markTrailingPlaceholderBr(el);
   phBrObs = new MutationObserver(() => markTrailingPlaceholderBr(el));
   phBrObs.observe(el, { childList: true, subtree: true });
+  // Chrome/Safari metem o <br> depois do focusin — um frame extra pega o caso
+  requestAnimationFrame(() => markTrailingPlaceholderBr(el));
 }
 pagesEl.addEventListener('focusout', (e) => {
   const host = e.target.closest && e.target.closest('[contenteditable]');
@@ -4665,8 +4785,11 @@ pagesEl.addEventListener('mousedown', (e) => {
   if (e.target.closest && e.target.closest('.rimg')) return;   // o pointerdown do drag cuida
   // rastreia capa/contracapa vs miolo pra paleta da aba Conteúdo
   const coverPage = e.target.closest && e.target.closest('.page[data-cover]');
+  const specialPage = e.target.closest && e.target.closest('.page[data-special]');
   if (coverPage) lastCoverKind = coverPage.dataset.cover;
   else if (e.target.closest && e.target.closest('.page')) lastCoverKind = null;
+  if (specialPage && specialPage.dataset.special === 'index') lastSpecial = 'index';
+  else if (e.target.closest && e.target.closest('.page')) lastSpecial = null;
   const idxSec = e.target.closest && e.target.closest('.idx-section');
   const coverLogo = e.target.closest && e.target.closest('.cover-logo-hit');
   const coverIt = e.target.closest && e.target.closest('.cover-item');
@@ -5158,6 +5281,21 @@ badd.addEventListener('click', (e) => {
   else if (handleFor.kind === 'cover') {
     const f = findCoverItem(handleFor.id);
     if (f) insertCoverWithSlash(coverKindOf(f.cov), handleFor.id);
+  }
+});
+pagesEl.addEventListener('click', (e) => {
+  const fnBtn = e.target.closest && e.target.closest('.fn-add-btn');
+  if (fnBtn) {
+    e.preventDefault(); e.stopPropagation();
+    const page = fnBtn.closest('.page');
+    if (!page) return;
+    if (page.dataset.special === 'index') {
+      const last = page.querySelector('.page-footnotes > [data-id]:last-child');
+      insertIndexFootnote(last ? last.dataset.id : null);
+      return;
+    }
+    if (page.dataset.page != null) insertMioloFootnoteOnPage(+page.dataset.page);
+    return;
   }
 });
 // row "+" no fim da coluna esquerda (miolo) OU da área da capa/contracapa
@@ -5970,8 +6108,8 @@ function openCoverPanel() {
   coverPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">${COVER_TYPE_LABEL[type] || 'Bloco'}</div>
     ${isPlain ? `
-    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${sizeVal}px</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir">↺</button></span></span>
-      <input type="range" data-a="size" min="8" max="120" step="1" value="${sizeVal}" data-snaps="8,14,18,32,64,120"></label>
+    <label class="field"><span class="field-row">Tamanho <span class="field-val"><span data-role="szv">${fmtFontSizePx(sizeVal)}</span><button type="button" class="resetbtn" data-a="sizereset" title="Redefinir">↺</button></span></span>
+      <input type="range" data-a="size" min="8" max="120" step="${FONT_SIZE_FINE_STEP}" value="${sizeVal}" data-snaps="8,14,18,32,64,120" data-fine-step="${FONT_SIZE_FINE_STEP}" title="Shift = ajuste fino (0,1 px)"></label>
     ${isTitleSub ? `
     <label class="field"><span class="field-row">Espessura <span class="field-val"><span data-role="wtv">${weightVal}</span><button type="button" class="resetbtn" data-a="weightreset" title="Redefinir para ${COVER_WEIGHT_DEFAULT}">↺</button></span></span>
       <input type="range" data-a="weight" min="100" max="${COVER_WEIGHT_MAX}" step="100" value="${weightVal}" data-snaps="100,200,300,400,500,600,700,800,900" data-edit="off"></label>
@@ -6035,7 +6173,7 @@ function openCoverPanel() {
         if (node) node.style.fontSize = cur.item.size + 'px';
         coverPushPull(cur.cov, cur.item, (node ? node.offsetHeight : 0) - oldH);
         const szv = coverPanel.querySelector('[data-role="szv"]');
-        if (szv) szv.textContent = cur.item.size + 'px';
+        if (szv) szv.textContent = fmtFontSizePx(cur.item.size);
         save(); scheduleCommit(); return;
       }
       if (a === 'weight' || a === 'weightreset') {
@@ -6251,8 +6389,8 @@ function openIdxPanel() {
     </div>
     <div class="field">Largura<div data-slot="w"></div></div>
     <div class="swrow"><span>Linha até a página</span><button type="button" class="sw" data-a="leaders" role="switch" aria-checked="${idx.leaders ? 'true' : 'false'}"></button></div>
-    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fs}px</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para o Parágrafo (${pDef.fontSize}px)">↺</button></span></span>
-      <input type="range" data-a="fontSize" min="8" max="48" step="1" value="${fs}" data-snaps="8,10,12,16,20,24">
+    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fmtFontSizePx(fs)}</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para o Parágrafo (${fmtFontSizePx(pDef.fontSize)})">↺</button></span></span>
+      <input type="range" data-a="fontSize" min="8" max="48" step="${FONT_SIZE_FINE_STEP}" value="${fs}" data-snaps="8,10,12,16,20,24" data-fine-step="${FONT_SIZE_FINE_STEP}" title="Shift = ajuste fino (0,1 px)">
     </label>
     <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lineHeightv">${lh}px</span><button type="button" class="resetbtn" data-r="lineHeight" title="Redefinir para o Parágrafo (${pDef.lineHeight}px)">↺</button></span></span>
       <input type="range" data-a="lineHeight" min="8" max="56" step="1" value="${lh}" data-snaps="12,14,17,21,26,31">
@@ -6317,8 +6455,9 @@ function openIdxPanel() {
     const disp = idxPanel.querySelector(`[data-role="${field}v"]`);
     const reset = idxPanel.querySelector(`.resetbtn[data-r="${field}"]`);
     if (range) range.addEventListener('input', () => {
-      state.doc.index[field] = Math.round(+range.value);
-      if (disp) disp.textContent = state.doc.index[field] + 'px';
+      const n = +range.value;
+      state.doc.index[field] = field === 'fontSize' ? Math.round(n * 10) / 10 : Math.round(n);
+      if (disp) disp.textContent = field === 'fontSize' ? fmtFontSizePx(state.doc.index[field]) : state.doc.index[field] + 'px';
       paintIdxType();
     });
     if (reset) {
@@ -6327,7 +6466,7 @@ function openIdxPanel() {
         delete state.doc.index[field];
         const d = typeStyleOf('p')[pKey];
         if (range) range.value = d;
-        if (disp) disp.textContent = d + 'px';
+        if (disp) disp.textContent = field === 'fontSize' ? fmtFontSizePx(d) : d + 'px';
         paintIdxType();
       });
     }
@@ -6364,8 +6503,8 @@ function openResumoPanel() {
   resumoPanel.innerHTML = `
     <div class="eyebrow" style="margin:0">Resumo</div>
     <div class="field">Largura do resumo<div data-slot="w"></div></div>
-    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fs}px</span><button type="button" class="resetbtn" data-r="resumoFontSize" title="Redefinir para o Parágrafo (${pDef.fontSize}px)">↺</button></span></span>
-      <input type="range" data-a="resumoFontSize" min="8" max="48" step="1" value="${fs}" data-snaps="8,10,12,16,20,24">
+    <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fmtFontSizePx(fs)}</span><button type="button" class="resetbtn" data-r="resumoFontSize" title="Redefinir para o Parágrafo (${fmtFontSizePx(pDef.fontSize)})">↺</button></span></span>
+      <input type="range" data-a="resumoFontSize" min="8" max="48" step="${FONT_SIZE_FINE_STEP}" value="${fs}" data-snaps="8,10,12,16,20,24" data-fine-step="${FONT_SIZE_FINE_STEP}" title="Shift = ajuste fino (0,1 px)">
     </label>
     <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lineHeightv">${lh}px</span><button type="button" class="resetbtn" data-r="resumoLineHeight" title="Redefinir para o Parágrafo (${pDef.lineHeight}px)">↺</button></span></span>
       <input type="range" data-a="resumoLineHeight" min="8" max="56" step="1" value="${lh}" data-snaps="12,14,17,21,26,31">
@@ -6390,8 +6529,9 @@ function openResumoPanel() {
     const disp = resumoPanel.querySelector(`[data-role="${role}"]`);
     const reset = resumoPanel.querySelector(`.resetbtn[data-r="${field}"]`);
     if (range) range.addEventListener('input', () => {
-      state.doc.index[field] = Math.round(+range.value);
-      if (disp) disp.textContent = state.doc.index[field] + 'px';
+      const n = +range.value;
+      state.doc.index[field] = field === 'resumoFontSize' ? Math.round(n * 10) / 10 : Math.round(n);
+      if (disp) disp.textContent = field === 'resumoFontSize' ? fmtFontSizePx(state.doc.index[field]) : state.doc.index[field] + 'px';
       paintResumoType();
     });
     if (reset) {
@@ -6400,7 +6540,7 @@ function openResumoPanel() {
         delete state.doc.index[field];
         const d = typeStyleOf('p')[pKey];
         if (range) range.value = d;
-        if (disp) disp.textContent = d + 'px';
+        if (disp) disp.textContent = field === 'resumoFontSize' ? fmtFontSizePx(d) : d + 'px';
         paintResumoType();
       });
     }
@@ -7117,7 +7257,8 @@ function scheduleProjectAutosave() {
 
 function setBlocks(blocks) {
   state.doc.blocks = blocks.length ? blocks : [mkBlock('p', '')];
-  state.activeId = state.doc.blocks[0].id; state.sel = null;
+  state.activeId = null;
+  state.sel = null;
   closeImgPanel(); renderSourceChip(); render();
 }
 
@@ -7151,6 +7292,8 @@ function applyDocFile(doc, opts = {}) {
   suppressProjectAutosave = true;
   if (!keep) clearFileLink();
   try {
+    stage.scrollTop = 0;
+    sessionViewPage = null;
     applyDoc(doc);
     if (keep) {
       fileHandle = keep;
@@ -7180,7 +7323,7 @@ function applyDocFile(doc, opts = {}) {
 }
 // mesma troca de documento SEM mexer na origem vinculada — usada pela restauração de
 // sessão no boot, que não pode derrubar o fileHandle de um .md linkado.
-function applyDoc(doc) {
+function applyDoc(doc, opts = {}) {
   const raw = (doc && typeof doc === 'object') ? doc : {};
   state.doc = Object.assign(seedDoc(), raw);
   // raw (arquivo) antes do seed: migra ruleTop/ruleBot ausentes → 1px legado, não 0.5
@@ -7198,6 +7341,8 @@ function applyDoc(doc) {
   syncSpecialUI();
   sidebarRevealReady = wasReady;
   setBlocks(state.doc.blocks);   // → render() → save()+scheduleCommit() (mesmo padrão do #btnNew)
+  // F5: volta à página que estava; abrir arquivo novo começa no topo, sem bloco ativo
+  if (opts.restoreView) restoreViewPage(sessionViewPage);
 }
 
 // ── toasts ──────────────────────────────────────────────────────────────────
@@ -8251,7 +8396,7 @@ function openBlockStylePanel(type, anchorEl) {
   const label = (btByType[type]?.querySelector('.lbl') || {}).textContent || type;
   const fmtPct = (n) => Math.round((Number.isFinite(+n) ? +n : 0) * 100) + '%';
   const fmtLS = (n) => (Number.isFinite(+n) ? +n : 0).toFixed(2) + 'em';
-  const fmtPx = (n) => (Number.isFinite(+n) ? +n : 0) + 'px';
+  const fmtPx = (n) => fmtFontSizePx(Number.isFinite(+n) ? +n : 0);
   const markerPickHtml = (field, active) =>
     `<div class="markerpick" data-a="${field}" role="listbox" aria-label="${field === 'marker' ? 'Símbolo do item' : 'Símbolo do subitem'}">`
     + LI_MARKER_OPTS.map(m =>
@@ -8270,7 +8415,7 @@ function openBlockStylePanel(type, anchorEl) {
   } else if (!inheritsText) {
     fields += `
     <label class="field"><span class="field-row">Tamanho do texto <span class="field-val"><span data-role="fontSizev">${fmtPx(v('fontSize'))}</span><button type="button" class="resetbtn" data-r="fontSize" title="Redefinir para ${def.fontSize}px">↺</button></span></span>
-      <input type="range" data-a="fontSize" min="8" max="48" step="1" value="${v('fontSize')}" data-snaps="8,12,16,20,24,48">
+      <input type="range" data-a="fontSize" min="8" max="48" step="${FONT_SIZE_FINE_STEP}" value="${v('fontSize')}" data-snaps="8,12,16,20,24,48" data-fine-step="${FONT_SIZE_FINE_STEP}" title="Shift = ajuste fino (0,1 px)">
     </label>
     <label class="field"><span class="field-row">Altura da linha <span class="field-val"><span data-role="lineHeightv">${fmtPx(v('lineHeight'))}</span><button type="button" class="resetbtn" data-r="lineHeight" title="Redefinir para ${def.lineHeight}px">↺</button></span></span>
       <input type="range" data-a="lineHeight" min="8" max="56" step="1" value="${v('lineHeight')}" data-snaps="12,17,21,26,31,56">
@@ -8386,6 +8531,7 @@ function openBlockStylePanel(type, anchorEl) {
   };
   const parseRange = (field, raw) => {
     if (field === 'letterSpacing' || field === 'checkedOpacity' || field === 'thickness') return +raw;
+    if (field === 'fontSize') return Math.round(+raw * 10) / 10;
     return Math.round(+raw);
   };
 
@@ -8469,14 +8615,10 @@ document.addEventListener('mousedown', (e) => {                // fecha ao clica
   closeBlockStylePanel();
 }, true);
 
-// "Posição" do bloco EM FOCO — a sidebar é o único lugar de onde texto/tabela alcançam o
-// placement (imagem tem o #imgPanel, item de capa tem o #coverPanel, ambos com o MESMO
-// segment widthSeg). Reconstrói a cada troca de bloco porque widthSeg marca o botão ativo no
-// build (não tem setter) — 3 botões, rebuild é mais barato que um patch.
-// Na coluna direita, o cadeado ("Travar no texto") também mora aqui — o #imgPanel só serve
-// imagem; texto/tabela na direita usam a mesma âncora (b.anchor) via este botão.
-const blockColEl = document.getElementById('blockcol');
-const blockColSlot = blockColEl.querySelector('[data-slot="col"]');
+// Colunas do bloco NÃO moram mais na aba Conteúdo — cada tipo tem o segment no
+// próprio painel flutuante (imagem, tabela, ícone, texto, grids). O cadeado da
+// coluna direita ("Travar no texto") continua aqui: imagem já tem no #imgPanel;
+// texto/tabela na direita usam a mesma âncora (b.anchor) via este botão.
 const blockLockEl = document.getElementById('blocklock');
 if (blockLockEl) {
   blockLockEl.addEventListener('mousedown', (e) => e.preventDefault()); // não rouba caret
@@ -8486,46 +8628,20 @@ if (blockLockEl) {
 }
 function syncColUI() {
   const b = state.activeId && blockOf(state.activeId);
-  // quebra de página e divisor não têm coluna (o divisor é selecionado, não focado — nunca
-  // chega aqui; a guarda é só pra não depender disso).
-  if (!b || b.type === 'pagebreak' || b.type === 'divider' || b.type === 'footnote') {
-    setSidebarReveal(blockColEl, false); blockColSlot.replaceChildren();
-    if (blockLockEl) setSidebarReveal(blockLockEl, false);
+  // quebra / divisor / nota / tipos 1–2 col: sem coluna direita → sem cadeado
+  if (!blockLockEl) return;
+  if (!b || b.type === 'pagebreak' || b.type === 'divider' || b.type === 'footnote'
+    || COL_FMT_TYPES.has(b.type) || placementOf(b) !== 'right') {
+    setSidebarReveal(blockLockEl, false);
     return;
   }
-  setSidebarReveal(blockColEl, true);
-  // headers / parágrafo / grid de imagens: 1 coluna | 2 colunas.
-  // Demais (imagem, tabela, lista…) mantêm as 3 posições, inclusive coluna direita.
-  const opts = COL_FMT_TYPES.has(b.type)
-    ? [
-        { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
-        { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
-      ]
-    : [
-        { val: 'inline', label: 'Coluna Esquerda', icon: COL_ICON.left },
-        { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
-        { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
-      ];
-  // se o bloco está na direita e o tipo agora só mostra 1/2 col, reflete full/inline
-  // no segment (valor efetivo pra UI); a troca real limpa right via setBlockPlacement.
-  let cur = placementOf(b);
-  if (COL_FMT_TYPES.has(b.type) && cur === 'right') cur = 'inline';
-  blockColSlot.replaceChildren(widthSeg(cur, opts, (v) => setBlockPlacement(b.id, v)));
-  // cadeado: só na coluna direita (modelo da imagem). Mesma regra do #imgPanel.
-  // headers/parágrafo não usam right no segment — esconde o cadeado nesses tipos.
-  if (blockLockEl) {
-    if (placementOf(b) !== 'right' || COL_FMT_TYPES.has(b.type)) {
-      setSidebarReveal(blockLockEl, false);
-    } else {
-      const travavel = !!b.anchor || leftBlocksOnPage(b.page | 0).length > 0;
-      setSidebarReveal(blockLockEl, true);
-      blockLockEl.disabled = !travavel;
-      blockLockEl.title = travavel ? ''
-        : 'Esta página não tem bloco de texto próprio para prender o item (só a continuação de um parágrafo que começa numa página anterior).';
-      blockLockEl.innerHTML = (b.anchor ? UNLOCK_SVG : LOCK_SVG)
-        + `<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span>`;
-    }
-  }
+  const travavel = !!b.anchor || leftBlocksOnPage(b.page | 0).length > 0;
+  setSidebarReveal(blockLockEl, true);
+  blockLockEl.disabled = !travavel;
+  blockLockEl.title = travavel ? ''
+    : 'Esta página não tem bloco de texto próprio para prender o item (só a continuação de um parágrafo que começa numa página anterior).';
+  blockLockEl.innerHTML = (b.anchor ? UNLOCK_SVG : LOCK_SVG)
+    + `<span>${b.anchor ? 'Destravar' : 'Travar no texto'}</span>`;
 }
 function toggleBlockLock(id) {
   const b = blockOf(id); if (!b || placementOf(b) !== 'right') return;
@@ -8552,15 +8668,22 @@ function setBlockPlacement(id, v) {
   syncColUI();
   updateTextPlaceBar();
 }
-/** Segment 1 col | 2 cols no painel flutuante (H1–H4 / p / …). */
+/** Segment de colunas no painel flutuante do bloco (1/2 cols ou as 3 posições). */
 function mountTextPlaceSeg(slot, b, onAfter) {
   if (!slot || !b) return;
   let cur = placementOf(b);
-  if (cur === 'right') cur = 'inline';
-  slot.replaceChildren(widthSeg(cur === 'full' ? 'full' : 'inline', [
-    { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
-    { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
-  ], (v) => {
+  if (COL_FMT_TYPES.has(b.type) && cur === 'right') cur = 'inline';
+  const opts = COL_FMT_TYPES.has(b.type)
+    ? [
+        { val: 'inline', label: '1 coluna (esquerda)', icon: COL_ICON.left },
+        { val: 'full', label: '2 colunas (largura total)', icon: COL_ICON.full },
+      ]
+    : [
+        { val: 'inline', label: 'Coluna Esquerda', icon: COL_ICON.left },
+        { val: 'full', label: 'Largura Total', icon: COL_ICON.full },
+        { val: 'right', label: 'Coluna Direita', icon: COL_ICON.right },
+      ];
+  slot.replaceChildren(widthSeg(cur, opts, (v) => {
     setBlockPlacement(b.id, v);
     onAfter?.(v);
   }));
@@ -8583,12 +8706,32 @@ function openTextPlacePanel() {
     document.body.appendChild(textPlacePanel);
   }
   textPlacePanel.dataset.bid = b.id;
-  const labels = { p: 'Parágrafo', caption: 'Legenda', quote: 'Citação', callout: 'Callout', li: 'Lista', ol: 'Lista', check: 'Checklist' };
+  const labels = { p: 'Parágrafo', caption: 'Legenda', footnote: 'Nota de rodapé', quote: 'Citação', callout: 'Callout', li: 'Lista', ol: 'Lista', check: 'Checklist' };
+  const styleField = b.type === 'footnote'
+    ? `<div class="field">Estilo<div data-slot="notestyle"></div></div>`
+    : '';
+  // 1/2 cols (e nota) usam "Largura"; lista/citação/callout usam as 3 posições = "Colunas"
+  const placeLabel = (COL_FMT_TYPES.has(b.type) || b.type === 'footnote') ? 'Largura' : 'Colunas';
   textPlacePanel.innerHTML = `
     <div class="eyebrow" style="margin:0">${labels[b.type] || 'Texto'}</div>
-    <div class="field">Largura<div data-slot="place"></div></div>`;
+    <div class="field">${placeLabel}<div data-slot="place"></div></div>
+    ${styleField}`;
   textPlacePanel.hidden = false;
   mountTextPlaceSeg(textPlacePanel.querySelector('[data-slot="place"]'), b, () => openTextPlacePanel());
+  const styleSlot = textPlacePanel.querySelector('[data-slot="notestyle"]');
+  if (styleSlot) {
+    const NOTE_P_ICO = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><text x="3" y="12" font-size="11" font-weight="700" fill="currentColor" stroke="none" font-family="system-ui,sans-serif">¶</text></svg>';
+    styleSlot.append(widthSeg(noteStyleOf(b), [
+      { val: 'default', label: 'Rodapé', icon: POS_ICON.footer },
+      { val: 'p', label: 'Parágrafo', icon: NOTE_P_ICO },
+    ], (v) => {
+      if (v === 'p') b.noteStyle = 'p';
+      else delete b.noteStyle;
+      const keep = captureCaret();
+      render(keep && keep.id === b.id ? keep : { id: b.id, role: 'block', offset: 0 });
+      openTextPlacePanel();
+    }));
+  }
   positionTextPlacePanel();
 }
 function positionTextPlacePanel() {
@@ -8616,6 +8759,64 @@ function updateTextPlaceBar() {
     closeTextPlacePanel();
   }
 }
+function isIndexPageContext() {
+  if (idxFocus) return true;
+  if (lastSpecial === 'index') return true;
+  return isIndexFootnote(state.activeId && blockOf(state.activeId));
+}
+function insertIndexFootnote(afterId) {
+  const existing = state.doc.blocks.find(isIndexFootnote);
+  if (existing) {
+    state.activeId = existing.id;
+    lastSpecial = 'index';
+    clearIdxFocus();
+    render({ id: existing.id, role: 'block', offset: 0 });
+    syncTypeUI('footnote');
+    return;
+  }
+  const nb = mkBlock('footnote', '');
+  nb.scope = 'index';
+  const i = afterId ? idxOf(afterId) : -1;
+  if (i >= 0) state.doc.blocks.splice(i + 1, 0, nb);
+  else state.doc.blocks.push(nb);
+  state.activeId = nb.id;
+  lastSpecial = 'index';
+  clearIdxFocus();
+  render({ id: nb.id, role: 'block', offset: 0 });
+  syncTypeUI('footnote');
+}
+function insertMioloFootnoteOnPage(pageIdx) {
+  const page = pagesEl.querySelector(`.page[data-page="${pageIdx}"]`);
+  const existing = page && page.querySelector('.page-footnotes > [data-id]');
+  if (existing) {
+    state.activeId = existing.dataset.id;
+    lastSpecial = null;
+    clearIdxFocus();
+    render({ id: existing.dataset.id, role: 'block', offset: 0 });
+    syncTypeUI('footnote');
+    return;
+  }
+  const lastNote = page && [...page.querySelectorAll('.page-footnotes > [data-id]')].pop();
+  const lastFlow = page && [...page.querySelectorAll('.col-left > [data-id]')].pop();
+  const nb = mkBlock('footnote', '');
+  nb.pinPage = pageIdx;
+  if (lastNote) {
+    state.doc.blocks.splice(idxOf(lastNote.dataset.id) + 1, 0, nb);
+  } else if (lastFlow) {
+    const fb = blockOf(lastFlow.dataset.id);
+    const i = idxOf(lastFlow.dataset.id);
+    if (fb && fb.type === 'pagebreak' && i >= 0) state.doc.blocks.splice(i, 0, nb);
+    else if (i >= 0) state.doc.blocks.splice(i + 1, 0, nb);
+    else state.doc.blocks.push(nb);
+  } else {
+    state.doc.blocks.push(nb);
+  }
+  state.activeId = nb.id;
+  lastSpecial = null;
+  clearIdxFocus();
+  render({ id: nb.id, role: 'block', offset: 0 });
+  syncTypeUI('footnote');
+}
 // tipos de capa que a paleta converte in-place (preserva html), espelhando TEXT_TYPES do miolo
 const COVER_EDIT_TYPES = new Set(['title', 'subtitle', 'h1', 'h2', 'h3', 'h4', 'p', 'caption', 'quote', 'li', 'ol', 'check', 'callout']);
 function setActiveType(t) {
@@ -8640,6 +8841,12 @@ function setActiveType(t) {
     insertCoverTyped(coverKind, t, f ? f.item.id : null);
     return;
   }
+  // Índice/Resumo: a nota mora nesta página (scope:index), não no miolo
+  if (t === 'footnote' && isIndexPageContext()) {
+    const cur = state.activeId && blockOf(state.activeId);
+    insertIndexFootnote(isIndexFootnote(cur) ? cur.id : null);
+    return;
+  }
   const id = state.activeId;
   const b = id && blockOf(id);
   if (b && TEXT_TYPES.has(b.type)) {
@@ -8655,6 +8862,7 @@ function setActiveType(t) {
     if (t === 'footnote' || (COL_FMT_TYPES.has(t) && b.placement === 'right')) {
       delete b.placement; delete b.y; delete b.page; delete b.anchor;
     }
+    if (t !== 'footnote') delete b.scope;
     render(keep && keep.id === b.id ? keep : { id: b.id, role: 'block', offset: 0 });
     syncTypeUI(t);
     updateHeadBar();
@@ -9528,7 +9736,7 @@ function syncSpecialUI() {
     }
   });
   // largura do índice e do resumo: segment de ícone, não <select> — rebuild é mais barato que
-  // um setter (mesmo idioma do #blockcol/widthSeg: o componente não guarda estado próprio).
+  // um setter (mesmo idioma do widthSeg: o componente não guarda estado próprio).
   const iwSlot = document.querySelector('[data-slot="idxwidth"]');
   if (iwSlot) iwSlot.replaceChildren(widthSeg(state.doc.index.width, [
     { val: 'curto', label: 'Curto', icon: COL_ICON.left },
@@ -10141,10 +10349,23 @@ async function plexFontFace() {
 // monta o HTML auto-contido das páginas (edição desligada → sem alças/contornos)
 function exportPagesHtml() {
   const prev = editing; editing = false;
-  const tmp = document.createElement('div'); tmp.id = 'pages';
-  assemblePages(tmp);
-  editing = prev;
-  return tmp.outerHTML;
+  // id temporário: o editor já tem #pages no stage
+  const tmp = document.createElement('div');
+  tmp.id = 'pages-export';
+  // precisa estar no documento pra medir tabelas (equal height / equalRows);
+  // senão o .tbl-frame estica no PDF e as linhas verticais param no texto.
+  tmp.style.cssText = 'position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none;';
+  document.body.appendChild(tmp);
+  try {
+    assemblePages(tmp);
+    finalizeTableGridLayouts(tmp);
+    tmp.id = 'pages';
+    tmp.removeAttribute('style');
+    return tmp.outerHTML;
+  } finally {
+    tmp.remove();
+    editing = prev;
+  }
 }
 // trilha D: iframe oculto reusado a cada exportação — NÃO display:none (alguns
 // motores de print pulam layout de frame display:none); fica fora da viewport
@@ -10813,6 +11034,7 @@ async function buildFreePdfHtml(cfg) {
   try {
     // 1 frame de layout antes de medir bboxes (modo título)
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    finalizeTableGridLayouts(tmp);
     await applyFreePdfLocks(tmp, cfg);
     tmp.id = 'pages';
     tmp.removeAttribute('style');
@@ -11790,6 +12012,7 @@ document.addEventListener('selectionchange', () => {
   updateTblCellBar._t = setTimeout(updateTblCellBar, 80);
 });
 stage.addEventListener('scroll', () => {
+  schedulePersistViewPage();
   if (!fmtbar.hidden) updateFmtbar();
   if (!calloutBar.hidden) updateCalloutBar();   // reposiciona (não esconde) — mesmo tratamento do fmtbar
   if (tblCellBar && !tblCellBar.hidden) updateTblCellBar();
@@ -11874,7 +12097,7 @@ enhanceAll();   // ticks + ímã nos range da sidebar (capa/contracapa)
 load();
 initSidebarDetails(); // restore open/closed das seções (antes do 1º paint útil)
 state.zoom = 'fit';
-state.activeId = state.doc.blocks[0]?.id;
+state.activeId = null;
 document.getElementById('footText').value = state.doc.footText;
 document.getElementById('headText').value = state.doc.headText || '';
 document.getElementById('firstPage').value = state.doc.firstPage;
@@ -11945,17 +12168,24 @@ requestAnimationFrame(() => { sidebarRevealReady = true; });
 const pristine = () => state.doc.blocks.length === 1
   && !(state.doc.blocks[0].html || '').trim() && !hist.past.length;
 idb.get('doc').then(doc => {
-  if (!doc || !Array.isArray(doc.blocks) || !doc.blocks.length || !pristine()) return;
-  // não usa applyDocFile: preserva fileHandle restaurado do IDB (origem vinculada)
-  suppressProjectAutosave = true;
-  try { applyDoc(doc); }
-  finally { setTimeout(() => { suppressProjectAutosave = false; }, 400); }
-  if (state.doc.source && !state.doc.source.format) {
-    state.doc.source.format = projectFormatFromName(state.doc.source.label) || 'md';
+  if (doc && Array.isArray(doc.blocks) && doc.blocks.length && pristine()) {
+    // não usa applyDocFile: preserva fileHandle restaurado do IDB (origem vinculada)
+    suppressProjectAutosave = true;
+    try { applyDoc(doc, { restoreView: true }); }
+    finally { setTimeout(() => { suppressProjectAutosave = false; }, 400); }
+    if (state.doc.source && !state.doc.source.format) {
+      state.doc.source.format = projectFormatFromName(state.doc.source.label) || 'md';
+    }
+    // só poll/autosave se já temos readwrite; senão o boot do handle já marcou needsGesture
+    if (fileHandle && isProjectSource(state.doc.source) && !projectWriteNeedsGesture) {
+      startProjectWatch();
+    }
+    renderSourceChip();
+  } else {
+    restoreViewPage(sessionViewPage);
   }
-  // só poll/autosave se já temos readwrite; senão o boot do handle já marcou needsGesture
-  if (fileHandle && isProjectSource(state.doc.source) && !projectWriteNeedsGesture) {
-    startProjectWatch();
-  }
-  renderSourceChip();
+}).catch(() => {
+  restoreViewPage(sessionViewPage);
+}).finally(() => {
+  sessionReady = true;
 });
