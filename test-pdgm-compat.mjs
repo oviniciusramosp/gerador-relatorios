@@ -17,6 +17,7 @@ import {
   clampColL, defaultLogo, normalizeOpenedDoc,
   INDEX_COLOR_DEFAULTS, ensureIndexColors, ensureCoverBgFit, ensureMioloRules,
   PNUM_COLOR_DEFAULT, FOOT_COLOR_DEFAULT,
+  FREE_PDF_CTA_COLOR_DEFAULT, ensureFreePdf,
 } from './doc-migrate.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/pdgm-v1-minimal.json', import.meta.url));
@@ -50,7 +51,7 @@ function seedLike() {
       resumo: '<p>Escreva aqui o resumo do relatório.</p>',
     },
     reviewed: [],
-    freePdf: { mode: 'page', message: '…', link: 'https://paradigma.education', cta: 'Tornar-se Pro', locked: null, lockedSections: null },
+    freePdf: { mode: 'page', message: '…', link: 'https://paradigma.education', cta: 'Tornar-se Pro', ctaColor: FREE_PDF_CTA_COLOR_DEFAULT, locked: null, lockedSections: null },
   };
 }
 
@@ -99,6 +100,7 @@ assert.equal(opened.ruleBot, RULE_W_LEGACY);
 assert.equal(opened.footText, 'paradigma.education');
 assert.equal(opened.back.on, false, 'Object.assign preserva back.on do arquivo');
 assert.ok(opened.freePdf && opened.freePdf.mode === 'page', 'freePdf vem do seed quando ausente');
+assert.equal(opened.freePdf.ctaColor, FREE_PDF_CTA_COLOR_DEFAULT, 'ctaColor default no seed');
 assert.equal(opened.pageBg, '#FFFFFF', 'pageBg default em doc antigo (papel branco)');
 assert.equal(opened.pnumColor, PNUM_COLOR_DEFAULT, 'pnumColor default (mint) em doc antigo');
 assert.equal(opened.footColor, FOOT_COLOR_DEFAULT, 'footColor default (cinza) em doc antigo');
@@ -197,6 +199,22 @@ assert.equal(comRegras.mioloRules.headKeepWithNext, true);
 const rBare = {};
 ensureMioloRules(rBare);
 assert.deepEqual(rBare.mioloRules, { h1NewPage: false, headKeepWithNext: false });
+
+// freePdf.ctaColor: aditivo — doc antigo com freePdf sem o campo herda o roxo
+const semCtaColor = openCompat({
+  ...JSON.parse(JSON.stringify(raw)),
+  freePdf: { mode: 'page', message: 'x', link: 'https://paradigma.education', cta: 'Pro', locked: null, lockedSections: null },
+});
+assert.equal(semCtaColor.freePdf.ctaColor, FREE_PDF_CTA_COLOR_DEFAULT, 'ctaColor default em freePdf antigo');
+const comCtaColor = openCompat({
+  ...JSON.parse(JSON.stringify(raw)),
+  freePdf: { mode: 'section', message: 'x', link: 'https://a.co', cta: 'Go', ctaColor: '#112233', locked: null, lockedSections: null },
+});
+assert.equal(comCtaColor.freePdf.ctaColor, '#112233', 'ctaColor custom sobrevive ao open');
+const fBare = { freePdf: { mode: 'page' } };
+ensureFreePdf(fBare);
+assert.equal(fBare.freePdf.ctaColor, FREE_PDF_CTA_COLOR_DEFAULT);
+assert.equal(ensureFreePdf({}), null, 'sem freePdf não inventa o objeto');
 ensureCoverBgFit({ bgFit: 'fit' });
 assert.equal(ensureCoverBgFit({ bgFit: 'fit' }).bgFit, 'fit');
 assert.equal(ensureCoverBgFit({ bgFit: 'nope' }).bgFit, 'fill', 'bgFit inválido → fill');

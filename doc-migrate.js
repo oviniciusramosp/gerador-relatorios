@@ -147,6 +147,8 @@ export function normalizeOpenedDoc(doc, raw = null) {
   }
   // Regras do Miolo (paginação): default off; docs antigos sem o campo não reflowam
   ensureMioloRules(doc);
+  // teaser PDF Gratuito: ctaColor aditivo (docs antigos sem o campo → roxo)
+  ensureFreePdf(doc);
   migrateSpecialPages(doc);
   // comments: campo aditivo no bloco/item. Ausente = sem thread. Lixo/vazio some.
   normalizeDocComments(doc);
@@ -168,6 +170,23 @@ export function ensureMioloRules(doc) {
 /** Cores default do rodapé — batem com .page .foot .pnum / .site no CSS. */
 export const PNUM_COLOR_DEFAULT = '#3DE8A0';
 export const FOOT_COLOR_DEFAULT = '#828080';
+
+/** Roxo atual do botão “Tornar-se Pro” no teaser do PDF Gratuito. */
+export const FREE_PDF_CTA_COLOR_DEFAULT = '#6B4EFF';
+
+/**
+ * Campo aditivo do teaser: docs antigos sem `ctaColor` herdam o roxo.
+ * Não cria `freePdf` se o open ainda não mesclou o seed (isso é do Object.assign).
+ * Mutates `doc`.
+ */
+export function ensureFreePdf(doc) {
+  if (!doc || typeof doc !== 'object') return null;
+  if (!doc.freePdf || typeof doc.freePdf !== 'object') return null;
+  if (doc.freePdf.ctaColor == null || String(doc.freePdf.ctaColor).trim() === '') {
+    doc.freePdf.ctaColor = FREE_PDF_CTA_COLOR_DEFAULT;
+  }
+  return doc.freePdf;
+}
 
 /** Cores default do esquema "Padrão" do índice (num mint / texto corpo / nº da página /
  *  linha-guia até a página). `line` = preto a 5% — legível em fundos claros e escuros. */

@@ -381,6 +381,11 @@
   #freePdfModal .fpm-fields textarea:focus {
     outline: none; border-color: var(--violet);
   }
+  #freePdfModal .fpm-cta-row {
+    display: grid; grid-template-columns: 1fr 5.75rem; gap: .55rem; align-items: end;
+  }
+  /* swatch aberto da modal precisa ficar acima do overlay (z=80) */
+  body:has(#freePdfModal:not([hidden])) .swatch-pop { z-index: 90; }
   #freePdfModal .fpm-foot {
     display: flex; justify-content: flex-end; gap: .4rem; padding-top: .15rem;
   }
@@ -399,11 +404,13 @@
   }
 
   /* teaser PDF Gratuito: página / seções.
-     Texto + imagens → skeleton cinza (JS). filter:blur só nas barras/blocos solid
-     (barato no print; NÃO no container com fotos originais). */
+     Texto + imagens + tabelas + listas → skeleton. Cor = preto 3% sobre o fundo
+     (acompanha pageBg). filter:blur só nas barras/blocos solid (barato no print;
+     NÃO no container com fotos originais). */
   .page.free-locked {
     position: relative;
     overflow: hidden;
+    --free-skel-fill: rgba(0, 0, 0, 0.03);
   }
   .page .free-lock-body {
     user-select: none; -webkit-user-select: none;
@@ -425,8 +432,7 @@
   .page .free-skel-line {
     position: absolute;
     display: block;
-    background: #E8E8EC;
-    opacity: 0.42; /* cinza bem claro / mais transparente */
+    background: var(--free-skel-fill, rgba(0, 0, 0, 0.03));
     border-radius: 3px;
     pointer-events: none;
     /* blur só no skeleton sólido — PDF leve e bordas suaves */
@@ -434,18 +440,30 @@
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
-  /* placeholder no lugar de img/svg (mesmas dimensões) */
+  /* • / 1. / 1.1. — o ::before real some; a barra .free-skel-marker ocupa o lugar */
+  .page .free-skel.li.b::before,
+  .page .free-skel.ol.b::before {
+    content: none !important;
+  }
+  /* placeholder no lugar de img/svg/tabela (mesmas dimensões) */
   .page .free-skel-media {
     display: block;
     box-sizing: border-box;
-    background: #E8E8EC;
-    opacity: 0.42;
+    background: var(--free-skel-fill, rgba(0, 0, 0, 0.03));
     border-radius: 4px;
     max-width: 100%;
     pointer-events: none;
     filter: blur(2px);
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+  }
+  .page .tbl-wrap.free-skel-media,
+  .page .tblgrid-wrap .tbl-wrap.free-skel-media {
+    background: var(--free-skel-fill, rgba(0, 0, 0, 0.03)) !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    outline: none !important;
+    overflow: hidden;
   }
   /* overlay full miolo (modo página / capa) ou recorte (modo título → top/height inline) */
   .page .free-lock-overlay {
@@ -497,7 +515,7 @@
     font-family: "Plex", system-ui, sans-serif;
     font-size: 12px; font-weight: 600; line-height: 1.2;
     color: #fff !important;
-    background: #6B4EFF !important;
+    background: #6B4EFF !important; /* fallback; JS pinta -- a escolha da modal ganha (inline !important) */
     border: 0;
     cursor: pointer;
     pointer-events: auto;
@@ -803,11 +821,11 @@
   .preview-toc.is-open .preview-toc-panel {
     width: min(300px, calc(100vw - 5rem));
     max-height: min(52vh, 360px);
-    opacity: 1; overflow: auto; pointer-events: auto;
+    opacity: 1; overflow-x: hidden; overflow-y: auto; pointer-events: auto;
     padding: .4rem;
     border-color: var(--hair-strong);
   }
-  /* cabeçalho: ÍNDICE | comentários (fixa) | REVISADO (fixa) — sem auto que colapsa */
+  /* cabeçalho: ÍNDICE | REVISADO (cobre comentários + checkbox — 2.2rem sozinho corta) */
   .preview-toc-head {
     display: grid; grid-template-columns: minmax(0, 1fr) 2.4rem 2.2rem; gap: .15rem;
     align-items: center;
@@ -816,13 +834,19 @@
     border-bottom: 1px solid var(--hair);
     font-size: .62rem; font-weight: 600; font-stretch: 85%;
     letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+    min-width: 0;
   }
   .preview-toc-h-idx { min-width: 0; }
-  .preview-toc-h-cmt { display: block; }
-  .preview-toc-h-rev { text-align: center; }
+  .preview-toc-h-rev {
+    grid-column: 2 / -1;
+    text-align: right;
+    white-space: nowrap;
+    padding-right: .2rem;
+  }
   .preview-toc-row {
     display: grid; grid-template-columns: minmax(0, 1fr) 2.4rem 2.2rem; gap: .15rem;
     align-items: center; border-radius: 6px;
+    min-width: 0;
   }
   .preview-toc-count {
     justify-self: center;
@@ -982,11 +1006,12 @@
   /* default = parágrafo; override via inline no render (painel do Resumo) */
   .page .idx-resumo { font-weight: 400; font-size: 10px; line-height: 14px; color: #4E4E4E; text-align: justify; outline: none; }
   .page .idx-resumo p { margin: 0 0 8px; }
-  /* seções Índice / Resumo: padding permanente = a borda de foco fica afastada do
-     conteúdo sem “pulo” ao selecionar; box-sizing pra largura (Curto/Total) incluir o pad */
+  /* seções Índice / Resumo: só pad vertical — o 8px lateral desalinhava o texto
+     da nota de rodapé / coluna esquerda (48px). Anel de foco = box-shadow inset
+     (não pode empurrar o conteúdo). box-sizing pra largura (Curto/Total) incluir o pad. */
   .page .idx-section {
     border-radius: 8px;
-    padding: 6px 8px;
+    padding: 6px 0;
     box-sizing: border-box;
   }
   .page.editing .idx-section { cursor: pointer; }
@@ -1335,7 +1360,7 @@
   /* foco = retângulo arredondado afastado do conteúdo, SEM mover o texto.
      ::after absoluto (inset negativo) desenha o anel fora do box — zero padding/margin
      no estado ativo, então selecionar/deselecionar não empurra o conteúdo pra baixo.
-     Índice/Resumo: padding permanente na .idx-section + box-shadow inset (sem pulo).
+     Índice/Resumo: pad vertical na .idx-section + box-shadow inset (sem pulo; sem pad lateral).
      .frag tem overflow:clip → anel externo seria cortado; usa inset flush. */
   /* position:relative só onde ainda é static — .rimg já é absolute (ancora o ::after sozinho) */
   .page.editing .b.active-block,
@@ -2302,9 +2327,14 @@
       <label class="field">Link do botão
         <input id="fpmLink" type="url" inputmode="url" placeholder="https://paradigma.education" autocomplete="off">
       </label>
-      <label class="field">Texto do botão
-        <input id="fpmCta" type="text" maxlength="48" autocomplete="off">
-      </label>
+      <div class="fpm-cta-row">
+        <label class="field">Texto do botão
+          <input id="fpmCta" type="text" maxlength="48" autocomplete="off">
+        </label>
+        <label class="field">Cor do botão
+          <button type="button" class="colorfield" id="fpmCtaColor" title="Cor do botão de CTA" aria-label="Cor do botão de CTA" style="background:#6B4EFF"></button>
+        </label>
+      </div>
     </div>
     <div class="fpm-foot">
       <button type="button" data-fpm-close>Cancelar</button>

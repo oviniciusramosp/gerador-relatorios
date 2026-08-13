@@ -74,6 +74,7 @@ import {
   migrateSpecialPages, normalizeOpenedDoc,
   INDEX_COLOR_DEFAULTS, ensureIndexColors, ensureCoverBgFit, ensureMioloRules,
   PNUM_COLOR_DEFAULT, FOOT_COLOR_DEFAULT,
+  FREE_PDF_CTA_COLOR_DEFAULT, ensureFreePdf as ensureFreePdfFields,
 } from './doc-migrate.js';  // defaults/migração ao abrir .pdgm (puro; compartilhado com test-pdgm-compat)
 import { projectFormatFromName, projectBaseName, shouldReloadLinkedProject } from './project-link.js';
 import {
@@ -679,6 +680,7 @@ function seedDoc() {
       message: 'Se torne Paradigma Pro para \nter acesso ao relatório completo.',
       link: 'https://paradigma.education',
       cta: 'Tornar-se Pro',
+      ctaColor: FREE_PDF_CTA_COLOR_DEFAULT, // roxo atual do botão; usuário troca na modal
       locked: null,           // mode=page: índices de página (null = default freemium)
       lockedSections: null,   // mode=section: ids de H1/H2 (null = default freemium)
     },
@@ -702,6 +704,7 @@ function freePdfConfig() {
     message,
     link: (f.link != null && String(f.link)) || d.link,
     cta: (f.cta != null && String(f.cta)) || d.cta,
+    ctaColor: (f.ctaColor != null && String(f.ctaColor).trim()) || d.ctaColor,
     locked: Array.isArray(f.locked) ? f.locked.map(n => +n).filter(n => Number.isFinite(n)) : null,
     lockedSections: Array.isArray(f.lockedSections)
       ? f.lockedSections.map(String).filter(Boolean)
@@ -712,6 +715,7 @@ function ensureFreePdf() {
   if (!state.doc.freePdf || typeof state.doc.freePdf !== 'object') {
     state.doc.freePdf = { ...seedDoc().freePdf };
   }
+  ensureFreePdfFields(state.doc);
   return state.doc.freePdf;
 }
 
@@ -3532,7 +3536,7 @@ function updatePreviewToc() {
   panel.replaceChildren();
   const head = document.createElement('div');
   head.className = 'preview-toc-head';
-  head.innerHTML = '<span class="preview-toc-h-idx">Índice</span><span class="preview-toc-h-cmt" aria-hidden="true"></span><span class="preview-toc-h-rev">Revisado</span>';
+  head.innerHTML = '<span class="preview-toc-h-idx">Índice</span><span class="preview-toc-h-rev">Revisado</span>';
   panel.appendChild(head);
 
   const chapterCounts = countCommentsByHeading(state.doc.blocks);
@@ -10700,7 +10704,8 @@ async function printPdf() {
 }
 
 // ── PDF Gratuito (teaser Pro): skeleton 1:1 (texto + mídia) + overlay ──
-// Texto/título/legenda → barras cinza. Imagem/gráfico → bloco cinza do mesmo tamanho.
+// Texto/título/legenda/lista → barras. Imagem/gráfico/tabela → bloco do mesmo tamanho.
+// Cor = preto 3% sobre o fundo (CSS rgba) — acompanha pageBg claro ou escuro.
 // filter:blur só no skeleton sólido (CSS) — barato no print, sem raster de foto.
 // Hosts de texto. NÃO usar só querySelectorAll no root: no modo título o
 // free-lock-body É o h1/p/fig e querySelectorAll não casa o próprio elemento.
@@ -10714,11 +10719,10 @@ const FREE_SKEL_SEL = [
   '.idx-resumo', '.idx-title',
   '.toc-txt', '.toc-num', '.toc-pg', '.toc-empty',
   '.cover-item',
-  'td', 'th',
 ].join(',');
 function freeSkelIsTextHost(el) {
   if (!el || el.nodeType !== 1 || el.classList.contains('free-skel')) return false;
-  if (el.matches?.('img, svg, canvas, video, .free-skel-line, .free-skel-media, .rimg, .divider, .e-pbreak')) return false;
+  if (el.matches?.('img, svg, canvas, video, .free-skel-line, .free-skel-media, .rimg, .divider, .e-pbreak, .tbl-wrap, .tblgrid-wrap')) return false;
   // envelopes: texto nos filhos (.figtitle / figcaption / .ck-txt …)
   if (el.classList.contains('check') || el.classList.contains('callout')) return false;
   if (el.classList.contains('fig') || el.classList.contains('tbl-wrap') || el.classList.contains('frag')) return false;
@@ -10753,10 +10757,10 @@ function freeSkelMergeLineRects(rects) {
 function freeSkelHost(el) {
   if (!el || el.classList.contains('free-skel')) return;
   if (el.matches?.('img, svg, canvas, video')) return;
-  // envelope com mídia embutida: skeleton só nos filhos de texto (não no box inteiro)
-  if (el.querySelector?.('img, svg, canvas, .fig, video')) {
+  // envelope com mídia/tabela embutida: skeleton só nos filhos de texto (não no box inteiro)
+  if (el.querySelector?.('img, svg, canvas, .fig, video, .tbl-wrap, .tblgrid-wrap, .free-skel-media')) {
     for (const k of el.querySelectorAll('*')) {
-      if (freeSkelIsTextHost(k) && !k.querySelector('img, svg, canvas')) freeSkelHost(k);
+      if (freeSkelIsTextHost(k) && !k.querySelector('img, svg, canvas, .tbl-wrap, .free-skel-media')) freeSkelHost(k);
     }
     return;
   }
@@ -10826,6 +10830,35 @@ function freeSkelHost(el) {
     bar.style.height = barH + 'px';
     el.appendChild(bar);
   }
+  // • / 1. / 1.1. vivem no ::before (data-marker / data-num) — sem isto o marcador
+  // colorido (mint) vazava no teaser. Barra no lugar + CSS esconde o pseudo.
+  freeSkelAppendListMarker(el);
+}
+// marcador de lista (li/ol) vira barra na faixa do ::before
+function freeSkelAppendListMarker(el) {
+  const isLi = el.classList.contains('li');
+  const isOl = el.classList.contains('ol');
+  if (!isLi && !isOl) return;
+  el.removeAttribute('data-marker');
+  el.removeAttribute('data-num');
+  const cs = getComputedStyle(el);
+  const fs = parseFloat(cs.fontSize) || 10;
+  const lh = parseFloat(cs.lineHeight) || (fs * 1.3);
+  const isBullet = isLi || el.classList.contains('ol-as-bullet');
+  const first = el.querySelector('.free-skel-line');
+  const barH = first
+    ? (parseFloat(first.style.height) || Math.max(3, lh * 0.58))
+    : Math.max(3, lh * 0.58);
+  const padL = parseFloat(cs.paddingLeft) || (isLi ? 12 : 16);
+  const barW = isBullet ? barH : Math.max(10, padL * 0.62);
+  const bar = document.createElement('span');
+  bar.className = 'free-skel-line free-skel-marker';
+  bar.setAttribute('aria-hidden', 'true');
+  bar.style.left = (isLi ? 2 : 0) + 'px';
+  bar.style.top = (first ? (first.style.top || '0px') : Math.max(0, (lh - barH) / 2) + 'px');
+  bar.style.width = barW + 'px';
+  bar.style.height = barH + 'px';
+  el.appendChild(bar);
 }
 // Troca todo texto bloqueado por skeleton — inclui root (h1/p) e figtitle/figcaption.
 function skeletonizeTextIn(root) {
@@ -10838,7 +10871,7 @@ function skeletonizeTextIn(root) {
     }
   } catch { /* ignore */ }
   // varredura extra: título/legenda de figura e qualquer .b de texto
-  for (const el of root.querySelectorAll('.b, .ck-txt, .co-txt, .figtitle, figcaption, .cover-item, td, th, h1, h2, h3, h4')) {
+  for (const el of root.querySelectorAll('.b, .ck-txt, .co-txt, .figtitle, figcaption, .cover-item, h1, h2, h3, h4')) {
     if (freeSkelIsTextHost(el) && !all.includes(el)) all.push(el);
   }
   // se o root é .fig / .rimg, garante figtitle + figcaption (às vezes sem .b)
@@ -10850,20 +10883,49 @@ function skeletonizeTextIn(root) {
   const hosts = all.filter(el => !all.some(o => o !== el && el.contains(o)));
   for (const el of hosts) freeSkelHost(el);
 }
-// Substitui img/svg por bloco cinza 1:1 (skeleton de mídia — sem JPEG, PDF leve).
+function freeSkelMeasure(el) {
+  const r = el.getBoundingClientRect();
+  const w = Math.max(8, el.offsetWidth || r.width || +el.getAttribute?.('width') || 120);
+  const h = Math.max(8, el.offsetHeight || r.height || +el.getAttribute?.('height') || 80);
+  const br = (el.style && el.style.borderRadius) || getComputedStyle(el).borderRadius || '';
+  return { w, h, br };
+}
+// Esvazia o próprio nó e pinta de skeleton (tabela/checkbox: o wrap É o bloco —
+// replaceWith soltava o data-id e quebrava o bbox do overlay no modo capítulo).
+function freeSkelFillInPlace(el) {
+  if (!el || el.classList.contains('free-skel-media')) return;
+  const { w, h, br } = freeSkelMeasure(el);
+  el.classList.add('free-skel-media');
+  el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = '';
+  el.style.width = w + 'px';
+  el.style.height = h + 'px';
+  el.style.maxWidth = '100%';
+  el.style.minHeight = h + 'px';
+  el.style.border = '0';
+  el.style.boxShadow = 'none';
+  el.style.overflow = 'hidden';
+  el.style.removeProperty('background');
+  el.style.removeProperty('background-color');
+  el.style.removeProperty('background-image');
+  if (br && br !== '0px') el.style.borderRadius = br;
+}
+// Substitui img/svg por bloco 1:1 (skeleton de mídia — sem JPEG, PDF leve).
 function freeSkelMediaEl(el) {
   if (!el || el.classList?.contains('free-skel-media')) return;
-  const r = el.getBoundingClientRect();
-  const w = Math.max(8, el.offsetWidth || r.width || +el.getAttribute('width') || 120);
-  const h = Math.max(8, el.offsetHeight || r.height || +el.getAttribute('height') || 80);
+  if (el.classList?.contains('tbl-wrap') || el.classList?.contains('tblgrid-wrap')) {
+    freeSkelFillInPlace(el);
+    return;
+  }
+  const { w, h, br } = freeSkelMeasure(el);
   const sk = document.createElement('div');
   sk.className = 'free-skel-media';
   sk.setAttribute('aria-hidden', 'true');
   sk.style.width = w + 'px';
   sk.style.height = h + 'px';
   sk.style.maxWidth = '100%';
-  const br = (el.style && el.style.borderRadius) || getComputedStyle(el).borderRadius || '4px';
   if (br && br !== '0px') sk.style.borderRadius = br;
+  else sk.style.borderRadius = '4px';
   el.replaceWith(sk);
 }
 function skeletonizeMediaIn(root) {
@@ -10886,14 +10948,36 @@ function skeletonizeMediaIn(root) {
   for (const bg of root.querySelectorAll('.cover-bg')) {
     if (!bg.closest('.free-lock-body, .free-locked')) continue;
     bg.style.backgroundImage = 'none';
-    bg.style.backgroundColor = '#E8E8EC';
-    bg.style.opacity = '0.42';
+    bg.style.backgroundColor = 'rgba(0,0,0,0.03)';
+    bg.style.opacity = '';
     bg.classList.add('free-skel-media');
   }
 }
+// Tabela inteira → bloco skeleton (como imagem). Não barra por célula.
+function skeletonizeTablesIn(root) {
+  if (!root) return;
+  const wraps = [];
+  if (root.matches?.('.tbl-wrap')) wraps.push(root);
+  for (const el of root.querySelectorAll('.tbl-wrap')) {
+    if (!wraps.includes(el)) wraps.push(el);
+  }
+  for (const el of wraps) freeSkelFillInPlace(el);
+}
+// checkbox do checklist (SVG mint vazava como os • da lista)
+function skeletonizeListChromeIn(root) {
+  if (!root) return;
+  const boxes = [];
+  if (root.matches?.('.ck-box')) boxes.push(root);
+  for (const el of root.querySelectorAll('.ck-box')) {
+    if (!boxes.includes(el)) boxes.push(el);
+  }
+  for (const box of boxes) freeSkelFillInPlace(box);
+}
 // Pipeline completo de teaser num envelope bloqueado
 function freeLockSkeletonize(root) {
-  skeletonizeTextIn(root);
+  skeletonizeTablesIn(root);     // primeiro: some td/th antes do texto
+  skeletonizeListChromeIn(root); // checkbox antes do media (senão o SVG 12px só fade)
+  skeletonizeTextIn(root);       // barras + marcador de li/ol
   skeletonizeMediaIn(root);
 }
 function freePdfNormalizeUrl(raw) {
@@ -10909,7 +10993,12 @@ function isFreePdfChrome(el) {
     || el.classList.contains('foot');
 }
 // card do teaser (cadeado + msg + CTA) — reusado em modo página e modo título
-function buildFreeLockCard({ message, link, cta }) {
+function resolveFreeCtaColor(raw) {
+  const p = parseColor(raw);
+  if (!p) return FREE_PDF_CTA_COLOR_DEFAULT;
+  return withAlpha(p.hex, p.alpha);
+}
+function buildFreeLockCard({ message, link, cta, ctaColor }) {
   const href = freePdfNormalizeUrl(link);
   const label = (cta && cta.trim()) || freePdfConfig().cta;
   const card = document.createElement('div');
@@ -10928,6 +11017,7 @@ function buildFreeLockCard({ message, link, cta }) {
   a.setAttribute('target', '_blank');
   a.setAttribute('rel', 'noopener noreferrer');
   a.title = href;
+  a.style.setProperty('background', resolveFreeCtaColor(ctaColor), 'important');
   const lab = document.createElement('span');
   lab.className = 'free-lock-cta-label';
   lab.textContent = label;
@@ -11140,7 +11230,7 @@ async function applyFreePdfSectionLocks(pagesRoot, cfg) {
   // paginate() já rodou em assemblePages → _page/_top e page/y dos rights estão frescos
   const blockIds = expandLockedSectionIds(cfg.lockedSections || []);
   if (!blockIds.size) return;
-  const opts = { message: cfg.message, link: cfg.link, cta: cfg.cta };
+  const opts = { message: cfg.message, link: cfg.link, cta: cfg.cta, ctaColor: cfg.ctaColor };
   // só miolo (.content); capa/índice/contracapa não entram no modo título
   for (const page of pagesRoot.querySelectorAll(':scope > .page')) {
     if (page.classList.contains('cover-page') || page.dataset.cover) continue;
@@ -11196,7 +11286,7 @@ function defaultLockedIndices(pages) {
   return locked;
 }
 async function applyFreePdfLocks(pagesRoot, cfg) {
-  const opts = { message: cfg.message, link: cfg.link, cta: cfg.cta };
+  const opts = { message: cfg.message, link: cfg.link, cta: cfg.cta, ctaColor: cfg.ctaColor };
   if (cfg.mode === 'section') {
     await applyFreePdfSectionLocks(pagesRoot, cfg);
     return;
@@ -11269,6 +11359,9 @@ function readFreePdfForm() {
       || freePdfConfig().message,
     link: freePdfNormalizeUrl(document.getElementById('fpmLink')?.value ?? freePdfConfig().link),
     cta: (document.getElementById('fpmCta')?.value ?? freePdfConfig().cta).trim() || freePdfConfig().cta,
+    ctaColor: resolveFreeCtaColor(
+      document.getElementById('fpmCtaColor')?.dataset.color ?? freePdfConfig().ctaColor,
+    ),
     locked: freePdfConfig().locked,
     lockedSections: freePdfConfig().lockedSections,
   };
@@ -11299,6 +11392,7 @@ function persistFreePdfForm(cfg) {
   f.message = cfg.message;
   f.link = cfg.link;
   f.cta = cfg.cta;
+  f.ctaColor = resolveFreeCtaColor(cfg.ctaColor);
   if (cfg.mode === 'section') f.lockedSections = cfg.lockedSections;
   else f.locked = cfg.locked;
   save();
@@ -11418,9 +11512,15 @@ function openFreePdfModal() {
   const msg = document.getElementById('fpmMessage');
   const link = document.getElementById('fpmLink');
   const cta = document.getElementById('fpmCta');
+  const ctaColorBtn = document.getElementById('fpmCtaColor');
   if (msg) msg.value = cfg.message;
   if (link) link.value = cfg.link;
   if (cta) cta.value = cfg.cta;
+  if (ctaColorBtn) {
+    const color = resolveFreeCtaColor(cfg.ctaColor);
+    ctaColorBtn.dataset.color = color;
+    paintPageBgChip(ctaColorBtn, color);
+  }
   setFreePdfUiMode(cfg.mode);
   m.hidden = false;
 }
@@ -11439,6 +11539,15 @@ function initFreePdfModal() {
     b.addEventListener('click', () => setFreePdfUiMode(b.dataset.fpmMode));
   });
   document.getElementById('fpmToggleAll')?.addEventListener('click', () => toggleFreePdfAll());
+  document.getElementById('fpmCtaColor')?.addEventListener('click', () => {
+    const btn = document.getElementById('fpmCtaColor');
+    if (!btn) return;
+    openSwatchPop(btn, (hex) => {
+      const color = resolveFreeCtaColor(hex);
+      btn.dataset.color = color;
+      paintPageBgChip(btn, color);
+    }, btn.dataset.color || FREE_PDF_CTA_COLOR_DEFAULT);
+  });
   document.getElementById('fpmGenerate')?.addEventListener('click', () => {
     printFreePdf().then(() => closeFreePdfModal()).catch((e) => {
       console.error('[pdf-gratuito]', e);
