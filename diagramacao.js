@@ -25,6 +25,10 @@ import { enhanceAll, wireFieldEditKeys, isFreeSnap } from './range-snap.js';  //
 import { tocNum } from './toc-num.js';         // trilha C (t4): numeração do índice sem duplicar prefixo
 import { LOGOS, logoPickSvg } from './logos.js'; // trilha D (t8): logos tingíveis; logoPickSvg = ícone p/ picker (t3.1)
 import { marksFromStyle } from './paste-style.js';   // trilha A (t10): parser puro de estilo inline colado
+import { mergePastedBlocks } from './paste-blocks.js';  // colar sobre seleção substitui; 1 p não abre bloco extra
+import {
+  stripTrailingPlaceholderBr, applyBlockHtml, readBlockHtml, markTrailingPlaceholderBr,
+} from './block-html.js';  // <br> fantasma no fim do contenteditable (seleção cresce / blur encolhe)
 import {
   buildTableEl, ensureTable, ensureSharedTableStyle, applyTableChrome, resolveGridTableItem,
   addTableRow, addTableCol,
@@ -1027,7 +1031,7 @@ function buildText(b, editing) {
         : 'b ' + (b.type === 'li' ? 'li' : b.type === 'ol' ? 'ol' : b.type === 'quote' ? 'quote' : b.type);
   el.dataset.id = b.id;
   el.dataset.ph = PH[b.type] || '';
-  el.innerHTML = b.html || '';
+  applyBlockHtml(el, b.html);
   if (editing) {
     el.contentEditable = 'true'; el.spellcheck = true; el.lang = 'pt-BR';  // corretor nativo PT-BR
   }
@@ -2556,7 +2560,7 @@ function buildFigure(b, colW, editing) {
   if (b.title != null) {
     const t = document.createElement('div');
     t.className = 'figtitle'; t.dataset.role = 'title'; t.dataset.id = b.id;
-    t.dataset.ph = 'Título da imagem'; t.innerHTML = b.title || '';
+    t.dataset.ph = 'Título da imagem'; applyBlockHtml(t, b.title);
     if (editing) { t.contentEditable = 'true'; t.spellcheck = true; t.lang = 'pt-BR'; }
     fig.appendChild(t);
   }
@@ -2568,7 +2572,7 @@ function buildFigure(b, colW, editing) {
   if (b.caption != null) {
     const c = document.createElement('figcaption');
     c.dataset.role = 'caption'; c.dataset.id = b.id;
-    c.dataset.ph = 'Legenda'; c.innerHTML = b.caption || '';
+    c.dataset.ph = 'Legenda'; applyBlockHtml(c, b.caption);
     if (editing) { c.contentEditable = 'true'; c.spellcheck = true; c.lang = 'pt-BR'; }
     // mesma tipografia do bloco Legenda (⋮ da paleta → blockStyles.caption)
     applyCaptionFace(c, 'default');
@@ -2905,6 +2909,8 @@ function render(caret /* optional {id,offset,role} */) {
   applyZoom();
   stage.scrollTop = scrollTop;         // restaura a posição antes de mexer no caret
   if (keep) restoreCaret(keep);
+  const focused = document.activeElement;
+  if (focused && focused.isContentEditable) startPhBrWatch(focused);
   // tabela e outros sem contenteditable de role=block não disparam focusin no restoreCaret —
   // re-pinta a borda do ativo e reposiciona alça/menus depois do rebuild.
   // Se o foco é Índice/Resumo, NÃO pinta o miolo (senão ficam duas bordas roxas).
@@ -3427,7 +3433,7 @@ function renderIndexPage(toc, contentStart, number) {
     const h2 = document.createElement('div'); h2.className = 'idx-title'; h2.textContent = 'Resumo';
     applyIdxTitleStyle(h2);
     const res = document.createElement('div'); res.className = 'idx-resumo b'; res.dataset.role = 'resumo';
-    res.dataset.ph = 'Escreva o resumo…'; res.innerHTML = state.doc.index.resumo || '';
+    res.dataset.ph = 'Escreva o resumo…'; applyBlockHtml(res, state.doc.index.resumo);
     // tipografia: default = parágrafo; override via painel do Resumo
     const resStyle = resumoTextStyle();
     res.style.fontSize = resStyle.fontSize + 'px';
@@ -3626,7 +3632,7 @@ function buildCoverItem(kind, it) {
   // title/subtitle: weight/LS/lh no painel; h1–h4 fixo em 700
   if (type === 'title' || type === 'subtitle') applyCoverTitleFace(el, it);
   else if (COVER_HEAD_TYPES.has(type)) el.style.fontWeight = '700';
-  el.innerHTML = it.html || '';
+  applyBlockHtml(el, it.html);
   // h1–h4/p/caption/quote: estilo global do miolo; title/subtitle só usam size/cor/face do item
   if (HEAD_TYPES.has(type) || type === 'p' || type === 'caption' || type === 'quote') applyTypeStyle(el, type);
   // size/cor/face do item de capa vencem o estilo global do tipo (slider do painel)
@@ -3849,13 +3855,18 @@ function restoreCaret(keep) {
   el.focus({ preventScroll: true });
 }
 
-// divide o HTML de um elemento no offset de caractere → [antes, depois]
-function splitHtmlAt(el, offset) {
-  const bound = boundaryAt(el, offset);
+// divide o HTML de um elemento no intervalo [offset, end) de caracteres → [antes, depois].
+// Sem `end` (ou end === offset): corta no caret. Com seleção, o intervalo em si some
+// (é o que deixa colar por cima do texto selecionado em vez de empurrá-lo pro “depois”).
+function splitHtmlAt(el, offset, end) {
+  let aOff = offset, bOff = end == null ? offset : end;
+  if (bOff < aOff) { const t = aOff; aOff = bOff; bOff = t; }
+  const a = boundaryAt(el, aOff);
+  const b = bOff === aOff ? a : boundaryAt(el, bOff);
   const before = document.createRange();
-  before.selectNodeContents(el); before.setEnd(bound.node, bound.off);
+  before.selectNodeContents(el); before.setEnd(a.node, a.off);
   const after = document.createRange();
-  after.selectNodeContents(el); after.setStart(bound.node, bound.off);
+  after.selectNodeContents(el); after.setStart(b.node, b.off);
   return [htmlOf(before.cloneContents()), htmlOf(after.cloneContents())];
 }
 function boundaryAt(el, offset) {
@@ -3925,7 +3936,7 @@ pagesEl.addEventListener('keydown', (e) => {
   if (e.key === 'Tab' && LIST_TYPES.has(b.type)) {
     e.preventDefault();
     const keep = captureCaret();
-    b.html = host.innerHTML;
+    b.html = readBlockHtml(host);
     const cur = listIndentOf(b);
     if (e.shiftKey) {
       if (cur > 0) {
@@ -3966,7 +3977,7 @@ pagesEl.addEventListener('keydown', (e) => {
       // no início de subitem: Backspace desindenta (mesmo papel do Shift+Tab) antes de mesclar
       if (LIST_TYPES.has(b.type) && listIndentOf(b) > 0) {
         e.preventDefault();
-        b.html = host.innerHTML;
+        b.html = readBlockHtml(host);
         setListIndent(b, listIndentOf(b) - 1);
         render({ id: b.id, role: 'block', offset: 0 });
         return;
@@ -4004,10 +4015,10 @@ function enterAtCoverCaret(host, f) {
     return;
   }
 
-  it.html = before;
+  it.html = stripTrailingPlaceholderBr(before);
   const newType = (COVER_HEAD_TYPES.has(type) || type === 'callout' || type === 'quote') ? 'p' : type;
   // y provisório; depois do render mede a altura real do de cima e encaixa o novo
-  const nb = coverItem(after, COVER_TYPE_SIZE[newType] ?? 18, it.span || 'full', it.align || 'left', it.color || null, (it.y || 0) + 40, newType);
+  const nb = coverItem(stripTrailingPlaceholderBr(after), COVER_TYPE_SIZE[newType] ?? 18, it.span || 'full', it.align || 'left', it.color || null, (it.y || 0) + 40, newType);
   if (LIST_TYPES.has(newType) && listIndentOf(it) > 0) nb.indent = listIndentOf(it);
   f.list.splice(f.idx + 1, 0, nb);
   state.sel = nb.id;
@@ -4048,12 +4059,12 @@ function enterAtCaret(host, b) {
     render({ id: b.id, role: 'block', offset: 0 });
     return;
   }
-  b.html = before;
+  b.html = stripTrailingPlaceholderBr(before);
   // título, citação e callout não continuam (viram parágrafo); lista/checklist continuam
   // (é o ponto de ter uma lista). Callout é caixa avulsa — Enter não empilha caixas.
   // Citação: Enter sempre abre parágrafo (não encadeia blockquotes).
   const newType = (HEAD_TYPES.has(b.type) || b.type === 'callout' || b.type === 'quote') ? 'p' : b.type;
-  const nb = mkBlock(newType, after);
+  const nb = mkBlock(newType, stripTrailingPlaceholderBr(after));
   // subitem: o novo item herda o nível do atual (continua a lista aninhada)
   if (LIST_TYPES.has(newType) && listIndentOf(b) > 0) nb.indent = listIndentOf(b);
   state.doc.blocks.splice(idxOf(b.id) + 1, 0, nb);
@@ -4090,10 +4101,10 @@ function breakAtCaret(host, b, sepType = 'pagebreak') {
     render({ id: b.id, role: 'block', offset: 0 });
     return;
   }
-  b.html = before;
+  b.html = stripTrailingPlaceholderBr(before);
   const sep = mkBlock(sepType, '');
   // fim do bloco: começa parágrafo vazio; meio: mantém o tipo com o resto
-  const nb = after.trim() ? mkBlock(b.type, after) : mkBlock('p', '');
+  const nb = after.trim() ? mkBlock(b.type, stripTrailingPlaceholderBr(after)) : mkBlock('p', '');
   if (after.trim() && LIST_TYPES.has(b.type) && listIndentOf(b) > 0) nb.indent = listIndentOf(b);
   state.doc.blocks.splice(i + 1, 0, sep, nb);
   render({ id: nb.id, role: 'block', offset: 0 });
@@ -4114,13 +4125,13 @@ pagesEl.addEventListener('input', (e) => {
       ensureImageGrid(b);
       const it = b.items[+host.dataset.item];
       if (it) {
-        it[role] = host.innerHTML;
+        it[role] = readBlockHtml(host);
         // garante flag do bloco se o usuário digita (caso edge de DOM residual)
         if (role === 'title' && !titlesOn(b)) b.titles = true;
         if (role === 'caption' && !captionsOn(b)) b.captions = true;
       }
     } else {
-      b[role] = host.innerHTML;
+      b[role] = readBlockHtml(host);
     }
     save();
     return;
@@ -4135,7 +4146,7 @@ pagesEl.addEventListener('input', (e) => {
   // com "/" seguido de não-espaços (o filtro); um espaço fecha, como no Notion. Não colide com
   // os atalhos "#/>/-/1./---" (nenhum começa com "/") nem com "/" no meio de uma frase (t[0]≠'/').
   if (TEXT_TYPES.has(b.type) && t[0] === '/' && /^\/(\S*)$/.test(t)) {
-    b.html = host.innerHTML; save();            // mantém o "/filtro" e o caret; o menu só escolhe
+    b.html = readBlockHtml(host); save();            // mantém o "/filtro" e o caret; o menu só escolhe
     slash.open(b.id, t.slice(1));
     return;
   }
@@ -4163,7 +4174,7 @@ pagesEl.addEventListener('input', (e) => {
     render({ id: nb.id, role: 'block', offset: 0 });
     return;
   }
-  b.html = host.innerHTML;
+  b.html = readBlockHtml(host);
   syncTypeUI(b.type);
   // reflow depois de pausar de digitar (evita rebuild a cada tecla)
   clearTimeout(inputT); inputT = setTimeout(() => render(), 180);
@@ -4386,6 +4397,8 @@ function deleteCoverItem(id) {
 pagesEl.addEventListener('focusin', (e) => {
   const host = e.target.closest && e.target.closest('[contenteditable]');
   if (!host) return;
+  // célula de tabela: o <br> vazio é do caret da célula, não o placeholder de parágrafo
+  if (!(host.closest && host.closest('.tbl-wrap'))) startPhBrWatch(host);
   // capa/contracapa: conteúdo editável dentro do cover-item (texto, lista, célula de tabela)
   const coverEl = host.closest && host.closest('.cover-item');
   if (coverEl) {
@@ -4445,6 +4458,25 @@ pagesEl.addEventListener('focusin', (e) => {
   updateTableGridBar();
   updateTextPlaceBar();
   syncColUI();                             // coluna do bloco ativo na aba Conteúdo
+});
+
+// Chrome/Safari inserem o <br> placeholder DEPOIS do focusin. Sem observar,
+// selecionar o parágrafo pinta uma linha vazia e o blur “corrige” o espaço.
+let phBrObs = null;
+function stopPhBrWatch() {
+  if (phBrObs) { phBrObs.disconnect(); phBrObs = null; }
+}
+function startPhBrWatch(el) {
+  stopPhBrWatch();
+  if (!el) return;
+  markTrailingPlaceholderBr(el);
+  phBrObs = new MutationObserver(() => markTrailingPlaceholderBr(el));
+  phBrObs.observe(el, { childList: true, subtree: true });
+}
+pagesEl.addEventListener('focusout', (e) => {
+  const host = e.target.closest && e.target.closest('[contenteditable]');
+  if (host) markTrailingPlaceholderBr(host);
+  stopPhBrWatch();
 });
 
 // seleciona/desseleciona imagem SEM re-render (um rebuild no meio do gesto de
@@ -4597,11 +4629,18 @@ pagesEl.addEventListener('paste', (e) => {
   e.preventDefault();
   const b = blockOf(host.dataset.id);
   const c = captureCaret();
-  const [before, after] = splitHtmlAt(host, c ? c.offset : host.textContent.length);
-  // 1º bloco colado emenda no texto antes do cursor; resto entra como blocos
-  b.html = before + (blocks[0].type === 'p' ? blocks[0].html : '');
-  const insert = blocks.slice(blocks[0].type === 'p' ? 1 : 0);
-  if (after.trim()) insert.push(mkBlock('p', after));
+  const start = c ? c.offset : host.textContent.length;
+  const end = c && c.end != null ? c.end : start;
+  const [before, after] = splitHtmlAt(host, start, end);
+  // seleção já saiu no split; 1 parágrafo emenda no host, vários partem o bloco
+  const { hostHtml, insert: planned } = mergePastedBlocks(before, after, blocks);
+  b.html = stripTrailingPlaceholderBr(hostHtml);
+  const insert = planned.map((x) => {
+    const html = stripTrailingPlaceholderBr(x.html || '');
+    if (x.remnant) return mkBlock('p', html);
+    if (x.html != null) x.html = html;
+    return x;
+  });
   state.doc.blocks.splice(idxOf(b.id) + 1, 0, ...insert);
   const last = insert[insert.length - 1] || b;
   render({ id: last.id, role: 'block', offset: last === b ? before.length : (last.textLen ?? 99999) });
@@ -5718,13 +5757,13 @@ pagesEl.addEventListener('input', (e) => {
       const txt = host.classList?.contains('ck-txt') || host.classList?.contains('co-txt')
         ? host
         : (coverEl.matches('[contenteditable=true]') ? coverEl : host);
-      f.item.html = txt.innerHTML;
+      f.item.html = readBlockHtml(txt);
       layoutCoverColAdds();   // altura do texto pode ter mudado → realinha a zona do "+"
       save(); scheduleCommit();
     }
     return;
   }
-  if (host.dataset.role === 'resumo') { state.doc.index.resumo = host.innerHTML; save(); scheduleCommit(); }
+  if (host.dataset.role === 'resumo') { state.doc.index.resumo = readBlockHtml(host); save(); scheduleCommit(); }
 });
 
 function selectCoverItem(cid) {

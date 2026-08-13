@@ -1221,17 +1221,30 @@
   .page.editing .b:hover { background-color: color-mix(in srgb, #4E39FF 5%, transparent); }
   /* linha vazia ocupa 1 linha (parágrafo em branco é conteúdo); placeholder só no foco */
   .page .b:empty:not(.divider), .page .figtitle:empty, .page figcaption:empty { min-height: 1lh; }
-  /* Enter no fim do título/legenda/resumo (diagramacao.js) usa execCommand('insertLineBreak'),
-     que deixa DOIS <br> no fim (truque do próprio navegador pra mostrar a linha nova durante a
-     digitação). Sem isso aqui, esse <br> extra sobra como linha em branco fantasma no render
-     final. `br:last-child` sozinho pega até um <br> ÚNICO no meio do texto (:last-child só
-     conta irmãos-ELEMENTO, ignora o texto que vem depois — um <br> solo é sempre "o único
-     elemento" e cai na regra por engano, comendo a quebra de linha real do usuário). Exigindo
-     también "precedido de outro <br>" (br + br:last-child), a regra só bate no 2º <br> do par
-     colado no fim — o <br> real do meio fica de fora. */
+  /* Enter/Shift+Enter no fim usa execCommand('insertLineBreak'), que deixa DOIS
+     <br> (truque do navegador pra mostrar a linha nova durante a digitação). Sem
+     isso, o <br> extra sobra como linha em branco fantasma. `br:last-child` sozinho
+     pega até um <br> ÚNICO no meio do texto (:last-child só conta irmãos-ELEMENTO,
+     ignora o texto que vem depois). Exigindo “precedido de outro <br>”, a regra só
+     bate no 2º <br> do par colado no fim. Parágrafo também: o anel/hover de seleção
+     pintava essa linha e o blur “corrigia” o espaço. */
+  .page .b br + br:last-child,
+  .page .ck-txt br + br:last-child,
+  .page .co-txt br + br:last-child,
+  .page .head-txt br + br:last-child,
   .page .figtitle br + br:last-child,
   .page figcaption br + br:last-child,
   .page .idx-resumo br + br:last-child { display: none; }
+  /* placeholder único no fim (`texto<br>`): o seletor acima não pega. JS marca
+     .br-ph (block-html.js) — sem isso o foco/seleção do parágrafo ganha 1 linha. */
+  .page .b br.br-ph,
+  .page .b div.br-ph,
+  .page .ck-txt br.br-ph,
+  .page .co-txt br.br-ph,
+  .page .head-txt br.br-ph,
+  .page .figtitle br.br-ph,
+  .page figcaption br.br-ph,
+  .page .idx-resumo br.br-ph { display: none; }
   /* li/ol ficam de fora: o ::before é o marcador (• / 1. / 1.1.) — não pode virar o
      placeholder "Item". Mesma lógica do checklist (marcador = .ck-box, irmão do texto). */
   .page.editing .b:empty:focus:not(.li):not(.ol)::before { content: attr(data-ph); color: #bbb; }

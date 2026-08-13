@@ -285,19 +285,33 @@ export function tableLiveActive() {
 }
 
 /**
+ * O .tbl-wrap pertence a este bloco?
+ * - tabela avulsa: wrap.dataset.id === blockId
+ * - table-grid: wrap tem id sintético `__tg_<blockId>_<i>` (closest('[data-id]')
+ *   devolve o PRÓPRIO wrap, não o .tblgrid-wrap — por isso o prefixo / ancestral).
+ */
+export function tableWrapMatchesBlock(wrap, blockId) {
+  if (!wrap || blockId == null || blockId === '') return false;
+  const id = String(blockId);
+  const own = wrap.dataset && wrap.dataset.id;
+  if (own === id) return true;
+  if (own && own.startsWith('__tg_' + id + '_')) return true;
+  const grid = wrap.closest && wrap.closest('.tblgrid-wrap');
+  return !!(grid && grid.dataset && grid.dataset.id === id);
+}
+
+/**
  * Limpa seleção visual (.tbl-sel) e estado de range das tabelas em edição.
  * keepBlockId: se passado, preserva a(s) tabela(s) desse bloco (table ou table-grid).
  * Sem keep → limpa todas (clique em outro bloco / fora).
+ *
+ * Sem tableWrapMatchesBlock, focar uma célula do grid chamava clearSelection →
+ * blur na hora: o caret sumia e a tabela parecia não-editável.
  */
 export function clearTableCellSelections(keepBlockId = null) {
   if (typeof document === 'undefined') return;
   document.querySelectorAll('.tbl-wrap.tbl-editing').forEach((wrap) => {
-    if (keepBlockId) {
-      const ownId = wrap.dataset.id;
-      const hostId = wrap.closest?.('[data-id]')?.dataset?.id;
-      // table avulsa: data-id no wrap; grid: wrap sem id, host .tblgrid-wrap
-      if (ownId === keepBlockId || hostId === keepBlockId) return;
-    }
+    if (keepBlockId && tableWrapMatchesBlock(wrap, keepBlockId)) return;
     const live = liveByWrap.get(wrap);
     if (live?.clearSelection) live.clearSelection();
     else {
@@ -2140,7 +2154,14 @@ function nextVisibleCell(b, r, c, dRow, dCol) {
   return null;
 }
 
+/** id do wrap p/ focusCell: tabela avulsa (b.id) ou sintético do grid (`__tg_…`). */
+function tableFocusIdOf(b, table) {
+  const wrap = table && table.closest && table.closest('.tbl-wrap');
+  return (wrap && wrap.dataset && wrap.dataset.id) || b.id || null;
+}
+
 function onCellKey(e, b, r, c, ctx, table) {
+  const focusId = tableFocusIdOf(b, table);
   if (e.key === 'Tab') {
     e.preventDefault();
     const dir = e.shiftKey ? -1 : 1;
@@ -2148,11 +2169,11 @@ function onCellKey(e, b, r, c, ctx, table) {
     if (!next && dir > 0) {
       addRow(b, null);
       ctx.rerender?.();
-      requestAnimationFrame(() => focusCell(b.id, b.rows.length - 1, 0));
+      requestAnimationFrame(() => focusCell(focusId, b.rows.length - 1, 0));
       return;
     }
     if (!next) return;
-    focusCell(b.id, next.r, next.c);
+    focusCell(focusId, next.r, next.c);
     return;
   }
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -2161,19 +2182,19 @@ function onCellKey(e, b, r, c, ctx, table) {
     if (!next) {
       addRow(b, null);
       ctx.rerender?.();
-      requestAnimationFrame(() => focusCell(b.id, b.rows.length - 1, c));
+      requestAnimationFrame(() => focusCell(focusId, b.rows.length - 1, c));
       return;
     }
-    focusCell(b.id, next.r, next.c);
+    focusCell(focusId, next.r, next.c);
   }
 }
 
 function focusCell(tableId, r, c) {
-  // id do bloco (miolo) ou fallback: tabela aberta na modal do grid
+  // id do bloco (miolo) ou `__tg_<gridId>_<i>` (tabela dentro do grid)
   let wrap = tableId
     ? document.querySelector(`.tbl-wrap[data-id="${CSS.escape(String(tableId))}"]`)
     : null;
-  if (!wrap) wrap = document.querySelector('.tblgrid-wrap .tbl-wrap.tbl-editing, .tblgrid-wrap .tbl-wrap');
+  if (!wrap) wrap = document.querySelector('.tblgrid-cell.is-active .tbl-wrap.tbl-editing, .tblgrid-wrap .tbl-wrap.tbl-editing, .tblgrid-wrap .tbl-wrap');
   if (!wrap) return;
   const cell = wrap.querySelector(`tr[data-row="${r}"] [data-col="${c}"]`)
     || wrap.querySelectorAll('tr')[r]?.cells?.[c];

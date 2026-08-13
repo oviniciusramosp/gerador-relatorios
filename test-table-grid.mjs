@@ -9,6 +9,8 @@
  * - layout com colunas de larguras diferentes em equal=width
  * - ensureTable limpando border/radius default
  * - “+”/reordenar no grid mutando clone desligado do item (rows some no rerender)
+ * - focar célula do grid e o keep de seleção não reconhecer `__tg_<id>_i`
+ *   (blur na hora → tabela parece não-editável)
  */
 import assert from 'node:assert/strict';
 import {
@@ -19,6 +21,7 @@ import {
 } from './bloco-table-grid.js';
 import {
   ensureTable, resolveGridTableItem, mergeCells, unmergeCells, isCellCovered,
+  tableWrapMatchesBlock,
   mergeOriginAt, ensureMerges, addTableRow, addTableCol,
   setTableHeaderRow, setTableHeaderCol, unwrapTableData,
   resolveMergeRange, mergeSelectionOrNeighbor, getMerges,
@@ -509,6 +512,26 @@ import {
   assert.deepEqual(t3.merges[0], { r: 0, c: 0, cs: 2, rs: 2 });
   assert.equal(isCellCovered(t3, 1, 1), true);
   assert.equal(getMerges(t3).length, 1);
+}
+
+// ── keep de seleção: grid usa id sintético `__tg_<gridId>_<i>` ──────────────
+{
+  assert.equal(tableWrapMatchesBlock({ dataset: { id: 't1' } }, 't1'), true);
+  assert.equal(tableWrapMatchesBlock({ dataset: { id: 't1' } }, 't2'), false);
+  assert.equal(tableWrapMatchesBlock(null, 't1'), false);
+  // wrap do item no grid — closest('[data-id]') seria o próprio wrap (o bug)
+  const gridItem = {
+    dataset: { id: '__tg_g1_0' },
+    closest: (sel) => (sel === '.tblgrid-wrap' ? { dataset: { id: 'g1' } } : { dataset: { id: '__tg_g1_0' } }),
+  };
+  assert.equal(tableWrapMatchesBlock(gridItem, 'g1'), true, 'prefixo __tg_<id>_ conta como o grid');
+  assert.equal(tableWrapMatchesBlock(gridItem, 'g2'), false);
+  // wrap sem id próprio, ancestral é o grid
+  const nested = {
+    dataset: {},
+    closest: (sel) => (sel === '.tblgrid-wrap' ? { dataset: { id: 'g1' } } : null),
+  };
+  assert.equal(tableWrapMatchesBlock(nested, 'g1'), true);
 }
 
 console.log('test-table-grid: ok');
