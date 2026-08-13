@@ -17,8 +17,9 @@
 import assert from 'node:assert/strict';
 import {
   ensureTableGrid, tableGridEqualModeOf, tableGridEqualRowsOf, tableGridGapOf,
-  clampTableGridGap, setTableGridCols, layoutTableGridCols, seedTableItem,
-  applyTableStylesToGrid, computeEqualRowHeights, computeStretchedLastRowHeights,
+  clampTableGridGap, setTableGridCols, removeTableGridItem, layoutTableGridCols,
+  seedTableItem, applyTableStylesToGrid, computeEqualRowHeights,
+  computeStretchedLastRowHeights, TABLE_ITEM_STYLE_KEYS,
   TABLE_GRID_MAX, TABLE_GRID_GAP,
 } from './bloco-table-grid.js';
 import {
@@ -39,7 +40,7 @@ import {
   DEFAULT_BORDER_OUTER, DEFAULT_BORDER_INNER, DEFAULT_TABLE_BG, DEFAULT_TABLE_RADIUS,
   DEFAULT_BORDER_WIDTH, DEFAULT_TABLE_FONT_SIZE, DEFAULT_TABLE_LINE_HEIGHT,
   DEFAULT_TABLE_ALIGN, DEFAULT_TABLE_VALIGN, DEFAULT_HEADER_TEXT, DEFAULT_TEXT_COLOR,
-  clampTableRadius,
+  clampTableRadius, TABLE_GRID_SHARED_KEYS, TABLE_GRID_LEGACY_SHARED_KEYS,
 } from './bloco-tabela.js';
 
 // ── ensure: 2 slots default, equal width ────────────────────────────────────
@@ -178,7 +179,7 @@ import {
   assert.equal(tableAltRowBgOf(t), DEFAULT_ALT_ROW_BG);
 }
 
-// item do grid preserva rows; estilo shared sobe pro bloco
+// item do grid preserva rows; cor da linha fica no item (não sobe mais)
 {
   const b = {
     type: 'table-grid',
@@ -187,8 +188,8 @@ import {
   ensureTableGrid(b);
   assert.equal(b.items.length, 1);
   assert.deepEqual(b.items[0].rows[0], ['X', 'Y']);
-  assert.equal(b.items[0].borderOuter, undefined, 'shared sai do item');
-  assert.equal(b.borderOuter, '#111111', 'shared sobe pro grid');
+  assert.equal(b.items[0].borderOuter, '#111111', 'cor da linha fica no item');
+  assert.equal(b.borderOuter, undefined, 'não sobe mais pro grid');
   assert.equal(b.items[0].bg, '#FAFAFA', 'cor de fundo fica no item');
 }
 
@@ -241,7 +242,7 @@ import {
   assert.equal(tableTextColorOf({}), DEFAULT_TEXT_COLOR);
 }
 
-// ── grid: estilo compartilhado no bloco, não no item ────────────────────────
+// ── grid: fonte/linhas por tabela; legado no bloco ainda herda ──────────────
 {
   const b = {
     type: 'table-grid',
@@ -253,18 +254,27 @@ import {
     ],
   };
   ensureTableGrid(b);
-  // override no item sobrevive; herança (igual ao comum) é que some
+  // override no item sobrevive; não hoista fonte/cor de linha pro bloco
   assert.equal(b.items[0].fontSize, 20, 'fonte da Tabela 1 é override');
   assert.equal(b.items[1].borderOuter, '#999999', 'borda da Tabela 2 é override');
-  assert.equal(b.fontSize, 14);
-  assert.equal(b.borderOuter, '#111111');
+  assert.equal(b.fontSize, 14, 'legado no grid permanece p/ herança');
+  assert.equal(b.borderOuter, '#111111', 'legado no grid permanece p/ herança');
   // per-item cores permanecem
   assert.equal(b.items[0].bg, '#EEEEEE');
   assert.equal(b.items[0].headerColor, '#DDDDDD');
   const resolved = resolveGridTableItem(b, b.items[0]);
   assert.equal(resolved.fontSize, 20, 'resolve não sobrescreve override');
-  assert.equal(resolved.borderOuter, '#111111', 'borda herdada do grid');
+  assert.equal(resolved.borderOuter, '#111111', 'borda herdada do grid (legado)');
   assert.equal(resolved.bg, '#EEEEEE');
+  // duas tabelas com fonte/linha diferentes sobrevivem ao ensure
+  b.items[1].fontSize = 12;
+  b.items[1].lineHeight = 1.75;
+  b.items[1].borderInner = '#00AA00';
+  ensureTableGrid(b);
+  assert.equal(b.items[0].fontSize, 20);
+  assert.equal(b.items[1].fontSize, 12);
+  assert.equal(b.items[1].lineHeight, 1.75);
+  assert.equal(b.items[1].borderInner, '#00AA00');
 }
 
 // ── merge / unmerge ─────────────────────────────────────────────────────────
@@ -477,9 +487,10 @@ import {
   assert.equal(b.items[1].color, '#112233');
   assert.equal(b.items[1].altRows, true);
   assert.equal(b.items[1].altColor, '#F0F0F0');
-  // fonte/borda shared no bloco — inalteradas e já comuns
+  // fonte/linha legado no bloco — não é promovido; dest herda se src não tem override
   assert.equal(b.fontSize, 14);
   assert.equal(b.borderOuter, '#111111');
+  assert.equal(b.items[1].fontSize, undefined, 'sem override na origem → dest herda o legado');
   // estrutura da destino não é sobrescrita
   assert.deepEqual(b.items[1].rows[0], ['X', 'Y']);
   // 1 coluna no grid: nada a copiar
@@ -488,11 +499,11 @@ import {
   assert.equal(applyTableStylesToGrid(one, 0), 0);
 }
 
-// override de fonte na Tabela N sobrevive ao ensure; Aplicar espalha pro grid
+// override de fonte na Tabela N sobrevive ao ensure; Aplicar copia p/ as outras
 {
   const b = {
     type: 'table-grid',
-    fontSize: 10,
+    fontSize: 14,
     items: [
       { rows: [['A'], ['1']], fontSize: 18, bg: '#EEF2FF' },
       { rows: [['X'], ['2']], bg: '#FFFFFF' },
@@ -502,9 +513,42 @@ import {
   assert.equal(b.items[0].fontSize, 18, 'override da Tabela 1 não some no ensure');
   assert.equal(b.items[1].fontSize, undefined, 'Tabela 2 herda o comum');
   assert.equal(applyTableStylesToGrid(b, 0), 1);
-  assert.equal(b.fontSize, 18, 'Aplicar promove a fonte da Tabela 1 a comum');
+  assert.equal(b.fontSize, 14, 'Aplicar não promove fonte a comum do grid');
   assert.equal(b.items[1].bg, '#EEF2FF');
-  assert.equal(b.items[1].fontSize, undefined, 'destino herda o comum, sem duplicar');
+  assert.equal(b.items[1].fontSize, 18, 'destino recebe a fonte da Tabela 1');
+}
+
+// fonte/linha/cor das linhas não são mais shared; espessura/raio sim
+{
+  assert.ok(!TABLE_GRID_SHARED_KEYS.includes('fontSize'));
+  assert.ok(!TABLE_GRID_SHARED_KEYS.includes('lineHeight'));
+  assert.ok(!TABLE_GRID_SHARED_KEYS.includes('borderOuter'));
+  assert.ok(!TABLE_GRID_SHARED_KEYS.includes('borderInner'));
+  assert.ok(TABLE_GRID_SHARED_KEYS.includes('radius'));
+  assert.ok(TABLE_GRID_LEGACY_SHARED_KEYS.includes('fontSize'));
+  assert.ok(TABLE_ITEM_STYLE_KEYS.includes('fontSize'));
+  assert.ok(TABLE_ITEM_STYLE_KEYS.includes('borderOuter'));
+}
+
+// removeTableGridItem: tira a do meio; não esvazia o grid
+{
+  const b = {
+    type: 'table-grid',
+    items: [
+      { rows: [['A'], ['1']] },
+      { rows: [['B'], ['2']] },
+      { rows: [['C'], ['3']] },
+    ],
+  };
+  ensureTableGrid(b);
+  assert.equal(removeTableGridItem(b, 1), true);
+  assert.equal(b.items.length, 2);
+  assert.equal(b.items[0].rows[0][0], 'A');
+  assert.equal(b.items[1].rows[0][0], 'C');
+  assert.equal(removeTableGridItem(b, 0), true);
+  assert.equal(b.items.length, 1);
+  assert.equal(removeTableGridItem(b, 0), false, 'não deixa o grid vazio');
+  assert.equal(b.items.length, 1);
 }
 
 // ── ensureTableGrid preserva a MESMA ref do item (merge no canvas não some) ─

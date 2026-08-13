@@ -2,9 +2,10 @@
  *
  *   buildTableGridEl(b, editing, ctx, colW) → DOM
  *     b.items[]  — por tabela: { rows, colWidths?, merges?, bg?, headerColor?,
- *                  headerTextColor?, color? }
- *     Estilo COMPARTILHADO (igual em todas): fontSize, lineHeight,
- *       borderWidth/Outer/Inner, borderOuter, borderInner, radius → no bloco grid.
+ *                  headerTextColor?, color?, fontSize?, lineHeight?,
+ *                  borderOuter?, borderInner? }
+ *     Estilo COMPARTILHADO (igual em todas): borderWidth/Outer/Inner, radius
+ *       → no bloco grid.
  *     b.equal / b.gap
  *     ctx        — { commit, rerender, removeBlock, selectGridItem, activeItemIndex }
  *
@@ -22,21 +23,23 @@ export const TABLE_GRID_GAP = 8;
 export const TABLE_GRID_GAP_MAX = 48;
 
 /**
- * Estilos por tabela no grid (cores, alt, alinhamento de tabela).
+ * Estilos por tabela no grid (cores, tipografia, linhas, alt, alinhamento).
  * Não inclui rows/merges/colWidths (estrutura) nem cellAlign (por célula).
- * Fonte/bordas/raio vivem em TABLE_GRID_SHARED_KEYS no bloco (já comuns a todas).
+ * Espessura/raio vivem em TABLE_GRID_SHARED_KEYS no bloco (já comuns a todas).
  */
 export const TABLE_ITEM_STYLE_KEYS = [
   'bg', 'headerColor', 'headerTextColor', 'color',
   'altColor', 'altRows',
   'align', 'valign',
   'hideVLines',
+  'fontSize', 'lineHeight',
+  'borderOuter', 'borderInner',
 ];
 
 /**
  * Copia o visual da tabela `fromIndex` para as demais.
- * Por item: cores, alt, alinhamento. Shared (fonte, bordas, raio): vira o
- * comum do grid e as outras herdam.
+ * Por item: cores, fonte, linhas, alt, alinhamento. Shared (espessura, raio):
+ * vira o comum do grid e as outras herdam.
  * @returns {number} quantas tabelas destino receberam estilos (0 = nada a fazer)
  */
 export function applyTableStylesToGrid(grid, fromIndex) {
@@ -293,6 +296,15 @@ export function setTableGridCols(b, n) {
   while (b.items.length < target) b.items.push(seedTableItem());
   while (b.items.length > target) b.items.pop();
   return b.items.length;
+}
+
+/** Remove a tabela `index`. Não deixa o grid vazio (mínimo 1). */
+export function removeTableGridItem(b, index) {
+  ensureTableGrid(b);
+  if (b.items.length <= 1) return false;
+  const i = Math.max(0, Math.min(b.items.length - 1, index | 0));
+  b.items.splice(i, 1);
+  return true;
 }
 
 /**

@@ -63,12 +63,19 @@ export const DEFAULT_ROW_PAD_X = 6;            // px — horizontal fixo (não n
 
 /**
  * Estilos compartilhados no Grid de Tabelas (iguais em todas as colunas).
- * Por tabela no grid só mudam: bg, headerColor, headerTextColor, color.
+ * Fonte, altura de linha e cor das linhas são por tabela (TABLE_ITEM_STYLE_KEYS).
  */
 export const TABLE_GRID_SHARED_KEYS = [
-  'fontSize', 'lineHeight',
   'borderWidth', 'borderWidthOuter', 'borderWidthInner',
-  'borderOuter', 'borderInner', 'radius',
+  'radius',
+];
+
+/**
+ * Já viveram no bloco grid. Item herda se não tiver override; não sobem
+ * de volta no ensure (senão Tabela 1 pinta o grid inteiro).
+ */
+export const TABLE_GRID_LEGACY_SHARED_KEYS = [
+  'fontSize', 'lineHeight', 'borderOuter', 'borderInner',
 ];
 
 function nColsOf(b) {
@@ -216,10 +223,24 @@ export function unwrapTableData(b) {
  * é que espalha.
  * Sem `grid`: apaga todo shared (legado).
  */
+function inheritKeysFromGrid(item, grid, keys) {
+  for (const k of keys) {
+    if (item[k] != null) continue;
+    if (grid && grid[k] != null) item[k] = grid[k];
+    else delete item[k];
+  }
+}
+
 export function stripSharedFromTableItem(item, grid) {
   if (!item || typeof item !== 'object') return item;
   for (const k of TABLE_GRID_SHARED_KEYS) {
     if (!grid || item[k] === grid[k] || item[k] == null) delete item[k];
+  }
+  // herança antiga (fonte/linhas no bloco): não persiste se igual ao comum
+  if (grid) {
+    for (const k of TABLE_GRID_LEGACY_SHARED_KEYS) {
+      if (item[k] === grid[k] || item[k] == null) delete item[k];
+    }
   }
   return item;
 }
@@ -233,19 +254,15 @@ export function stripSharedFromTableItem(item, grid) {
 export function resolveGridTableItem(grid, item) {
   if (!item || typeof item !== 'object') {
     const t = { rows: seed() };
-    for (const k of TABLE_GRID_SHARED_KEYS) {
-      if (grid && grid[k] != null) t[k] = grid[k];
-    }
+    inheritKeysFromGrid(t, grid, TABLE_GRID_SHARED_KEYS);
+    inheritKeysFromGrid(t, grid, TABLE_GRID_LEGACY_SHARED_KEYS);
     ensureTable(t);
     return t;
   }
   if (!Array.isArray(item.rows)) item.rows = seed();
   ensureTable(item);
-  for (const k of TABLE_GRID_SHARED_KEYS) {
-    if (item[k] != null) continue;
-    if (grid && grid[k] != null) item[k] = grid[k];
-    else delete item[k];
-  }
+  inheritKeysFromGrid(item, grid, TABLE_GRID_SHARED_KEYS);
+  inheritKeysFromGrid(item, grid, TABLE_GRID_LEGACY_SHARED_KEYS);
   return item;
 }
 
